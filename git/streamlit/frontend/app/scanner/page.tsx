@@ -559,21 +559,21 @@ export default function ScannerPage() {
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-white">{optModal.ticker} — Options Play</span>
+              <span className="text-sm font-semibold text-white">{optModal.r.ticker} — Options Play</span>
               <button onClick={() => setOptModal(null)} className="text-muted hover:text-white text-lg leading-none">×</button>
             </div>
-            {optModal.quoteTs && (
+            {optModal.r.opt_quote_ts && (
               <p className="text-[11px] text-muted font-mono">
                 Quote: {(() => {
                   try {
-                    const d = new Date(optModal.quoteTs);
+                    const d = new Date(optModal.r.opt_quote_ts!);
                     return d.toLocaleString("en-US", {
                       timeZone: "America/New_York",
                       month: "short", day: "numeric",
                       hour: "2-digit", minute: "2-digit",
                       hour12: true,
                     }) + " ET";
-                  } catch { return optModal.quoteTs; }
+                  } catch { return optModal.r.opt_quote_ts; }
                 })()}
               </p>
             )}
@@ -581,13 +581,13 @@ export default function ScannerPage() {
               readOnly
               autoFocus
               onFocus={e => e.target.select()}
-              value={optModal.summary}
+              value={optModal.r.opt_summary ?? ""}
               rows={4}
               className="w-full bg-surface border border-border rounded-lg p-3 text-sm font-mono text-white resize-none focus:outline-none focus:border-accent"
             />
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => copyText(optModal.summary)}
+                onClick={() => copyText(optModal.r.opt_summary ?? "")}
                 className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-accent text-black hover:bg-accent/80 transition-colors"
               >
                 {copied ? "✓ Copied" : "Copy"}
