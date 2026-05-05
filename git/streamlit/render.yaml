@@ -1,0 +1,33 @@
+services:
+  # ── Backend (FastAPI) ──────────────────────────────────────────────────────
+  - type: web
+    name: stockpulse-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: ALPACA_API_KEY
+        sync: false          # set in Render dashboard
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: POLYGON_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false          # set to your frontend URL, e.g. https://stockpulse-frontend.onrender.com
+
+  # ── Frontend (Next.js) ────────────────────────────────────────────────────
+  - type: web
+    name: stockpulse-frontend
+    runtime: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20.11.0"
+      - key: NEXT_PUBLIC_API_URL
+        sync: false          # set to your backend URL, e.g. https://stockpulse-api.onrender.com
