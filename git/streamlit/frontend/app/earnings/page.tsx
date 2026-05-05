@@ -415,7 +415,7 @@ export default function EarningsPage() {
               <div className={`font-bold text-lg ${dirColor(dir?.direction ?? "")}`}>
                 {dir?.direction ?? "—"}
               </div>
-              <div className="text-xs text-muted">{dir?.confidence} ({dir?.score > 0 ? "+" : ""}{dir?.score})</div>
+              <div className="text-xs text-muted">{dir?.confidence} ({(dir?.score ?? 0) > 0 ? "+" : ""}{dir?.score})</div>
             </div>
             <div className="card text-center">
               <div className="text-xs text-muted mb-1">Hist Avg Move</div>
