@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import analysis, scanner, earnings, tracker
+from backend.routers import analysis, scanner, earnings, tracker, macro
 from backend.routers import scheduler as scheduler_router
 from backend.services.scheduler import scheduler, setup_scheduler
 
@@ -44,6 +44,7 @@ app.include_router(scanner.router)
 app.include_router(earnings.router)
 app.include_router(tracker.router)
 app.include_router(scheduler_router.router)
+app.include_router(macro.router)
 
 
 @app.get("/health")
