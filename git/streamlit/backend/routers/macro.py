@@ -1,6 +1,6 @@
 """
 GET /api/macro/snapshot
-Returns macro market data + risk score. Cached server-side for 5 minutes.
+Returns macro market data + risk score + CNN Fear & Greed. Cached server-side for 5 minutes.
 """
 import time
 from fastapi import APIRouter
@@ -23,6 +23,7 @@ MACRO_INSTRUMENTS = [
 
 _cache: dict = {"data": None, "ts": 0.0}
 _CACHE_TTL = 300  # 5 minutes
+
 
 
 @router.get("/snapshot")
@@ -93,7 +94,7 @@ def macro_snapshot():
 
     result = {
         "items": items,
-        "risk": {"score": risk_score, "label": risk_label, "notes": risk_notes},
+        "risk":  {"score": risk_score, "label": risk_label, "notes": risk_notes},
     }
     _cache["data"] = result
     _cache["ts"]   = now

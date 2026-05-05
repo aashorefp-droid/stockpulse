@@ -14,12 +14,19 @@ interface MacroItem {
   chg_20d:  number;
 }
 
+interface FearGreed {
+  score:  number | null;
+  rating: string;
+}
+
 interface MacroData {
-  items: MacroItem[];
-  risk: { score: number; label: string; notes: string[] };
+  items:       MacroItem[];
+  fear_greed:  FearGreed;
+  risk:        { score: number; label: string; notes: string[] };
 }
 
 const KEY_TICKERS = ["SPY", "QQQ", "^VIX", "GLD", "TLT"];
+const CNN_FNG_URL = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata";
 
 export default function MarketRisk() {
   const [data, setData]           = useState<MacroData | null>(null);
@@ -29,9 +36,29 @@ export default function MarketRisk() {
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/macro/snapshot`);
-      if (!res.ok) { setError(`API error ${res.status}`); return; }
-      setData(await res.json());
+      const [macroRes, fngRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/macro/snapshot`),
+        fetch(CNN_FNG_URL),
+      ]);
+
+      if (macroRes.status === "rejected" || !macroRes.value.ok) {
+        setError(`API error`);
+        return;
+      }
+
+      const macro: MacroData = await macroRes.value.json();
+
+      if (fngRes.status === "fulfilled" && fngRes.value.ok) {
+        const fng = await fngRes.value.json();
+        const fg  = fng?.fear_and_greed ?? {};
+        macro.fear_greed = {
+          score:  fg.score != null ? Math.round(parseFloat(fg.score)) : null,
+          rating: (fg.rating ?? "Unknown").replace(/_/g, " ")
+            .replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        };
+      }
+
+      setData(macro);
       setUpdatedAt(new Date());
       setError(null);
     } catch (e: any) {
@@ -63,7 +90,17 @@ export default function MarketRisk() {
 
   if (!data) return null;
 
-  const { risk, items } = data;
+  const { risk, items, fear_greed } = data;
+
+  const fgScore  = fear_greed?.score;
+  const fgColor  =
+    fgScore == null   ? "text-muted"  :
+    fgScore <= 25     ? "text-red"    :
+    fgScore <= 40     ? "text-yellow" :
+    fgScore >= 75     ? "text-green"  :
+    fgScore >= 60     ? "text-green/70" :
+                        "text-muted";
+  const fgMeter  = fgScore != null ? Math.round(fgScore) : null;
 
   const riskStyles =
     risk.score === 0 ? "text-green  border-green/40  bg-green/5"  :
@@ -98,6 +135,27 @@ export default function MarketRisk() {
                 {n}
               </span>
             ))}
+          </div>
+        )}
+
+        {/* CNN Fear & Greed */}
+        {fgMeter != null && (
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded border border-border bg-card/60">
+            <div className="flex flex-col leading-tight">
+              <span className="text-[9px] text-muted uppercase tracking-wider">CNN F&G</span>
+              <span className={`text-[13px] font-mono font-bold ${fgColor}`}>{fgMeter}</span>
+            </div>
+            <div className="flex flex-col leading-tight">
+              <span className={`text-[10px] font-semibold ${fgColor}`}>{fear_greed.rating}</span>
+              <div className="w-16 h-1.5 bg-border rounded-full overflow-hidden mt-0.5">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    fgMeter <= 25 ? "bg-red" : fgMeter <= 40 ? "bg-yellow" : fgMeter >= 60 ? "bg-green" : "bg-muted"
+                  }`}
+                  style={{ width: `${fgMeter}%` }}
+                />
+              </div>
+            </div>
           </div>
         )}
 
