@@ -25,7 +25,7 @@ services:
     plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
-    startCommand: npm start
+    startCommand: npm start -- -p $PORT
     envVars:
       - key: NODE_VERSION
         value: "20.11.0"
