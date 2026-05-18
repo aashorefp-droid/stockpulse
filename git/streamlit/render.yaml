@@ -15,8 +15,32 @@ services:
         sync: false
       - key: POLYGON_API_KEY
         sync: false
+      - key: WATCHLIST_BOT_TOKEN
+        sync: false          # Telegram watchlist bot token
+      - key: WATCHLIST_CHAT_ID
+        sync: false
+      - key: GMAIL_USER
+        sync: false          # inbox receiving the TOS scan emails
+      - key: GMAIL_APP_PASSWORD
+        sync: false          # Google account → Security → App passwords (needs 2FA)
+      - key: DATABASE_URL
+        sync: false          # cloud Postgres (Neon/Supabase) connection string — persists GEX streak history across deploys
       - key: CORS_ORIGINS
         sync: false          # set to your frontend URL, e.g. https://stockpulse-frontend.onrender.com
+
+  # ── Backend (Go — fast scanner) ────────────────────────────────────────────
+  - type: web
+    name: stockpulse-api-go
+    runtime: docker
+    plan: free
+    rootDir: go-backend
+    envVars:
+      - key: ALPACA_API_KEY
+        sync: false
+      - key: ALPACA_API_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
 
   # ── Frontend (Next.js) ────────────────────────────────────────────────────
   - type: web
