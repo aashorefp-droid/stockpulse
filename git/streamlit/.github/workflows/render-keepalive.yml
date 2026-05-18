@@ -1,0 +1,38 @@
+name: Render keepalive (GEX streak)
+
+# Render free services sleep after ~15 min idle, which freezes APScheduler.
+# This external ping keeps the GEX backend awake on trading days so the
+# 4-hourly spy_gamma_job records SPY's daily sign and the streak advances.
+# (A self-ping can't do this — a sleeping process can't wake itself.)
+#
+# Cron is UTC. */14 stays just under Render's ~15 min idle window.
+# Mon–Fri only — markets are closed weekends, no sign to record.
+# GitHub may delay scheduled runs under load; the job's
+# misfire_grace_time=3600 absorbs a late wake within 1h of each fire.
+
+on:
+  schedule:
+    - cron: "*/14 * * * 1-5"
+  workflow_dispatch: {}   # allow manual "ping now" from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the GEX backend
+        env:
+          HEALTH_URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "::error::Secret RENDER_HEALTH_URL is not set — add it in repo Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          # First request may take 30–60s on a cold start; be patient and
+          # don't fail the workflow on a transient non-2xx (cold wake).
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                   --max-time 90 --retry 3 --retry-all-errors \
+                   "$HEALTH_URL" || echo "000")
+          echo "Pinged $HEALTH_URL → HTTP $code"
+          if [ "$code" = "000" ]; then
+            echo "::warning::No response (likely a slow cold start) — the ping still resets Render's idle timer."
+          fi

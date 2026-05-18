@@ -9,6 +9,7 @@ Convention used here (SpotGamma-style for index ETFs):
 Positive GEX → dealers dampen moves   (Long Gamma regime)
 Negative GEX → dealers amplify moves  (Short Gamma regime)
 """
+import logging
 import math
 import time
 from datetime import date, datetime, timedelta
@@ -17,6 +18,8 @@ import requests
 
 from backend.config import ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_DATA_BASE
 from backend.db import gex_store
+
+logger = logging.getLogger(__name__)
 
 
 _cache: dict = {}            # {symbol: {"data": ..., "ts": ...}}
@@ -40,8 +43,16 @@ def _record_and_streak(net_gex: float, symbol: str = "SPY") -> dict:
         else:
             gex_store.record_sign_sym(symbol, sign)
             hist = gex_store.load_history_sym(symbol)
-    except Exception:
-        # DB unreachable — degrade gracefully, just report today
+    except Exception as e:
+        # DB unreachable — degrade gracefully, just report today. Loud on
+        # purpose: this is exactly what pins the streak at ±1 forever
+        # (e.g. DATABASE_URL unset → ephemeral SQLite wiped on each deploy,
+        # or Neon connection failing). Don't let it fail silently.
+        logger.warning(
+            "[gex] %s history store unreachable (%s) — streak degraded to "
+            "single day; check DATABASE_URL / Neon. err=%s",
+            symbol, gex_store.backend_name(), str(e)[:160],
+        )
         hist = {date.today().isoformat(): sign}
 
     streak = 0

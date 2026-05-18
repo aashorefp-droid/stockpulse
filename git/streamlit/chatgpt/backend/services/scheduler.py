@@ -551,6 +551,29 @@ def sector_gamma_job():
         logger.error(f"[scheduler] sector gamma job failed: {e}")
 
 
+def spy_gamma_job():
+    """Every 4h on trading days — recompute SPY GEX so the daily sign is
+    recorded (and the consecutive-day streak advances) even when nobody has
+    the UI open. Without this, SPY's streak pins at ±1 because its sign is
+    only written opportunistically on UI hits (sectors already have a job)."""
+    try:
+        from backend.services.gex import compute_spy_gex
+        g = compute_spy_gex()
+        if g.get("available"):
+            logger.info(
+                f"[scheduler] SPY gamma: {g.get('regime')} "
+                f"net={g.get('net_gex')} streak={g.get('streak')} "
+                f"store={g.get('store')} — sign recorded"
+            )
+        else:
+            logger.warning(
+                f"[scheduler] SPY gamma unavailable: "
+                f"{g.get('reason', 'unknown')} — sign NOT recorded today"
+            )
+    except Exception as e:
+        logger.error(f"[scheduler] SPY gamma job failed: {e}")
+
+
 def stop_eps_polling():
     """6:00 PM CST — remove the polling job."""
     job = scheduler.get_job("eps_poll")
@@ -628,6 +651,16 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # SPY GEX on the same cadence so its daily sign is recorded regardless of
+    # UI usage. minute=2 (before sectors at :05) keeps the SPY write first.
+    scheduler.add_job(
+        spy_gamma_job,
+        CronTrigger(day_of_week="mon-fri", hour="*/4", minute=2, timezone=CST),
+        id="spy_gamma",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     # Prime the store at startup so the watchlist isn't empty before the
     # first 7:15 PM CST pull.
     try:
@@ -638,5 +671,5 @@ def setup_scheduler():
     logger.info(
         "[scheduler] registered: news_summary@8:00CST, pre_earnings@8:30CST, "
         "momentum@8:45CST, polling 15:00–18:00 CST, tos_gmail_watchlist@19:15CST, "
-        "sector_gamma every 4h Mon–Fri"
+        "spy_gamma + sector_gamma every 4h Mon–Fri"
     )
