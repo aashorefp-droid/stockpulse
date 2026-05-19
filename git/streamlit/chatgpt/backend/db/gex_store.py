@@ -27,7 +27,9 @@ def _pg_conn():
 
 
 def _sqlite_conn():
-    c = sqlite3.connect(_SQLITE_PATH)
+    # timeout: parallel sector GEX writes briefly contend on the single
+    # SQLite file — wait for the lock instead of raising "database is locked".
+    c = sqlite3.connect(_SQLITE_PATH, timeout=30)
     c.row_factory = sqlite3.Row
     return c
 

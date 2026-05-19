@@ -82,6 +82,8 @@ def _record_and_streak(net_gex: float, symbol: str = "SPY") -> dict:
             "Transitional"
         ),
         "store": store,
+        "as_of": max(hist.keys()) if hist else None,
+        "history_days": len(hist),
     }
 
 
@@ -377,6 +379,8 @@ def compute_gex(symbol: str, use_cboe: bool = False) -> dict:
         "structural":    streak_info["structural"],
         "regime_kind":   streak_info["regime_kind"],
         "store":         streak_info["store"],
+        "as_of":         streak_info["as_of"],
+        "history_days":  streak_info["history_days"],
     }
     _cache[symbol] = {"data": result, "ts": now}
     return result
@@ -403,29 +407,41 @@ SECTOR_GEX_SYMBOLS: list[tuple[str, str]] = [
 ]
 
 
+def _sector_one(item: tuple[str, str]) -> dict:
+    sym, name = item
+    try:
+        g = compute_gex(sym, use_cboe=False)
+    except Exception as e:
+        g = {"available": False, "reason": str(e)[:80]}
+    if g.get("available"):
+        return {
+            "symbol":      sym,
+            "name":        name,
+            "spot":        g.get("spot"),
+            "net_gex":     g.get("net_gex"),
+            "regime":      g.get("regime"),       # Long / Short / Near Flip
+            "streak":      g.get("streak"),
+            "structural":  g.get("structural"),
+            "regime_kind": g.get("regime_kind"),
+            "source":      g.get("source"),
+            "as_of":       g.get("as_of"),
+        }
+    return {
+        "symbol": sym, "name": name,
+        "available": False, "reason": g.get("reason", "unavailable"),
+    }
+
+
 def compute_sector_gex() -> dict:
-    """GEX per tracked sector ETF. Best-effort — a failed sector is skipped."""
-    sectors = []
-    for sym, name in SECTOR_GEX_SYMBOLS:
-        try:
-            g = compute_gex(sym, use_cboe=False)
-        except Exception as e:
-            g = {"available": False, "reason": str(e)[:80]}
-        if g.get("available"):
-            sectors.append({
-                "symbol":      sym,
-                "name":        name,
-                "spot":        g.get("spot"),
-                "net_gex":     g.get("net_gex"),
-                "regime":      g.get("regime"),       # Long / Short / Near Flip
-                "streak":      g.get("streak"),
-                "structural":  g.get("structural"),
-                "regime_kind": g.get("regime_kind"),
-                "source":      g.get("source"),
-            })
-        else:
-            sectors.append({
-                "symbol": sym, "name": name,
-                "available": False, "reason": g.get("reason", "unavailable"),
-            })
+    """GEX per tracked sector ETF. Best-effort — a failed sector is skipped.
+
+    Sectors are independent (each is its own option chain), so they run
+    concurrently — serial was ~11× slower on a cold cache. Worker count is
+    capped at 6 to stay under Alpaca's rate limit; ex.map preserves the
+    SECTOR_GEX_SYMBOLS order.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        sectors = list(ex.map(_sector_one, SECTOR_GEX_SYMBOLS))
     return {"sectors": sectors}

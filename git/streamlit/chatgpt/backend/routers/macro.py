@@ -3,6 +3,7 @@ GET /api/macro/snapshot
 Returns macro market data + risk score + CNN Fear & Greed. Cached server-side for 5 minutes.
 """
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter
@@ -132,13 +133,37 @@ def macro_snapshot():
         return _cache["data"]
 
     tickers = [t for t, *_ in MACRO_INSTRUMENTS]
-    try:
-        raw  = yf.download(tickers, period="30d", interval="1d",
-                           auto_adjust=True, progress=False, threads=True)
-        close = raw["Close"] if "Close" in raw.columns else raw
-    except Exception:
-        return {"items": [], "risk": {"score": 0, "label": "UNKNOWN", "notes": []},
-                "btd": {"btd_state": "N/A", "btd_reason": "macro fetch failed"}}
+
+    # These three calls are independent network I/O. Run them concurrently
+    # so cold-cache latency ≈ the slowest one, not their sum.
+    def _macro_dl():
+        raw = yf.download(tickers, period="30d", interval="1d",
+                          auto_adjust=True, progress=False, threads=True)
+        return raw["Close"] if "Close" in raw.columns else raw
+
+    def _spy_1y():
+        s = yf.Ticker("SPY").history(period="1y", interval="1d", auto_adjust=True)
+        if not s.empty:
+            s.columns = [c.lower() for c in s.columns]
+        return s
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_close = ex.submit(_macro_dl)
+        f_gex   = ex.submit(compute_spy_gex)
+        f_spy1y = ex.submit(_spy_1y)
+        try:
+            close = f_close.result()
+        except Exception:
+            return {"items": [], "risk": {"score": 0, "label": "UNKNOWN", "notes": []},
+                    "btd": {"btd_state": "N/A", "btd_reason": "macro fetch failed"}}
+        try:
+            gex = f_gex.result()
+        except Exception:
+            gex = {"available": False, "reason": "GEX computation failed"}
+        try:
+            spy1y = f_spy1y.result()
+        except Exception:
+            spy1y = None
 
     items = []
     for ticker, label, category in MACRO_INSTRUMENTS:
@@ -192,10 +217,7 @@ def macro_snapshot():
 
     risk_label = "LOW RISK" if risk_score == 0 else ("MODERATE RISK" if risk_score <= 2 else "HIGH RISK")
 
-    try:
-        gex = compute_spy_gex()
-    except Exception:
-        gex = {"available": False, "reason": "GEX computation failed"}
+    # gex was resolved above (computed in parallel with the macro download).
 
     # ── Market-level Buy-The-Dip (SPY EMA structure + real gamma gate) ──────
     # Regime gate uses real dealer GEX when available:
@@ -215,10 +237,8 @@ def macro_snapshot():
 
     btd: dict = {"btd_state": "N/A", "btd_reason": "SPY history unavailable"}
     try:
-        spy = yf.Ticker("SPY").history(period="1y", interval="1d", auto_adjust=True)
-        if not spy.empty:
-            spy.columns = [c.lower() for c in spy.columns]
-            btd = compute_btd(spy, regime_ok=regime_ok)
+        if spy1y is not None and not spy1y.empty:
+            btd = compute_btd(spy1y, regime_ok=regime_ok)
     except Exception:
         pass
     btd["regime_ok"]     = regime_ok

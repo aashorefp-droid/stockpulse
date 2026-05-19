@@ -42,6 +42,8 @@ interface GexData {
   structural?:      boolean;
   regime_kind?:     string;
   store?:           string;
+  as_of?:           string;   // latest recorded GEX day (YYYY-MM-DD)
+  history_days?:    number;   // number of days of sign history
   reason?:          string;
 }
 
@@ -54,6 +56,7 @@ interface SectorGex {
   regime?:      string | null;     // "Long Gamma" | "Short Gamma" | "Near Flip"
   streak?:      number | null;
   structural?:  boolean | null;
+  as_of?:       string | null;
   reason?:      string;
 }
 
@@ -309,6 +312,18 @@ export default function MarketRisk() {
                     {gex.structural && (gex.streak > 0 ? " 🐂" : " 🐻")}
                   </span>
                 )}
+                {gex.as_of && (
+                  <span
+                    className="ml-1 font-mono opacity-60"
+                    title={
+                      `Last recorded GEX day: ${gex.as_of}` +
+                      (gex.history_days != null ? `\n${gex.history_days} day(s) of sign history` : "") +
+                      `\nStreak advances once per trading day — equals today's date when recording is live.`
+                    }
+                  >
+                    @{gex.as_of.slice(5)}
+                  </span>
+                )}
               </div>
             );
           }
@@ -354,7 +369,8 @@ export default function MarketRisk() {
                       ? `${s.name} (${s.symbol}): unavailable${s.reason ? " — " + s.reason : ""}`
                       : `${s.name} (${s.symbol}) — ${reg}\n` +
                         `Net dealer GEX: ${s.net_gex == null ? "—" : (s.net_gex / 1e9).toFixed(2) + "B"} per 1% move\n` +
-                        `Streak: ${stk > 0 ? "+" : ""}${stk}d${s.structural ? " (structural ≥10d)" : ""}`
+                        `Streak: ${stk > 0 ? "+" : ""}${stk}d${s.structural ? " (structural ≥10d)" : ""}\n` +
+                        `As of: ${s.as_of ?? "?"}`
                   }
                 >
                   {s.symbol}<span>{tag}</span>
