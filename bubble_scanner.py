@@ -183,10 +183,18 @@ def analyze_ticker(ticker: str, period: str = "3y", as_of_date=None) -> dict | N
 #  MULTI-TICKER
 # ═════════════════════════════════════════════════════════════════════════════
 
-def analyze_multiple(tickers: list[str], period: str = "3y", as_of_date=None) -> list[dict]:
+def analyze_multiple(tickers: list[str], period: str = "3y", as_of_date=None, max_workers: int = 8) -> list[dict]:
     results = []
-    for t in tickers:
-        r = analyze_ticker(t, period, as_of_date=as_of_date)
-        if r:
-            results.append(r)
+    if not tickers:
+        return results
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(tickers)))) as pool:
+        future_map = {pool.submit(analyze_ticker, t, period, as_of_date=as_of_date): t for t in tickers}
+        for fut in concurrent.futures.as_completed(future_map):
+            try:
+                r = fut.result()
+                if r:
+                    results.append(r)
+            except Exception:
+                pass
     return results

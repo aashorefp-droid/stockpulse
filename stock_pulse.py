@@ -1,4 +1,4 @@
-﻿"""
+"""
 Earnings Backtest — Alpaca/Polygon Edition
 Strategy: Enter on earnings report day (AMC) at ~1:30 PM ET (12:30 PM CST)
           using the 9:30–1:30 ET 4H candle direction.
@@ -120,7 +120,7 @@ if "_telegram_chat_id" not in st.session_state:
 @st.cache_resource
 def get_thread_pool():
     """Shared ThreadPoolExecutor for I/O-bound work (API calls, Telegram sends)."""
-    return concurrent.futures.ThreadPoolExecutor(max_workers=12)
+    return concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
 @st.cache_resource
 def get_process_pool():
@@ -4043,6 +4043,7 @@ def get_fundamentals(ticker):
             "forward_eps": round(forward_eps, 2) if forward_eps else None,
             # Flags
             "flags": flags,
+            "quote_type": str(info.get("quoteType", "")).upper(),
         }
     except Exception:
         return None
@@ -4320,9 +4321,15 @@ def _classify_instrument(ticker: str, daily_df) -> dict:
     else:
         persistence = 0.5
 
-    # quoteType from yfinance (most reliable when available)
+    # quoteType from cached fundamentals (avoids duplicate slow network call to Yahoo Finance)
     quote_type = "UNKNOWN"
-    if YFINANCE_AVAILABLE:
+    try:
+        _fund = get_fundamentals(ticker)
+        if _fund and _fund.get("quote_type"):
+            quote_type = _fund["quote_type"]
+    except Exception:
+        pass
+    if quote_type == "UNKNOWN" and YFINANCE_AVAILABLE:
         try:
             import yfinance as yf
             qt = yf.Ticker(ticker).info.get("quoteType", "UNKNOWN")
@@ -7676,9 +7683,15 @@ try:
                 lambda t: f"https://finviz.com/quote.ashx?t={t}&p=d"
             )
 
-        # ── Add news sentiment column ──
+        # ── Add news sentiment column (parallelized) ──
         if not df_all.empty:
-            df_all["news"] = df_all["ticker"].apply(lambda t: get_news_sentiment(t))
+            try:
+                from news_sentiment import get_news_sentiment_batch
+                _tickers_list = df_all["ticker"].tolist()
+                _news_map = get_news_sentiment_batch(_tickers_list, max_workers=16)
+                df_all["news"] = df_all["ticker"].map(_news_map).fillna("No")
+            except Exception:
+                df_all["news"] = df_all["ticker"].apply(lambda t: get_news_sentiment(t))
 
         # ── Overall Fundamental label: Strong / Weak / Neutral ──
         def _calc_fund_label(row):
@@ -16981,7 +16994,13 @@ with tab_holdings:
         _mh_sdf = pd.DataFrame(_mh_sr)
         if not _mh_sdf.empty:
             _mh_sdf["chart"] = _mh_sdf["ticker"].apply(lambda t: f"https://finviz.com/quote.ashx?t={t}&p=d")
-            _mh_sdf["news"] = _mh_sdf["ticker"].apply(lambda t: get_news_sentiment(t))
+            try:
+                from news_sentiment import get_news_sentiment_batch
+                _mh_tickers_list = _mh_sdf["ticker"].tolist()
+                _mh_news_map = get_news_sentiment_batch(_mh_tickers_list, max_workers=16)
+                _mh_sdf["news"] = _mh_sdf["ticker"].map(_mh_news_map).fillna("No")
+            except Exception:
+                _mh_sdf["news"] = _mh_sdf["ticker"].apply(lambda t: get_news_sentiment(t))
 
             # ── Overall Fundamental label: Strong / Weak / Neutral ──
             def _calc_fundamental_label(row):
@@ -18374,10 +18393,19 @@ with tab_tos:
                 _spy_w, _spy_d = pd.DataFrame(), pd.DataFrame()
 
             _tos_results = []
-            for _ti, _tkr in enumerate(_tos_tickers):
-                _tos_bar.progress((_ti + 1) / len(_tos_tickers), text=f"Scanning {_tkr} ({_ti+1}/{len(_tos_tickers)})...")
+            _tos_executor = get_thread_pool()
+            _tos_futures = {
+                _tos_executor.submit(tos_scan_ticker, _tkr, _spy_w, _spy_d): _tkr
+                for _tkr in _tos_tickers
+            }
+            _tos_done = 0
+            _tos_total = len(_tos_tickers)
+            for _fut in concurrent.futures.as_completed(_tos_futures):
+                _tkr = _tos_futures[_fut]
+                _tos_done += 1
+                _tos_bar.progress(_tos_done / _tos_total, text=f"Scanning {_tkr} ({_tos_done}/{_tos_total})...")
                 try:
-                    _r = tos_scan_ticker(_tkr, _spy_w, _spy_d)
+                    _r = _fut.result()
                     if _r:
                         _tos_results.append(_r)
                 except Exception as _te:
@@ -18728,10 +18756,19 @@ with tab_bubble:
         if _bb_scan_btn and _bb_tickers:
             _bb_bar = st.progress(0, text="Scanning...")
             _bb_results = []
-            for _bi, _bt in enumerate(_bb_tickers):
-                _bb_bar.progress((_bi + 1) / len(_bb_tickers), text=f"Analyzing {_bt}...")
+            _bb_executor = get_thread_pool()
+            _bb_futures = {
+                _bb_executor.submit(bubble_analyze, _bt, _bb_period, as_of_date=_bb_as_of): _bt
+                for _bt in _bb_tickers
+            }
+            _bb_done = 0
+            _bb_total = len(_bb_tickers)
+            for _fut in concurrent.futures.as_completed(_bb_futures):
+                _bt = _bb_futures[_fut]
+                _bb_done += 1
+                _bb_bar.progress(_bb_done / _bb_total, text=f"Analyzing {_bt} ({_bb_done}/{_bb_total})...")
                 try:
-                    _br = bubble_analyze(_bt, _bb_period, as_of_date=_bb_as_of)
+                    _br = _fut.result()
                     if _br:
                         _bb_results.append(_br)
                 except Exception as _be:

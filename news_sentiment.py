@@ -9,13 +9,29 @@ Usage:
 """
 
 import time
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 import requests
+from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _NEWS_CACHE = {}           # {ticker: (timestamp, result_dict)}
 _NEWS_CACHE_TTL = 600      # 10 minutes
 _HEADLINES_COUNT = 15      # number of recent headlines to check
+
+_SESSION = None
+
+def _get_session():
+    """Shared requests.Session with connection pooling for fast keep-alive reuse."""
+    global _SESSION
+    if _SESSION is None:
+        _SESSION = requests.Session()
+        adapter = HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=1)
+        _SESSION.mount("https://", adapter)
+        _SESSION.mount("http://", adapter)
+        _SESSION.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    return _SESSION
 
 _BAD_WORDS = {
     "downgrade", "downgrades", "downgraded", "cut", "cuts", "slash", "slashes",
@@ -47,9 +63,9 @@ _GOOD_WORDS = {
 def _fetch_finviz_news(ticker: str) -> list[dict]:
     """Scrape recent headlines from Finviz. Returns list of {headline, source, time}."""
     try:
-        resp = requests.get(
+        session = _get_session()
+        resp = session.get(
             f"https://finviz.com/quote.ashx?t={ticker}&ty=c&p=d&b=1",
-            headers={"User-Agent": "Mozilla/5.0"},
             timeout=8,
         )
         if resp.status_code != 200:
@@ -154,6 +170,23 @@ def get_news_details(ticker: str) -> dict:
 def get_news_sentiment(ticker: str) -> str:
     """Quick sentiment: returns 'Good', 'Bad', or 'No'."""
     return get_news_details(ticker)["label"]
+
+
+def get_news_sentiment_batch(tickers: list[str], max_workers: int = 16) -> dict:
+    """Fetch news sentiment for multiple tickers in parallel. Returns {ticker: label}."""
+    if not tickers:
+        return {}
+    results = {}
+    unique_tickers = list(dict.fromkeys(tickers))
+    with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(unique_tickers)))) as pool:
+        future_map = {pool.submit(get_news_sentiment, t): t for t in unique_tickers}
+        for fut in concurrent.futures.as_completed(future_map):
+            t = future_map[fut]
+            try:
+                results[t] = fut.result()
+            except Exception:
+                results[t] = "No"
+    return results
 
 
 if __name__ == "__main__":

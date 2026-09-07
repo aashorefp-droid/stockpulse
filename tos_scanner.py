@@ -934,8 +934,8 @@ def scan_ticker(ticker: str, spy_weekly: pd.DataFrame = None,
     return result
 
 
-def scan_multiple(tickers: list[str]) -> list[dict]:
-    """Scan a list of tickers. Pre-fetches SPY for RS comparison."""
+def scan_multiple(tickers: list[str], max_workers: int = 12) -> list[dict]:
+    """Scan a list of tickers in parallel. Pre-fetches SPY for RS comparison."""
     try:
         spy = yf.Ticker("SPY")
         spy_weekly = spy.history(period="5y", interval="1wk", auto_adjust=True)
@@ -945,10 +945,19 @@ def scan_multiple(tickers: list[str]) -> list[dict]:
         spy_daily = pd.DataFrame()
 
     results = []
-    for t in tickers:
-        r = scan_ticker(t, spy_weekly, spy_daily)
-        if r:
-            results.append(r)
+    if not tickers:
+        return results
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(tickers)))) as pool:
+        future_map = {pool.submit(scan_ticker, t, spy_weekly, spy_daily): t for t in tickers}
+        for fut in concurrent.futures.as_completed(future_map):
+            try:
+                r = fut.result()
+                if r:
+                    results.append(r)
+            except Exception:
+                pass
     return results
 
 

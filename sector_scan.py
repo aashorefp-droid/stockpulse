@@ -714,19 +714,31 @@ def scan_single_stock(ticker, api_key, api_secret, data_source, use_fib=True, fi
         raise RuntimeError(f"scan_single_stock({ticker}): {type(e).__name__}: {e}") from e
 
 
-def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, fib_tol=2.0, use_strategy=False):
+def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, fib_tol=2.0, use_strategy=False, max_workers=12):
     """
-    Scan multiple stocks and return bullish + high confidence ones.
+    Scan multiple stocks in parallel and return bullish + high confidence ones.
     Returns (top_setups, all_results).
     """
     if watchlist is None:
         watchlist = SCAN_WATCHLIST
 
     results = []
-    for ticker in watchlist:
-        result = scan_single_stock(ticker, api_key, api_secret, data_source, use_fib, fib_tol, use_strategy)
-        if result:
-            results.append(result)
+    if not watchlist:
+        return [], []
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(watchlist)))) as pool:
+        future_map = {
+            pool.submit(scan_single_stock, ticker, api_key, api_secret, data_source, use_fib, fib_tol, use_strategy): ticker
+            for ticker in watchlist
+        }
+        for fut in concurrent.futures.as_completed(future_map):
+            try:
+                result = fut.result()
+                if result:
+                    results.append(result)
+            except Exception:
+                pass
 
     bullish_high = [
         r for r in results
