@@ -83,7 +83,7 @@ def _get_db(in_memory=False):
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA cache_size=-8000")
+    conn.execute("PRAGMA cache_size=-500")
     conn.execute(_CREATE_TABLE_SQL)
     for idx_sql in _CREATE_INDEXES_SQL:
         conn.execute(idx_sql)
@@ -108,6 +108,28 @@ class PaperTrader:
         self.position_size = position_size or pc.POSITION_SIZE
         self._in_memory = in_memory
         self.db = _get_db(in_memory=in_memory)
+
+    def close(self):
+        """Close SQLite database connection to prevent memory leak."""
+        if hasattr(self, "db") and self.db is not None:
+            try:
+                self.flush_to_disk()
+                self.db.close()
+            except Exception:
+                pass
+            self.db = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def flush_to_disk(self):
         """Write in-memory database back to disk. No-op if already on disk."""

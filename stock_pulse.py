@@ -10,6 +10,7 @@ Data Sources:
 
 import sys
 import os
+os.environ["MALLOC_ARENA_MAX"] = "2"
 # Ensure local module imports work regardless of working directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
@@ -25,6 +26,16 @@ import sqlite3
 import pytz
 import concurrent.futures
 import gc
+import ctypes
+
+def trim_memory():
+    """Trigger Python GC and command glibc to trim cached arenas back to the OS."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
 
 try:
     import yfinance as yf
@@ -167,7 +178,7 @@ def _get_trade_db():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA cache_size=-8000")
+    conn.execute("PRAGMA cache_size=-500")
     conn.execute("""CREATE TABLE IF NOT EXISTS auto_scan_rank1 (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         scan_date TEXT NOT NULL,
@@ -4926,7 +4937,7 @@ def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, 
     bearish_high.sort(key=lambda x: x["score"])
 
     top_setups = bullish_high[:5] + bearish_high[:5]
-    gc.collect()
+    trim_memory()
     return top_setups, results
 
 
@@ -4977,7 +4988,7 @@ def _parallel_scan_with_progress(tickers, api_key, api_secret, data_source,
                               "connection reset", "remotedisconnected", "connection aborted"))
             errors.append((ticker, err_str, is_timeout))
 
-    gc.collect()
+    trim_memory()
     return results, errors, no_data
 
 
@@ -6162,6 +6173,12 @@ def _background_trade_monitor():
                 print(f"⚠️ Background monitor error for {tr.get('ticker', '?')}: {e}")
     except Exception as _bg_outer_e:
         print(f"⚠️ Background monitor setup error: {_bg_outer_e}")
+    finally:
+        if _pt_engine:
+            try:
+                _pt_engine.close()
+            except Exception:
+                pass
 
 _background_trade_monitor()
 
@@ -11230,6 +11247,18 @@ try:
 
             if error_tickers:
                 st.caption(f"⚠️ Could not fetch data for: {', '.join(error_tickers)}")
+
+            if '_pt_engine' in locals() and _pt_engine:
+                try:
+                    _pt_engine.close()
+                except Exception:
+                    pass
+            if '_paper_query_pt' in locals() and _paper_query_pt:
+                try:
+                    _paper_query_pt.close()
+                except Exception:
+                    pass
+            trim_memory()
 
         _live_tracker_fragment()
 
@@ -18414,7 +18443,7 @@ with tab_tos:
                 except Exception as _te:
                     st.warning(f"⚠️ {_tkr}: {_te}")
             _tos_bar.empty()
-            gc.collect()
+            trim_memory()
 
             if _tos_results:
                 st.session_state["_tos_results"] = _tos_results
@@ -18778,7 +18807,7 @@ with tab_bubble:
                 except Exception as _be:
                     st.warning(f"{_bt}: {_be}")
             _bb_bar.empty()
-            gc.collect()
+            trim_memory()
             if _bb_results:
                 st.session_state["_bb_results"] = _bb_results
 
