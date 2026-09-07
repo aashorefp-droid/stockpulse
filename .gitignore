@@ -62,6 +62,11 @@ _fix_encoding.py
 _fix_encoding2.py
 remove_rank1.py
 Documents - Shortcut.lnk
+bounce.bat
+start_backend.*
+start_frontend.*
+prompt
+test.py
 
 # ── OS & IDE ────────────────────────────────────────
 .DS_Store
