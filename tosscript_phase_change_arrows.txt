@@ -1,0 +1,174 @@
+# ==============================================================================
+# PHASE CHANGE ARROW ALERTS
+# ==============================================================================
+# Real-time visual alerts when market phases change
+# Used in: Add as UPPER STUDY on weekly or daily chart
+#
+# PHASES DETECTED:
+#   📦 ACCUMULATION → 📈 MARKUP        = BUY SIGNAL (smart money pushing up)
+#   📈 MARKUP → 📉 DISTRIBUTION        = SELL SIGNAL (institutions dumping)
+#   📉 DISTRIBUTION → 💔 MARKDOWN      = BEARISH (panic selling)
+#   💔 MARKDOWN → 📦 ACCUMULATION      = RECOVERY (smart money buying dip)
+#   ⚖️ MIXED phases (CORRECTION, CONSOLIDATION, RANGING)
+#
+# ARROW DIRECTION:
+#   ⬆️ (UP ARROW)    = Phase change INTO BULLISH phase (ACCUMULATION → MARKUP)
+#   ⬇️ (DOWN ARROW)  = Phase change INTO BEARISH phase (DISTRIBUTION, MARKDOWN)
+#   ↔️ (SIDEWAYS)    = CONSOLIDATION/RANGING (no conviction)
+# ==============================================================================
+
+input lookback26w       = 26;        # 26 weeks = 6 months for range
+input pocLevel          = 0.50;      # POC = 50% of range
+input vahLevel          = 0.70;      # VAH = 70% of range  
+input valLevel          = 0.30;      # VAL = 30% of range
+input volumeThreshold   = 1.10;      # 10% increase = accum, <1.2 = dist
+input showPriceLabels   = yes;
+
+# ─── 26-WEEK RANGE LEVELS ────────────────────────────────────────────────────
+def high26w    = Highest(high, lookback26w * 5);
+def low26w     = Lowest(low, lookback26w * 5);
+def range26w   = high26w - low26w;
+def poc        = low26w + (range26w * pocLevel);
+def vah        = low26w + (range26w * vahLevel);
+def val        = low26w + (range26w * valLevel);
+
+# ─── VOLUME TREND (5-week vs 10-week prior) ──────────────────────────────────
+def recentVolAvg   = Average(volume, 25);
+def priorVolAvg    = Average(volume[25], 25);
+def volTrendRatio  = if priorVolAvg > 0 then recentVolAvg / priorVolAvg else 1.0;
+
+# ─── PRICE TREND (Higher Highs / Lower Lows over 5 weeks) ────────────────────
+def lows5w     = Lowest(low, 25);
+def lows5wPrior= Lowest(low[25], 25);
+def highs5w    = Highest(high, 25);
+def highs5wPrior = Highest(high[25], 25);
+
+def trendingUp   = high > highs5wPrior;
+def trendingDown = low < lows5wPrior;
+def stable       = (high <= highs5wPrior) and (low >= lows5wPrior);
+
+# ─── PHASE DETECTION LOGIC ───────────────────────────────────────────────────
+
+# ACCUMULATION = Low price, High volume, No downtrend
+def accumulationPhase = (close <= poc) and (volTrendRatio > 1.1) and (!trendingDown);
+
+# MARKUP = Above POC, Trending up, Good volume
+def markupPhase = (close > poc) and trendingUp and (volTrendRatio > 1.0);
+
+# DISTRIBUTION = At/above VAH, Declining volume
+def distributionPhase = (close >= vah) and (volTrendRatio < 1.2);
+
+# MARKDOWN = Below VAL, Trending down, Low volume
+def markdownPhase = (close <= val) and trendingDown and (volTrendRatio <= 1.1);
+
+# EARLY MARKUP = Mid range, trending up, volume building (pre-breakout)
+def earlyMarkupPhase = (close > poc) and (close < vah) and trendingUp and (volTrendRatio > 1.1);
+
+# CORRECTION = Mid range, trending down, volume increasing (pullback)
+def correctionPhase = (close > poc) and (close < vah) and trendingDown and (volTrendRatio > 1.1);
+
+# CONSOLIDATION = Mid range, no trend, no volume (indecision)
+def consolidationPhase = (close > poc) and (close < vah) and (!trendingUp) and (!trendingDown);
+
+# RANGING = None of above (trapped/ranging)
+def rangingPhase = !(accumulationPhase or markupPhase or distributionPhase or 
+                     markdownPhase or earlyMarkupPhase or correctionPhase or consolidationPhase);
+
+# ─── PREVIOUS BAR PHASE (To detect transitions) ───────────────────────────────
+def prevAccumulation   = (close[1] <= poc) and (volTrendRatio[1] > 1.1) and (!trendingDown[1]);
+def prevMarkup         = (close[1] > poc) and trendingUp[1] and (volTrendRatio[1] > 1.0);
+def prevDistribution   = (close[1] >= vah) and (volTrendRatio[1] < 1.2);
+def prevMarkdown       = (close[1] <= val) and trendingDown[1] and (volTrendRatio[1] <= 1.1);
+def prevEarlyMarkup    = (close[1] > poc) and (close[1] < vah) and trendingUp[1] and (volTrendRatio[1] > 1.1);
+def prevCorrection     = (close[1] > poc) and (close[1] < vah) and trendingDown[1] and (volTrendRatio[1] > 1.1);
+def prevConsolidation  = (close[1] > poc) and (close[1] < vah) and (!trendingUp[1]) and (!trendingDown[1]);
+
+# ─── PHASE TRANSITIONS (ARROWS) ──────────────────────────────────────────────
+
+# BULLISH TRANSITIONS (UP ARROW)
+# Entering ACCUMULATION or MARKUP phases
+def bullishTransition = (accumulationPhase and !prevAccumulation) or
+                        (markupPhase and !prevMarkup) or
+                        (earlyMarkupPhase and !prevEarlyMarkup and !prevConsolidation);
+
+# BEARISH TRANSITIONS (DOWN ARROW)
+# Entering DISTRIBUTION or MARKDOWN phases
+def bearishTransition = (distributionPhase and !prevDistribution) or
+                        (markdownPhase and !prevMarkdown) or
+                        (correctionPhase and !prevCorrection and prevMarkup);
+
+# NEUTRAL TRANSITIONS (no arrow)
+# CONSOLIDATION, RANGING, minor corrections
+def neutralTransition = (consolidationPhase and !prevConsolidation) or
+                        (rangingPhase and !prevConsolidation);
+
+# ─── PRICE LEVEL VISUALIZATION (Cloud/Lines) ────────────────────────────────
+plot pocLine = poc;
+plot vahLine = vah;
+plot valLine = val;
+
+pocLine.SetDefaultColor(Color.CYAN);
+pocLine.SetLineWeight(2);
+pocLine.SetStyle(Curve.SHORT_DASH);
+
+vahLine.SetDefaultColor(Color.RED);
+vahLine.SetLineWeight(1);
+vahLine.SetStyle(Curve.LONG_DASH);
+
+valLine.SetDefaultColor(Color.GREEN);
+valLine.SetLineWeight(1);
+valLine.SetStyle(Curve.LONG_DASH);
+
+AddCloud(vah, poc, Color.LIGHT_RED, Color.LIGHT_GREEN);  # Resistance zone above POC, Support zone below
+
+# ─── ARROWS ──────────────────────────────────────────────────────────────────
+# UP ARROW = Buy signal (smart money entering, phase turning bullish)
+plot bullishArrow = if bullishTransition then low - (range26w * 0.05) else Double.NaN;
+bullishArrow.SetDefaultColor(Color.GREEN);
+bullishArrow.SetPaintingStrategy(PaintingStrategy.ARROW_UP);
+bullishArrow.SetLineWeight(3);
+AddChartBubble(bullishTransition, low - (range26w * 0.08), "BUY", Color.GREEN, no);
+
+# DOWN ARROW = Sell signal (smart money exiting, phase turning bearish)
+plot bearishArrow = if bearishTransition then high + (range26w * 0.05) else Double.NaN;
+bearishArrow.SetDefaultColor(Color.RED);
+bearishArrow.SetPaintingStrategy(PaintingStrategy.ARROW_DOWN);
+bearishArrow.SetLineWeight(3);
+AddChartBubble(bearishTransition, high + (range26w * 0.08), "SELL", Color.RED, no);
+
+# ─── PHASE LABEL (Current phase) ──────────────────────────────────────────────
+AddLabel(showPriceLabels, 
+    if accumulationPhase then "📦 ACCUMULATION - Smart money buying"
+    else if markupPhase then "📈 MARKUP - Institutions pushing up"
+    else if earlyMarkupPhase then "📈 EARLY MARKUP - Prepping breakout"
+    else if distributionPhase then "📉 DISTRIBUTION - Smart money selling"
+    else if markdownPhase then "💔 MARKDOWN - Panic selling"
+    else if correctionPhase then "⚠️ CORRECTION - Pullback in uptrend"
+    else if consolidationPhase then "🔄 CONSOLIDATION - Indecision zone"
+    else "➡️ RANGING - Trapped/sideways",
+    
+    if accumulationPhase then Color.GREEN
+    else if markupPhase then Color.GREEN
+    else if earlyMarkupPhase then Color.LIGHT_GREEN
+    else if distributionPhase then Color.RED
+    else if markdownPhase then Color.RED
+    else if correctionPhase then Color.ORANGE
+    else if consolidationPhase then Color.DARK_GRAY
+    else Color.GRAY
+);
+
+# ─── VOLUME RATIO LABEL ──────────────────────────────────────────────────────
+AddLabel(showPriceLabels, "Vol Ratio: " + AsPercent(volTrendRatio), 
+    if volTrendRatio > 1.1 then Color.GREEN
+    else if volTrendRatio < 1.0 then Color.RED
+    else Color.ORANGE
+);
+
+# ─── HOW TO USE ───────────────────────────────────────────────────────────────
+# 1. Apply to WEEKLY chart for swing trades (2-4 week holding periods)
+# 2. Watch for UP ⬆️ arrows = entry signal (start of accumulation/markup)
+# 3. Watch for DOWN ⬇️ arrows = exit signal (stop loss or take profits)
+# 4. Green cloud = support zone (POC), Red cloud = resistance zone (VAH)
+# 5. Monitor phase label for current market condition
+# 6. Volume ratio > 1.1 = strong conviction, < 1.0 = weak/distribution
+# ==============================================================================

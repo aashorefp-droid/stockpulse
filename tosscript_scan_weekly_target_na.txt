@@ -1,0 +1,51 @@
+# ============================================================
+# WEEKLY TARGET NA SCANNER (Lightweight)
+# TOS: Scan > Stock Hacker > Add filter > Custom
+# Set aggregation to WEEKLY
+# Finds stocks where Elliott Wave targets are NA/invalid
+# ============================================================
+
+input ts = 5;
+
+# Swing points
+def sH = high == Highest(high, ts);
+def sL = low  == Lowest(low, ts);
+def shP = if sH then high else shP[1];
+def slP = if sL then low  else slP[1];
+def shB = if sH then BarNumber() else shB[1];
+def slB = if sL then BarNumber() else slB[1];
+
+# Range and trend
+def rng = shP - slP;
+def trend = if close > Average(close, 50) then 1 else -1;
+def tChg = trend != trend[1];
+
+# Wave counter
+def wc = if tChg then 1 else if sH or sL then wc[1] + 1 else wc[1];
+def wl = if wc <= 5 then wc else Min(wc - 5, 3);
+
+# Extension targets
+def ext1236 = if trend < 0 then shP - (rng * 1.236) else slP + (rng * 1.236);
+def ext1618 = if trend < 0 then shP - (rng * 1.618) else slP + (rng * 1.618);
+
+# Bars since last swing
+def lsBar = if sH or sL then BarNumber() else lsBar[1];
+def bsSince = BarNumber() - lsBar;
+
+# ── TARGET NA CONDITIONS ─────────────────────────────────────
+# 1: Flat range — no swing formed
+def flat = rng <= 0 or (rng / close) < 0.005;
+
+# 2: Both targets exceeded — wave exhausted
+def exceeded = (trend > 0 and close > ext1618) or (trend < 0 and close < ext1618);
+
+# 3: Trend just changed — wave reset
+def transition = tChg or wc <= 1;
+
+# 4: Stale — no swing in 10+ weekly bars
+def stale = bsSince > 10;
+
+# ── SCAN ─────────────────────────────────────────────────────
+plot Scan = (flat or exceeded or transition or stale)
+        and close > 5
+        and Average(volume, 20) > 100000;

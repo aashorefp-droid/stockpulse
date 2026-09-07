@@ -1,27 +1,70 @@
-# Python
+# ── Environment & Secrets ───────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+
+# ── Python & Environments ───────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-env/
-venv/
+*.egg-info/
 .venv/
+venv/
 ENV/
+env/
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+# ── Databases & Runtime State ───────────────────────
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.watchlist_cache/
+*.log
 
-# Streamlit
-.streamlit/secrets.toml
+# ── Large Archives & Heavy Folders ──────────────────
+*.zip
+*.tar
+*.gz
+chatgpt.zip
+chatgpt.tar
+project.tar
+Backups/
+backup/
+backup2/
+backup3/
+copies/
+chatgpt/
+new/
+optionsbot/
+institution/
+marimo/
+Human-In-the-Loop-MCP-Server/
+frontend - Copy/
+go-backend - Copy/
+go-backend-scan-timeout2/
+go-backend/
+frontend/
+node_modules/
+.next/
+*.tsbuildinfo
 
-# OS
+# ── Scratch & Corrupted Files ───────────────────────
+stock_pulse - Copy*.py
+stock_pulse-broke*.py
+stock_pulse-corrupted*.py
+stock_pulse - Performance.py
+stock_pulse - earnings.py
+stock_pulse_nb.py
+stock_pulse_pre_intraday_tuning.py
+_fix_encoding.py
+_fix_encoding2.py
+remove_rank1.py
+Documents - Shortcut.lnk
+
+# ── OS & IDE ────────────────────────────────────────
 .DS_Store
 Thumbs.db
-
-# Env files
-.env
-*.env
+.vscode/
+.claude/

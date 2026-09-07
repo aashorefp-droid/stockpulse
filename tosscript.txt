@@ -1,0 +1,1154 @@
+# ============================================================
+# FIBONACCI MASTER + FVG + AGIG + STAN WEINSTEIN COMBINED
+# Features: Bear/Bull Detection, Volume Conviction, FVG Detection,
+#           Dynamic Targets, Market Phase, Bias, Signal Grade,
+#           Weinstein Base Score + Breakout Readiness,
+#           Conviction Date Tracking
+# ============================================================
+
+# ─── INPUTS ─────────────────────────────────────────────────
+input lookbackPeriod    = 50;
+input fibVolThreshold   = 1.2;
+input fvgVolThreshold   = 1.5;
+input fvgVolLookback    = 20;
+input fvg_min_size_pct  = 0.1;
+input ATRreversalfactor = 3.0;
+input ATRlength         = 5;
+input zigzagpercent     = 3.0;
+input zigzagamount      = 0.15;
+input atrReversal       = 2.0;
+input ma30Period        = 30;
+input ma10Period        = 10;
+input rsPeriod          = 50;
+input volumePeriod      = 10;
+input highLookback      = 52;
+input lowLookback       = 52;
+input flatnessPct       = 0.08;
+input compSymbol        = "SPY";
+input fairPEMultiple    = 20.0;  # Fair P/E multiple for valuation label
+input volAvgLength      = 50;    # Volume average lookback for volume bias
+input volThreshold      = 1.2;   # Above-average volume threshold (1.2 = 120%)
+input volPriceAvgLen    = 20;    # Price MA length for volume trend detection
+
+# ════════════════════════════════════════════════════════════
+#                    REUSABLE SCRIPTS (Functions)
+# ════════════════════════════════════════════════════════════
+
+# ─── ClosePos: normalize close within a bar's range ──────────
+#     Returns a value 0-1 (0 = at low, 1 = at high).
+#     Used for buyer/seller conviction on current and prev bar.
+script ClosePos {
+    input h = high;
+    input l = low;
+    input c = close;
+    def r = h - l;
+    plot Result = if r > 0 then (c - l) / r else 0.5;
+}
+
+# ─── DateYear / DateMonth / DateDay ──────────────────────────
+#     Extract individual components from a YYYYMMDD integer.
+#     Used for conviction, signal, phase, and Wyckoff date labels.
+script DateYear {
+    input rawDate = 0;
+    plot Result = Floor(rawDate / 10000);
+}
+
+script DateMonth {
+    input rawDate = 0;
+    plot Result = Floor((rawDate % 10000) / 100);
+}
+
+script DateDay {
+    input rawDate = 0;
+    plot Result = rawDate % 100;
+}
+
+# ─── WeinScore: sum Stan Weinstein breakout criteria ─────────
+#     Accepts six 0/1 boolean inputs and returns their total (0-6).
+script WeinScore {
+    input maTurningUp   = 0;
+    input ma10AboveMA30 = 0;
+    input rsPositive    = 0;
+    input rsImproving   = 0;
+    input volBuilding   = 0;
+    input nearHigh      = 0;
+    plot Result = maTurningUp + ma10AboveMA30 + rsPositive
+                + rsImproving + volBuilding   + nearHigh;
+}
+
+# ─── GapSizePct: FVG gap size as a percentage of price ───────
+#     Used for both bull and bear FVG size labels.
+script GapSizePct {
+    input gapTop   = 0;
+    input gapBot   = 0;
+    input refPrice = close;
+    def   size     = gapTop - gapBot;
+    plot  Result   = if refPrice != 0 then (size / refPrice) * 100 else 0;
+}
+
+# ─── FVGBullTop / FVGBullBot / FVGBearTop / FVGBearBot ───────
+#     Select the correct FVG boundary price based on which of the
+#     five candidate patterns (f0-f4) fired on this bar.
+script FVGBullTop {
+    input f0 = no; input f1 = no; input f2 = no;
+    input f3 = no; input f4 = no;
+    plot Result =
+        if f0 then low[1]  else
+        if f1 then low[2]  else
+        if f2 then low[3]  else
+        if f3 then low[4]  else
+        if f4 then low[5]  else Double.NaN;
+}
+
+script FVGBullBot {
+    input f0 = no; input f1 = no; input f2 = no;
+    input f3 = no; input f4 = no;
+    plot Result =
+        if f0 then high[3] else
+        if f1 then high[4] else
+        if f2 then high[5] else
+        if f3 then high[6] else
+        if f4 then high[7] else Double.NaN;
+}
+
+script FVGBearTop {
+    input f0 = no; input f1 = no; input f2 = no;
+    input f3 = no; input f4 = no;
+    plot Result =
+        if f0 then low[3]  else
+        if f1 then low[4]  else
+        if f2 then low[5]  else
+        if f3 then low[6]  else
+        if f4 then low[7]  else Double.NaN;
+}
+
+script FVGBearBot {
+    input f0 = no; input f1 = no; input f2 = no;
+    input f3 = no; input f4 = no;
+    plot Result =
+        if f0 then high[1] else
+        if f1 then high[2] else
+        if f2 then high[3] else
+        if f3 then high[4] else
+        if f4 then high[5] else Double.NaN;
+}
+
+# ─── 1. PRICE & SWING CALCULATIONS ──────────────────────────
+def HH           = Highest(high, lookbackPeriod);
+def LL           = Lowest(low,  lookbackPeriod);
+def swingRange   = HH - LL;
+def currentPrice = close;
+
+# ─── 2. VOLUME LOGIC ────────────────────────────────────────
+def avgVol        = Average(volume, 20);
+def highVolume    = volume > (avgVol * fibVolThreshold);
+def avgVolFVG     = Average(volume, fvgVolLookback);
+def highVolumeFVG = volume > (avgVolFVG * fvgVolThreshold);
+
+# ─── 3. BAR TRACKING / TREND DIRECTION ──────────────────────
+def barHH          = if high == HH then BarNumber() else barHH[1];
+def barLL          = if low  == LL then BarNumber() else barLL[1];
+def isBearishSwing = barLL > barHH;
+def isBullishSwing = barHH > barLL;
+
+# ─── 4. FIBONACCI TARGET CALCULATIONS ───────────────────────
+def bearT1 = LL;
+def bearT2 = LL - (swingRange * 0.272);
+def bearT3 = LL - (swingRange * 0.618);
+
+# ─── 5. FIBONACCI STATE DEFINITIONS ─────────────────────────
+def isBearExt      = isBearishSwing and currentPrice < LL;
+def isBearRetrace  = isBearishSwing and currentPrice >= LL and currentPrice <= HH;
+def hitLowRecently = Lowest(low, 3) <= LL;
+
+# ─── 6. BUYER / SELLER CONVICTION ───────────────────────────
+def closePosition    = ClosePos(h = high,    l = low,    c = close);
+def prevClosePos     = ClosePos(h = high[1], l = low[1], c = close[1]);
+def buyerConviction  = highVolume and closePosition >= 0.5;
+def sellerConviction = highVolume and closePosition <  0.5;
+def strongBuyers     = buyerConviction  and prevClosePos >= 0.5;
+def strongSellers    = sellerConviction and prevClosePos <  0.5;
+
+# ─── 6B. DATE TRACKING FOR CONVICTION BARS ───────────────────
+def buyerConvBar     = if buyerConviction  then BarNumber() else buyerConvBar[1];
+def sellerConvBar    = if sellerConviction then BarNumber() else sellerConvBar[1];
+
+def buyerConvOffset  = BarNumber() - buyerConvBar;
+def sellerConvOffset = BarNumber() - sellerConvBar;
+
+def buyerConvRawDate  = GetValue(GetYYYYMMDD(), buyerConvOffset);
+def buyerConvYear     = DateYear(rawDate  = buyerConvRawDate);
+def buyerConvMonth    = DateMonth(rawDate = buyerConvRawDate);
+def buyerConvDay      = DateDay(rawDate   = buyerConvRawDate);
+
+def sellerConvRawDate = GetValue(GetYYYYMMDD(), sellerConvOffset);
+def sellerConvYear    = DateYear(rawDate  = sellerConvRawDate);
+def sellerConvMonth   = DateMonth(rawDate = sellerConvRawDate);
+def sellerConvDay     = DateDay(rawDate   = sellerConvRawDate);
+
+def buyerConvOpen    = GetValue(open, buyerConvOffset);
+def sellerConvOpen   = GetValue(open, sellerConvOffset);
+
+# ─── 6C. STRENGTH STATE AT CONVICTION TIME ───────────────────
+def buyerConvStrong  = if buyerConviction  then strongBuyers  else buyerConvStrong[1];
+def sellerConvStrong = if sellerConviction then strongSellers else sellerConvStrong[1];
+
+# ─── 7. ZIGZAG / MARKET PHASE ───────────────────────────────
+def priceH = high;
+def priceL = low;
+def ATR    = reference ATR(length = ATRlength);
+def reversalAmount = if (close * zigzagpercent / 100) > Max(zigzagamount < ATRreversalfactor * ATR, zigzagamount)
+                     then (close * zigzagpercent / 100)
+                     else if zigzagamount < ATRreversalfactor * ATR
+                     then ATRreversalfactor * ATR
+                     else zigzagamount;
+
+def zzBarNum   = BarNumber();
+def zzBarCount = HighestAll(If(IsNaN(close), 0, zzBarNum));
+
+rec zzState = {default init, undefined, uptrend, downtrend};
+rec zzMinMax;
+
+if (GetValue(zzState, 1) == GetValue(zzState.init, 0)) {
+    zzMinMax = close;
+    zzState  = zzState.undefined;
+} else if (GetValue(zzState, 1) == GetValue(zzState.undefined, 0)) {
+    if (close <= GetValue(zzMinMax, 1) - reversalAmount) {
+        zzState  = zzState.downtrend;
+        zzMinMax = priceL;
+    } else if (close >= GetValue(zzMinMax, 1) + reversalAmount) {
+        zzState  = zzState.uptrend;
+        zzMinMax = priceH;
+    } else {
+        zzState  = zzState.undefined;
+        zzMinMax = GetValue(zzMinMax, 1);
+    }
+} else if (GetValue(zzState, 1) == GetValue(zzState.uptrend, 0)) {
+    if (close <= GetValue(zzMinMax, 1) - reversalAmount) {
+        zzState  = zzState.downtrend;
+        zzMinMax = priceL;
+    } else {
+        zzState  = zzState.uptrend;
+        zzMinMax = Max(priceH, GetValue(zzMinMax, 1));
+    }
+} else {
+    if (close >= GetValue(zzMinMax, 1) + reversalAmount) {
+        zzState  = zzState.uptrend;
+        zzMinMax = priceH;
+    } else {
+        zzState  = zzState.downtrend;
+        zzMinMax = Min(priceL, GetValue(zzMinMax, 1));
+    }
+}
+
+def zzCalc    = GetValue(zzState, 0) != GetValue(zzState, 1) and zzBarNum >= 1;
+def zzFuture  = zzBarCount - zzBarNum;
+def zzTmpLast;
+
+if (zzCalc) {
+    if (zzFuture >= 1 and GetValue(zzState, 0) == GetValue(zzState, -1)) {
+        zzTmpLast = fold lastPeriodBarI = 2 to zzFuture + 1 with lastPeriodBarAcc = 1
+            while lastPeriodBarAcc > 0
+            do if (GetValue(zzState, 0) != GetValue(zzState, -lastPeriodBarI))
+                then -lastPeriodBarAcc
+                else lastPeriodBarAcc + 1;
+    } else {
+        zzTmpLast = 0;
+    }
+} else {
+    zzTmpLast = Double.NaN;
+}
+
+def zzLastBar = if (!IsNaN(zzTmpLast)) then -AbsValue(zzTmpLast) else -zzFuture;
+
+rec zzPriceLevel;
+rec zzPoints;
+
+if (zzState == zzState.uptrend and zzCalc) {
+    zzPriceLevel = fold barWithMaxI = zzLastBar to 1 with maxAcc = zzMinMax
+        do Max(maxAcc, GetValue(zzMinMax, barWithMaxI));
+    zzPoints = fold maxPtI = zzLastBar to 1 with maxPtAcc = Double.NaN
+        while IsNaN(maxPtAcc)
+        do if (GetValue(priceH, maxPtI) == zzPriceLevel)
+            then maxPtI else maxPtAcc;
+} else if (zzState == zzState.downtrend and zzCalc) {
+    zzPriceLevel = fold barWithMinI = zzLastBar to 1 with minAcc = zzMinMax
+        do Min(minAcc, GetValue(zzMinMax, barWithMinI));
+    zzPoints = fold minPtI = zzLastBar to 1 with minPtAcc = Double.NaN
+        while IsNaN(minPtAcc)
+        do if (GetValue(priceL, minPtI) == zzPriceLevel)
+            then minPtI else minPtAcc;
+} else if (!zzCalc and (zzState == zzState.uptrend or zzState == zzState.downtrend)) {
+    zzPriceLevel = GetValue(zzPriceLevel, 1);
+    zzPoints     = GetValue(zzPoints, 1) + 1;
+} else {
+    zzPoints     = 1;
+    zzPriceLevel = GetValue(close, zzPoints);
+}
+
+rec zzSave = if !IsNaN(if (zzBarNum == zzBarCount or zzBarNum == 1)
+                       then if zzState == zzState.uptrend then priceH else priceL
+                       else if (zzPoints == 0) then zzPriceLevel else Double.NaN)
+             then if (zzBarNum == zzBarCount or zzBarNum == 1)
+                  then if IsNaN(zzBarNum[-1]) and zzState == zzState.uptrend then priceH else priceL
+                  else zzPriceLevel
+             else GetValue(zzSave, 1);
+
+def zzChg  = (if zzBarNum == zzBarCount and zzPoints < 0 then priceH
+              else if zzBarNum == zzBarCount and zzPoints > 0 then priceL
+              else zzPriceLevel) - GetValue(zzSave, 1);
+def isUp   = zzChg >= 0;
+rec isConf = AbsValue(zzChg) >= reversalAmount or
+             (IsNaN(GetValue(if (zzBarNum == zzBarCount or zzBarNum == 1)
+                             then if zzState == zzState.uptrend then priceH else priceL
+                             else if (zzPoints == 0) then zzPriceLevel else Double.NaN, 1))
+              and GetValue(isConf, 1));
+
+# ─── 8. EMA TREND ────────────────────────────────────────────
+def ema20        = ExpAverage(close, 20);
+def ema50        = ExpAverage(close, 50);
+def is_uptrend   = ema20 > ema50 and close > ema20;
+def is_downtrend = ema20 < ema50 and close < ema20;
+
+# ─── 9. AGIG SIGNAL GRADER + CURRENT BIAS ───────────────────
+def biasPriceH = MovingAverage(AverageType.EXPONENTIAL, high, 5);
+def biasPriceL = MovingAverage(AverageType.EXPONENTIAL, low,  5);
+def EIL = ZigZagHighLow("price h" = biasPriceH, "price l" = biasPriceL, "percentage reversal" = .01, "absolute reversal" = .05, "atr length" = 5, "atr reversal" = atrReversal).lastL;
+def EIH = ZigZagHighLow("price h" = biasPriceH, "price l" = biasPriceL, "percentage reversal" = .01, "absolute reversal" = .05, "atr length" = 5, "atr reversal" = atrReversal).lastH;
+
+def lastLowBar      = if !IsNaN(EIL) then BarNumber() else lastLowBar[1];
+def lastHighBar     = if !IsNaN(EIH) then BarNumber() else lastHighBar[1];
+def isLastSignalLow = lastLowBar > lastHighBar;
+def signalBar       = if isLastSignalLow then lastLowBar else lastHighBar;
+def sigOffset       = BarNumber() - signalBar;
+
+def sigClose = GetValue(close,  sigOffset);
+def sigOpen  = GetValue(open,   sigOffset);
+def sigVol   = GetValue(volume, sigOffset);
+def prevVol  = GetValue(volume, sigOffset + 1);
+
+def sigRawDate = GetValue(GetYYYYMMDD(), sigOffset);
+def sigYear    = DateYear(rawDate  = sigRawDate);
+def sigMonth   = DateMonth(rawDate = sigRawDate);
+def sigDay     = DateDay(rawDate   = sigRawDate);
+
+def isStrongPrice = if isLastSignalLow then sigClose > sigOpen else sigClose < sigOpen;
+def isHighVol     = sigVol > prevVol;
+def qualityScore  = 1 + (if isStrongPrice then 1 else 0) + (if isHighVol then 1 else 0);
+
+def biasStrength  = Round(AbsValue(close - sigClose) / sigClose * 100, 2);
+def isBullishBias = isLastSignalLow  and close >= sigClose;
+def isBearishBias = !isLastSignalLow and close <= sigClose;
+def isNeutralBias = !isBullishBias and !isBearishBias;
+def biasLabel     = if isBullishBias then 1 else if isBearishBias then 2 else 3;
+
+# ─── 10. STAN WEINSTEIN CALCULATIONS ────────────────────────
+def MA30 = Average(close, ma30Period);
+def MA10 = Average(close, ma10Period);
+
+def ma30Slope = (MA30 - MA30[10]) / MA30[10];
+def maIsFlat  = AbsValue(ma30Slope) < flatnessPct;
+
+def high52        = Highest(high, highLookback);
+def low52         = Lowest(low,  lowLookback);
+def range52       = high52 - low52;
+def pricePosition = if range52 > 0 then (close - low52) / range52 * 100 else 0;
+def distFromHigh  = (high52 - close) / close * 100;
+
+def stockChange = close / close[rsPeriod];
+def indexChange = close(compSymbol) / close(compSymbol)[rsPeriod];
+def RS          = stockChange / indexChange - 1;
+def rsImproving = RS > RS[4] and RS > RS[8];
+
+def avgVol10       = Average(volume, volumePeriod);
+def avgVol4        = Average(volume, 4);
+def volumeBuilding = avgVol4 > avgVol10 * 1.1;
+
+def ma10AboveMA30  = MA10 > MA30;
+def maTurningUp    = MA30 > MA30[2] and MA30 > MA30[4];
+
+def nearMA30 = close > MA30 * 0.90 and close < MA30 * 1.15;
+def inStage1 = nearMA30 and maIsFlat;
+
+def score_ma30Curling = if maTurningUp    then 1 else 0;
+def score_ma10Cross   = if ma10AboveMA30  then 1 else 0;
+def score_rsPositive  = if RS > 0         then 1 else 0;
+def score_rsImproving = if rsImproving    then 1 else 0;
+def score_volBuilding = if volumeBuilding then 1 else 0;
+def score_nearHigh    = if distFromHigh < 10 then 1 else 0;
+
+def breakoutScore = WeinScore(
+    maTurningUp   = score_ma30Curling,
+    ma10AboveMA30 = score_ma10Cross,
+    rsPositive    = score_rsPositive,
+    rsImproving   = score_rsImproving,
+    volBuilding   = score_volBuilding,
+    nearHigh      = score_nearHigh);
+
+DefineGlobalColor("Score6",   Color.CYAN);
+DefineGlobalColor("Score5",   Color.GREEN);
+DefineGlobalColor("Score4",   Color.YELLOW);
+DefineGlobalColor("Score3",   Color.ORANGE);
+DefineGlobalColor("ScoreLow", Color.GRAY);
+DefineGlobalColor("Hit",      Color.GREEN);
+DefineGlobalColor("Miss",     Color.DARK_GRAY);
+DefineGlobalColor("NoBase",   Color.LIGHT_GRAY);
+DefineGlobalColor("Pre_Cyan",  CreateColor(50, 200, 255));
+DefineGlobalColor("LabelGreen", CreateColor(0, 165, 0));
+DefineGlobalColor("LabelRed",  CreateColor(225, 0, 0));
+DefineGlobalColor("Violet",    CreateColor(200, 125, 255));
+DefineGlobalColor("GrayGreen", CreateColor(155, 167, 76));
+DefineGlobalColor("LitePink",  CreateColor(220, 180, 180));
+DefineGlobalColor("neutral",   Color.LIGHT_GRAY);
+
+# ─── 11. FAIR VALUE GAP DETECTION ───────────────────────────
+def bullFVG0 = low[1] > high[3] and low[2] > high[3] and high[2] < low[1];
+def bullFVG1 = low[2] > high[4] and low[3] > high[4] and high[3] < low[2];
+def bullFVG2 = low[3] > high[5] and low[4] > high[5] and high[4] < low[3];
+def bullFVG3 = low[4] > high[6] and low[5] > high[6] and high[5] < low[4];
+def bullFVG4 = low[5] > high[7] and low[6] > high[7] and high[6] < low[5];
+
+def bearFVG0 = high[1] < low[3] and high[2] < low[3] and low[2] > high[1];
+def bearFVG1 = high[2] < low[4] and high[3] < low[4] and low[3] > high[2];
+def bearFVG2 = high[3] < low[5] and high[4] < low[5] and low[4] > high[3];
+def bearFVG3 = high[4] < low[6] and high[5] < low[6] and low[5] > high[4];
+def bearFVG4 = high[5] < low[7] and high[6] < low[7] and low[6] > high[5];
+
+def bullishFVG = bullFVG0 or bullFVG1 or bullFVG2 or bullFVG3 or bullFVG4;
+def bearishFVG = bearFVG0 or bearFVG1 or bearFVG2 or bearFVG3 or bearFVG4;
+
+def bullFVGTop    = FVGBullTop(f0 = bullFVG0, f1 = bullFVG1, f2 = bullFVG2, f3 = bullFVG3, f4 = bullFVG4);
+def bullFVGBottom = FVGBullBot(f0 = bullFVG0, f1 = bullFVG1, f2 = bullFVG2, f3 = bullFVG3, f4 = bullFVG4);
+def bearFVGTop    = FVGBearTop(f0 = bearFVG0, f1 = bearFVG1, f2 = bearFVG2, f3 = bearFVG3, f4 = bearFVG4);
+def bearFVGBottom = FVGBearBot(f0 = bearFVG0, f1 = bearFVG1, f2 = bearFVG2, f3 = bearFVG3, f4 = bearFVG4);
+
+def bullGapSize = bullFVGTop - bullFVGBottom;
+def bearGapSize = bearFVGTop - bearFVGBottom;
+def bullSizePct = GapSizePct(gapTop = bullFVGTop, gapBot = bullFVGBottom, refPrice = close);
+def bearSizePct = GapSizePct(gapTop = bearFVGTop, gapBot = bearFVGBottom, refPrice = close);
+
+def validBullFVG = bullishFVG and !IsNaN(bullFVGTop) and !IsNaN(bullFVGBottom) and bullSizePct >= 0.01;
+def validBearFVG = bearishFVG and !IsNaN(bearFVGTop) and !IsNaN(bearFVGBottom) and bearSizePct >= 0.01;
+
+def lastBullTop    = if validBullFVG then bullFVGTop    else lastBullTop[1];
+def lastBullBottom = if validBullFVG then bullFVGBottom else lastBullBottom[1];
+def lastBearTop    = if validBearFVG then bearFVGTop    else lastBearTop[1];
+def lastBearBottom = if validBearFVG then bearFVGBottom else lastBearBottom[1];
+
+# ─── 12. FVG ENTRY / EXIT SIGNALS ───────────────────────────
+def bullishEntry  = !IsNaN(lastBullTop) and !IsNaN(lastBullBottom) and low <= lastBullTop and high >= lastBullBottom;
+def bearishEntry  = !IsNaN(lastBearTop) and !IsNaN(lastBearBottom) and high >= lastBearBottom and low <= lastBearTop;
+def bullFVGFilled = !IsNaN(lastBullBottom) and close < lastBullBottom;
+def bearFVGFilled = !IsNaN(lastBearTop)    and close > lastBearTop;
+
+# ════════════════════════════════════════════════════════════
+#                        L A B E L S
+# ════════════════════════════════════════════════════════════
+
+# ── WEINSTEIN: STAGE 1 BASE STATUS ───────────────────────────
+#AddLabel(yes,
+#    if inStage1 then "STAGE 1 BASE" else "MOVING",
+#    if inStage1 then Color.WHITE else GlobalColor("NoBase"));
+
+# ── TREND ────────────────────────────────────────────────────
+#AddLabel(yes, "Trend: " + (if isBearishSwing then "BEARISH" else "BULLISH"),
+#    if isBearishSwing then Color.DOWNTICK else Color.UPTICK);
+
+# ── CURRENT BIAS ──────────────────────────────────────────────
+#AddLabel(yes,
+#    "Bias: " +
+#    (if isBullishBias then "BULLISH ▲ (Holding Above Signal)" else
+#     if isBearishBias then "BEARISH ▼ (Holding Below Signal)" else
+#                           "FADING  ↕ (Counter-Signal Move)") +
+#    " | Drift: " + biasStrength + "%",
+#    if isBullishBias then Color.GREEN  else
+#    if isBearishBias then Color.RED    else
+#                          Color.YELLOW);
+
+# ── VOLUME CONVICTION (with date) ────────────────────────────
+#AddLabel(buyerConviction,
+#    "VOL: BUYERS STEPPING IN" + (if strongBuyers then " (STRONG)" else " (WEAK)") +
+#    " | Date: " + buyerConvMonth + "/" + buyerConvDay + "/" + buyerConvYear,
+#    Color.GREEN);
+
+#AddLabel(sellerConviction,
+#    "VOL: SELLERS STEPPING IN" + (if strongSellers then " (STRONG)" else " (WEAK)") +
+#    " | Date: " + sellerConvMonth + "/" + sellerConvDay + "/" + sellerConvYear,
+#    Color.RED);
+
+# ── LAST CONVICTION DATE with STRONG/WEAK ────────────────────
+#AddLabel(yes,
+#    (if buyerConvBar >= sellerConvBar
+#        then "Last Buyers In: " + buyerConvMonth + "/" + buyerConvDay + "/" + buyerConvYear +
+#             " @ " + Round(buyerConvOpen, 2) +
+#             (if buyerConvStrong then " [STRONG]" else " [WEAK]")
+#        else "Last Sellers In: " + sellerConvMonth + "/" + sellerConvDay + "/" + sellerConvYear +
+#             " @ " + Round(sellerConvOpen, 2) +
+#             (if sellerConvStrong then " [STRONG]" else " [WEAK]")),
+#    if buyerConvBar >= sellerConvBar then Color.GREEN else Color.RED);
+
+# ── 50 DAY EMA ────────────────────────────────────────────────
+#AddLabel(yes,
+#    "EMA50: " + Round(ema50, 2) +
+#    " | Price " + (if close > ema50 then "ABOVE ▲" else "BELOW ▼") +
+#    " | Gap: " + Round(AbsValue(close - ema50) / ema50 * 100, 2) + "%",
+#    if close > ema50 then Color.GREEN else Color.RED);
+
+# ── MARKET PHASE ─────────────────────────────────────────────
+#AddLabel(yes,
+#    if !isConf and isUp       then "📈 ACCUMULATION"
+#    else if isConf and isUp   then "🚀 ADVANCEMENT"
+#    else if !isConf and !isUp then "📉 DISTRIBUTION"
+#    else if isConf and !isUp  then "⬇️ DECLINE"
+#    else "NEUTRAL",
+#    if !isConf and isUp       then Color.DARK_GREEN
+#    else if isConf and isUp   then Color.LIME
+#    else if !isConf and !isUp then Color.DARK_RED
+#    else if isConf and !isUp  then Color.RED
+#    else Color.GRAY);
+
+# ── SIGNAL DATE + QUALITY GRADE ───────────────────────────────
+#AddLabel(yes,
+#    "Signal Date: " + sigMonth + "/" + sigDay + "/" + sigYear +
+#    " | Type: " + (if isLastSignalLow then "BUY (Low)" else "SELL (High)") +
+#    " | Quality: " + qualityScore + "/3",
+#    if qualityScore == 3 then Color.GREEN
+#    else if qualityScore == 2 then Color.YELLOW
+#    else Color.ORANGE);
+
+# ── WEINSTEIN: BREAKOUT READINESS SCORE ──────────────────────
+#AddLabel(yes,
+#    "Score: " + breakoutScore + "/6  " +
+#        (if breakoutScore == 6 then "ALL SYSTEMS GO"
+#    else if breakoutScore == 5 then "BREAKOUT IMMINENT"
+#    else if breakoutScore == 4 then "WATCH CLOSELY"
+#    else if breakoutScore == 3 then "BASE BUILDING"
+#    else if breakoutScore == 2 then "EARLY STAGE"
+#    else                            "NOT READY"),
+#    if breakoutScore == 6 then GlobalColor("Score6")
+#    else if breakoutScore == 5 then GlobalColor("Score5")
+#    else if breakoutScore == 4 then GlobalColor("Score4")
+#    else if breakoutScore == 3 then GlobalColor("Score3")
+#    else GlobalColor("ScoreLow"));
+
+# ── WEINSTEIN: INDIVIDUAL CONDITIONS ─────────────────────────
+#AddLabel(yes,
+#    (if score_ma30Curling then "✓" else "✗") + " MA30 Curling",
+#    if score_ma30Curling then GlobalColor("Hit") else GlobalColor("Miss"));
+
+#AddLabel(yes,
+#    (if score_ma10Cross then "✓" else "✗") + " MA10 > MA30",
+#    if score_ma10Cross then GlobalColor("Hit") else GlobalColor("Miss"));
+
+#AddLabel(yes,
+#    (if score_rsPositive then "✓" else "✗") + " RS > 0",
+#    if score_rsPositive then GlobalColor("Hit") else GlobalColor("Miss"));
+
+#AddLabel(yes,
+#    (if score_rsImproving then "✓" else "✗") + " RS Accel",
+#    if score_rsImproving then GlobalColor("Hit") else GlobalColor("Miss"));
+
+#AddLabel(yes,
+#    (if score_volBuilding then "✓" else "✗") + " Vol Expand",
+#    if score_volBuilding then GlobalColor("Hit") else GlobalColor("Miss"));
+
+#AddLabel(yes,
+#    (if score_nearHigh then "✓" else "✗") + " Near 52wk Hi (" + Round(distFromHigh, 1) + "%)",
+#    if score_nearHigh then GlobalColor("Hit") else GlobalColor("Miss"));
+
+# ── WEINSTEIN: 52-WEEK POSITION ──────────────────────────────
+#AddLabel(yes,
+#    "52wk Pos: " + Round(pricePosition, 0) + "%",
+#    if pricePosition >= 75 then Color.GREEN
+#    else if pricePosition >= 50 then Color.YELLOW
+#    else Color.GRAY);
+
+# ── FVG STATUS ────────────────────────────────────────────────
+#AddLabel(yes, "FVG: " + (if validBullFVG or validBearFVG then "YES" else "NO"),
+#    if validBullFVG or validBearFVG then Color.GREEN else Color.RED);
+
+#AddLabel(validBullFVG,
+#    "📈 BULL FVG | Size: " + Round(bullGapSize, 2) + " pts | " + Round(bullSizePct, 2) + "%",
+#    Color.LIME);
+
+#AddLabel(validBearFVG,
+#    "📉 BEAR FVG | Size: " + Round(bearGapSize, 2) + " pts | " + Round(bearSizePct, 2) + "%",
+#    Color.PINK);
+
+# ── FIB STATES ────────────────────────────────────────────────
+#AddLabel(isBearRetrace and !hitLowRecently,
+#    "STATE: Bearish Retrace | T1 (Low): " + bearT1,
+#    Color.YELLOW);
+
+#AddLabel(isBearRetrace and hitLowRecently,
+#    "WATCH LOW: " + (if highVolume then "FLUSH LIKELY (Sell)" else "BOUNCE POSSIBLE (Cover)"),
+#    if highVolume then Color.RED else Color.ORANGE);
+
+#AddLabel(isBearExt,
+#    "STATE: Extension | T2: " + bearT2 + " | T3: " + bearT3,
+#    Color.PLUM);
+
+# ── FVG ENTRY / EXIT ──────────────────────────────────────────
+#AddLabel(bullishEntry,
+#    "🟢 BULL ENTRY | " + Round(close, 2) + " | Target: " + Round(lastBullTop, 2),
+#    Color.GREEN);
+
+#AddLabel(bearishEntry,
+#    "🔴 BEAR ENTRY | " + Round(close, 2) + " | Target: " + Round(lastBearBottom, 2),
+#    Color.RED);
+
+#AddLabel(bullFVGFilled,
+#    "❌ BULL EXIT | FVG Filled @ " + Round(close, 2),
+#    Color.ORANGE);
+
+#AddLabel(bearFVGFilled,
+#    "❌ BEAR EXIT | FVG Filled @ " + Round(close, 2),
+#    Color.ORANGE);
+
+# ── PLAN: IF ALREADY IN TRADE ─────────────────────────────────
+#AddLabel(yes,
+#    "📋 IN TRADE: " +
+#    (if isBullishSwing and buyerConviction and isConf and isUp and isBullishBias and !inStage1
+#        then "HOLD STRONG — All signals aligned, raise stop under last low"
+#    else if isBullishSwing and !buyerConviction and !isConf and isUp and isBullishBias and inStage1
+#        then "HOLD BUT WATCH — Buildup intact, no buyer vol, tighten stop"
+#    else if (isBullishSwing and isBearishBias) or (isBearishSwing and isBullishBias)
+#        then "TIGHTEN STOP — Trend/Bias conflict, protect gains now"
+#    else if isBearishSwing and sellerConviction and isConf and !isUp and isBearishBias
+#        then "EXIT NOW — Sellers confirmed, bias broke down, do not wait"
+#    else if isBearishBias and sellerConviction
+#        then "PREPARE TO EXIT — Sellers in, one more red bar = get out"
+#    else "MONITOR — No clear exit signal, watch next bar"),
+#    if isBullishSwing and buyerConviction and isConf and isUp and isBullishBias and !inStage1
+#        then Color.CYAN
+#    else if (isBullishSwing and isBearishBias) or (isBearishSwing and isBullishBias)
+#        then Color.ORANGE
+#    else if isBearishSwing and sellerConviction and isConf and !isUp and isBearishBias
+#        then Color.RED
+#    else if isBearishBias and sellerConviction
+#        then Color.PINK
+#    else Color.YELLOW);
+
+# ─── 7B. PHASE CHANGE TRACKING ────────────────────────────────
+def phaseID = if !isConf and isUp then 1
+              else if isConf and isUp then 2
+              else if !isConf and !isUp then 3
+              else if isConf and !isUp then 4
+              else 0;
+
+def phaseChangeBar = if phaseID != phaseID[1] then BarNumber() else phaseChangeBar[1];
+def phaseOffset    = BarNumber() - phaseChangeBar;
+
+def phaseRawDate = GetValue(GetYYYYMMDD(), phaseOffset);
+def phaseYear    = DateYear(rawDate  = phaseRawDate);
+def phaseMonth   = DateMonth(rawDate = phaseRawDate);
+def phaseDay     = DateDay(rawDate   = phaseRawDate);
+
+# ── LAST CONVICTION BUBBLE ONLY ───────────────────────────────
+#AddChartBubble(buyerConvBar >= sellerConvBar and BarNumber() == buyerConvBar, low,
+#    (if buyerConvStrong then "STRONG BUYERS" else "WEAK BUYERS") +
+#    "\n" + buyerConvMonth + "/" + buyerConvDay + "/" + buyerConvYear +
+#    "\n@ " + Round(open, 2),
+#    Color.GREEN, no);
+
+#AddChartBubble(sellerConvBar > buyerConvBar and BarNumber() == sellerConvBar, high,
+#    (if sellerConvStrong then "STRONG SELLERS" else "WEAK SELLERS") +
+#    "\n" + sellerConvMonth + "/" + sellerConvDay + "/" + sellerConvYear +
+#    "\n@ " + Round(open, 2),
+#    Color.RED, yes);
+
+# ════════════════════════════════════════════════════════════
+#           WYCKOFF SPRING + UPTHRUST + TREND LINE
+#           (Appended — no existing logic modified)
+# ════════════════════════════════════════════════════════════
+
+# ─── WYCKOFF INPUTS ──────────────────────────────────────────
+input wy_volMultiplier       = 1.5;
+input wy_maxPatternAge       = 100;
+input wy_showPositionMgmt    = no;
+input wy_showEntryGuidance   = yes;
+input wy_showWarnings        = yes;
+
+# ─── TREND LINE (150-period MA) ──────────────────────────────
+def wy_movingAvg  = Average(close, 150);
+def wy_trendSlope = (wy_movingAvg - wy_movingAvg[20]) / wy_movingAvg[20];
+def wy_trendIsUp  = wy_trendSlope >  0.02;
+def wy_trendIsDown= wy_trendSlope < -0.02;
+
+plot WyTrendLine = wy_movingAvg;
+WyTrendLine.SetDefaultColor(Color.MAGENTA);
+WyTrendLine.SetLineWeight(2);
+
+# ─── BREAKOUT / BREAKDOWN ────────────────────────────────────
+def wy_longBreakout  = close > Highest(high[1], 20) * 0.98 and volume > Average(volume, 50) * wy_volMultiplier;
+def wy_shortBreakdown= close < Lowest(low[1],  20) * 1.02  and volume > Average(volume, 50) * wy_volMultiplier;
+
+# ─── SPRING DETECTION ────────────────────────────────────────
+def wy_supportPrice   = Lowest(low, 20);
+def wy_springDetected = low < wy_supportPrice[1] * 1.01 and close > open and volume > Average(volume, 50);
+
+def wy_springRawDate = GetYYYYMMDD();
+def wy_springYear    = if wy_springDetected then DateYear(rawDate  = wy_springRawDate) else wy_springYear[1];
+def wy_springMonth   = if wy_springDetected then DateMonth(rawDate = wy_springRawDate) else wy_springMonth[1];
+def wy_springDay     = if wy_springDetected then DateDay(rawDate   = wy_springRawDate) else wy_springDay[1];
+def wy_springBar   = if wy_springDetected then BarNumber()                                                             else wy_springBar[1];
+def wy_springClose = if wy_springDetected then close                                                                   else wy_springClose[1];
+def wy_springLow   = if wy_springDetected then low                                                                     else wy_springLow[1];
+
+def wy_barsSinceSpring = BarNumber() - wy_springBar;
+def wy_springExpired   = wy_barsSinceSpring > wy_maxPatternAge;
+def wy_rawHasSpring    = if wy_springDetected then yes else if wy_springExpired then no else if wy_rawHasSpring[1] then yes else no;
+
+# ─── UPTHRUST DETECTION ──────────────────────────────────────
+def wy_resistanceLevel  = Highest(high, 20);
+def wy_upthrustDetected = high > wy_resistanceLevel[1] * 0.99 and close < open and volume > Average(volume, 50);
+
+def wy_upthrustRawDate = GetYYYYMMDD();
+def wy_upthrustYear    = if wy_upthrustDetected then DateYear(rawDate  = wy_upthrustRawDate) else wy_upthrustYear[1];
+def wy_upthrustMonth   = if wy_upthrustDetected then DateMonth(rawDate = wy_upthrustRawDate) else wy_upthrustMonth[1];
+def wy_upthrustDay     = if wy_upthrustDetected then DateDay(rawDate   = wy_upthrustRawDate) else wy_upthrustDay[1];
+def wy_upthrustBar   = if wy_upthrustDetected then BarNumber()                                                                  else wy_upthrustBar[1];
+def wy_upthrustClose = if wy_upthrustDetected then close                                                                        else wy_upthrustClose[1];
+def wy_upthrustHigh  = if wy_upthrustDetected then high                                                                         else wy_upthrustHigh[1];
+
+def wy_barsSinceUpthrust = BarNumber() - wy_upthrustBar;
+def wy_upthrustExpired   = wy_barsSinceUpthrust > wy_maxPatternAge;
+def wy_rawHasUpthrust    = if wy_upthrustDetected then yes else if wy_upthrustExpired then no else if wy_rawHasUpthrust[1] then yes else no;
+
+# ─── CONFLICT RESOLUTION ─────────────────────────────────────
+def wy_hasSpring    = if wy_upthrustDetected then no else if wy_springDetected then yes else wy_rawHasSpring;
+def wy_hasUpthrust  = if wy_springDetected then no else if wy_upthrustDetected then yes else wy_rawHasUpthrust;
+def wy_conflict     = wy_hasSpring and wy_hasUpthrust;
+
+# ─── REVERSAL & CONFIRMATION ─────────────────────────────────
+def wy_reversalOccurred = wy_hasSpring and !wy_reversalOccurred[1] and close > wy_springLow * 1.02 and close > open;
+def wy_reversalBar      = if wy_reversalOccurred then BarNumber() else wy_reversalBar[1];
+def wy_reversalClose    = if wy_reversalOccurred then close else wy_reversalClose[1];
+def wy_hasReversal      = if wy_reversalOccurred then yes else if wy_hasReversal[1] and !wy_upthrustDetected then yes else no;
+
+def wy_bearRevOccurred  = wy_hasUpthrust and !wy_bearRevOccurred[1] and close < wy_upthrustHigh * 0.98 and close < open;
+def wy_bearRevBar       = if wy_bearRevOccurred then BarNumber() else wy_bearRevBar[1];
+def wy_bearRevClose     = if wy_bearRevOccurred then close else wy_bearRevClose[1];
+def wy_hasBearRev       = if wy_bearRevOccurred then yes else if wy_hasBearRev[1] and !wy_springDetected then yes else no;
+
+# ─── LPS ─────────────────────────────────────────────────────
+def wy_topOfRange = Highest(high, 10);
+def wy_lpsOccurred= low <= (wy_supportPrice + (wy_topOfRange - wy_supportPrice) * 0.5) and volume < Average(volume, 20) * 0.8 and close > low;
+def wy_hasLPS     = if wy_lpsOccurred then yes else if wy_hasLPS[1] and !wy_longBreakout then yes else no;
+
+# ─── ACTIVE STATES ───────────────────────────────────────────
+def wy_springActive   = if wy_springDetected   then yes else if wy_springActive[1]   and !wy_longBreakout  then yes else no;
+def wy_upthrustActive = if wy_upthrustDetected then yes else if wy_upthrustActive[1] and !wy_shortBreakdown then yes else no;
+
+# ─── BUY / SELL SIGNALS ──────────────────────────────────────
+plot WyBuySignal  = wy_hasSpring   and wy_longBreakout  and wy_trendIsUp   and (wy_springActive   or wy_hasReversal);
+plot WySellSignal = wy_hasUpthrust and wy_shortBreakdown and wy_trendIsDown and (wy_upthrustActive or wy_hasBearRev);
+
+WyBuySignal.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_UP);
+WyBuySignal.SetDefaultColor(Color.GREEN);
+WyBuySignal.SetLineWeight(5);
+
+WySellSignal.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_DOWN);
+WySellSignal.SetDefaultColor(Color.RED);
+WySellSignal.SetLineWeight(5);
+
+# ─── KEY LEVELS ──────────────────────────────────────────────
+def wy_bullInvalidationLevel  = if wy_hasUpthrust then wy_upthrustHigh   else Double.NaN;
+def wy_bearConfirmationLevel  = if wy_hasBearRev  then Round(wy_bearRevClose * 0.97, 2) else Double.NaN;
+
+plot WyKeyResistance = wy_bullInvalidationLevel;
+WyKeyResistance.SetDefaultColor(Color.LIME);
+WyKeyResistance.SetLineWeight(3);
+WyKeyResistance.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+
+plot WyKeySupport = wy_bearConfirmationLevel;
+WyKeySupport.SetDefaultColor(Color.DARK_RED);
+WyKeySupport.SetLineWeight(3);
+WyKeySupport.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+
+# ─── ZONES & ARROWS ──────────────────────────────────────────
+def wy_isAboveUpthrust        = close > wy_upthrustHigh;
+def wy_isBelowBearConfirm     = close < wy_bearConfirmationLevel;
+def wy_isChopZone             = wy_hasBearRev and !wy_isAboveUpthrust and !wy_isBelowBearConfirm;
+
+plot WyBullishInvalidation = wy_isAboveUpthrust  and !wy_isAboveUpthrust[1]  and wy_hasUpthrust;
+plot WyBearishConfirmation = wy_isBelowBearConfirm and !wy_isBelowBearConfirm[1] and wy_hasBearRev;
+
+WyBullishInvalidation.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_UP);
+WyBullishInvalidation.SetDefaultColor(Color.LIME);
+WyBullishInvalidation.SetLineWeight(5);
+
+WyBearishConfirmation.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_DOWN);
+WyBearishConfirmation.SetDefaultColor(Color.DARK_RED);
+WyBearishConfirmation.SetLineWeight(5);
+
+# ─── WARNING SYSTEM ──────────────────────────────────────────
+def wy_stopProxWarn      = wy_showPositionMgmt and (wy_hasSpring or wy_hasReversal) and close > wy_bearConfirmationLevel and close < wy_bearConfirmationLevel * 1.02;
+def wy_targetProxWarn    = wy_showPositionMgmt and (wy_hasSpring or wy_hasReversal) and close < wy_upthrustHigh and close > wy_upthrustHigh * 0.98;
+def wy_lowVolSpring      = wy_springDetected and volume < Average(volume, 50) * 1.2;
+def wy_trendMismatchBull = WyBuySignal  and !wy_trendIsUp;
+def wy_trendMismatchBear = WySellSignal and !wy_trendIsDown;
+def wy_extendedFromSpring= wy_hasReversal and close > wy_reversalClose * 1.15;
+def wy_weakBullInval     = WyBullishInvalidation and volume < Average(volume, 20);
+def wy_doubleUpthrust    = wy_upthrustDetected and wy_upthrustDetected[5];
+
+def wy_warningCode = if wy_conflict            then 1
+                else if wy_doubleUpthrust       then 2
+                else if wy_stopProxWarn         then 3
+                else if wy_weakBullInval        then 4
+                else if wy_lowVolSpring         then 5
+                else if wy_trendMismatchBull or wy_trendMismatchBear then 6
+                else if wy_extendedFromSpring   then 7
+                else if wy_targetProxWarn       then 8
+                else 0;
+
+#AddLabel(wy_showWarnings and wy_warningCode > 0,
+#    if wy_warningCode == 1 then "⚠️ WY CONFLICT: Check Pattern Ages"
+#    else if wy_warningCode == 2 then "⚠️ WY DOUBLE UPTHRUST"
+#    else if wy_warningCode == 3 then "⚠️ WY STOP PROXIMITY"
+#    else if wy_warningCode == 4 then "⚠️ WY WEAK INVALIDATION"
+#    else if wy_warningCode == 5 then "⚠️ WY WEAK SPRING"
+#    else if wy_warningCode == 6 then "⚠️ WY TREND MISMATCH"
+#    else if wy_warningCode == 7 then "⚠️ WY EXTENDED"
+#    else if wy_warningCode == 8 then "⚠️ WY TARGET PROXIMITY"
+#    else "",
+#    if wy_warningCode == 1 then Color.YELLOW
+#    else if wy_warningCode <= 3 then Color.RED
+#    else if wy_warningCode <= 5 then Color.ORANGE
+#    else Color.GRAY);
+
+# ─── LATEST SIGNAL LABEL ─────────────────────────────────────
+def wy_isLatestSpring   = wy_springBar   > wy_upthrustBar and wy_hasSpring;
+def wy_isLatestUpthrust = wy_upthrustBar > wy_springBar   and wy_hasUpthrust;
+
+#AddLabel(yes,
+#    if wy_conflict         then ">>> WY CONFLICT: Spring " + wy_springMonth + "/" + wy_springDay + " vs Upthrust " + wy_upthrustMonth + "/" + wy_upthrustDay + " <<<"
+#    else if wy_isLatestSpring   then ">>> WY SPRING ("   + wy_springMonth   + "/" + wy_springDay   + ") <<<"
+#    else if wy_isLatestUpthrust then ">>> WY UPTHRUST (" + wy_upthrustMonth + "/" + wy_upthrustDay + ") <<<"
+#    else ">>> WY NO SIGNAL <<<",
+#    if wy_conflict then Color.RED
+#    else if wy_isLatestSpring   then Color.GREEN
+#    else if wy_isLatestUpthrust then Color.RED
+#    else Color.GRAY);
+
+# ─── ENTRY GUIDANCE LABEL ────────────────────────────────────
+#AddLabel(wy_showEntryGuidance and !wy_showPositionMgmt,
+#    if wy_isAboveUpthrust    then "WY LONG: Above $"  + Round(wy_upthrustHigh, 2)         + " | Stop $" + Round(wy_bearConfirmationLevel, 2)
+#    else if wy_isBelowBearConfirm then "WY SHORT: Below $" + Round(wy_bearConfirmationLevel, 2)
+#    else if wy_isChopZone    then "WY WAIT: $" + Round(wy_bearConfirmationLevel, 2) + " - $" + Round(wy_upthrustHigh, 2)
+#    else "WY NO SETUP",
+#    if wy_isAboveUpthrust then Color.GREEN
+#    else if wy_isBelowBearConfirm then Color.RED
+#    else Color.GRAY);
+
+# ─── STATUS LABELS ───────────────────────────────────────────
+#AddLabel(yes,
+#    if wy_hasSpring then "SPRING: " + wy_springMonth + "/" + wy_springDay + " @ $" + wy_springClose + " (" + wy_barsSinceSpring + " bars)" + (if wy_hasReversal then " ✓REV" else "") else "",
+#    if wy_hasReversal then Color.GREEN else Color.YELLOW);
+
+#AddLabel(yes,
+#    if wy_hasUpthrust then "UPTHRUST: " + wy_upthrustMonth + "/" + wy_upthrustDay + " @ $" + wy_upthrustClose + " (" + wy_barsSinceUpthrust + " bars)" + (if wy_hasBearRev then " ✓BR" else "") else "",
+#    if wy_hasBearRev then Color.RED else Color.ORANGE);
+
+# ─── PHASE LABEL ─────────────────────────────────────────────
+def wy_phaseCode = if WyBuySignal            then 1
+              else if WySellSignal           then 2
+              else if wy_isAboveUpthrust     then 7
+              else if wy_isBelowBearConfirm  then 8
+              else if wy_hasBearRev          then 4
+              else if wy_hasReversal         then 3
+              else if wy_upthrustActive      then 4
+              else if wy_springActive        then 3
+              else 0;
+
+#AddLabel(yes,
+#    if wy_phaseCode == 7 then "WY PHASE: BULL INVALIDATION (>$" + Round(wy_upthrustHigh, 2) + ")"
+#    else if wy_phaseCode == 8 then "WY PHASE: BEAR CONFIRMATION (<$" + Round(wy_bearConfirmationLevel, 2) + ")"
+#    else if wy_phaseCode == 1 then "WY PHASE: MARKUP"
+#    else if wy_phaseCode == 2 then "WY PHASE: MARKDOWN"
+#    else if wy_phaseCode == 3 then "WY PHASE: POST-SPRING"
+#    else if wy_phaseCode == 4 then "WY PHASE: POST-UPTHRUST"
+#    else "WY PHASE: NEUTRAL",
+#    if wy_phaseCode == 7 then Color.LIME
+#    else if wy_phaseCode == 8 then Color.DARK_RED
+#    else if wy_phaseCode == 1 then Color.LIGHT_GREEN
+#    else if wy_phaseCode == 2 then Color.PINK
+#    else if wy_phaseCode == 3 then Color.GREEN
+#    else if wy_phaseCode == 4 then Color.RED
+#    else Color.GRAY);
+
+# ─── SUPPORT / RESISTANCE ZONES ──────────────────────────────
+plot WySupportZone = if wy_hasSpring   then wy_supportPrice   else Double.NaN;
+WySupportZone.SetDefaultColor(Color.LIGHT_GREEN);
+WySupportZone.SetLineWeight(2);
+WySupportZone.SetStyle(Curve.SHORT_DASH);
+
+plot WyResistanceZone = if wy_hasUpthrust then wy_resistanceLevel else Double.NaN;
+WyResistanceZone.SetDefaultColor(Color.LIGHT_RED);
+WyResistanceZone.SetLineWeight(2);
+WyResistanceZone.SetStyle(Curve.SHORT_DASH);
+
+# ─── FUNDAMENTAL DATA (Mobius / MerryDay) ───────────────────
+def fp = FiscalPeriod.YEAR;
+def fd_EPS = if IsNaN(EarningsPerShareTTM()) then fd_EPS[1] else EarningsPerShareTTM();
+def fd_PE  = if fd_EPS != 0 then Round(close / fd_EPS, 1) else 0;
+
+def fd_FreeCash = if IsNaN(FreeCashFlowPerShare()) then fd_FreeCash[1] else FreeCashFlowPerShare();
+def score_EarnCash = if fd_PE < 0 and fd_FreeCash < 0 and fd_EPS < 0 then 0 else 5;
+
+def fd_GrossMargin = if IsNaN(GrossProfitMargin()) then fd_GrossMargin[1] else GrossProfitMargin();
+def fd_OpMargin = if IsNaN(OperatingProfitMargin()) then fd_OpMargin[1] else OperatingProfitMargin();
+def fd_NetMargin = if IsNaN(NetProfitMargin()) then fd_NetMargin[1] else NetProfitMargin();
+def score_Profits = if fd_GrossMargin > 0 or fd_NetMargin > 0 or fd_OpMargin > 0 then 3 else 0;
+
+def fd_CurRatio = if IsNaN(CurrentRatio()) then fd_CurRatio[1] else CurrentRatio();
+def fd_QuickRatio = if IsNaN(QuickRatio()) then fd_QuickRatio[1] else QuickRatio();
+def score_Ratios = if fd_QuickRatio >= 1 or fd_CurRatio >= 1 then 3 else 0;
+
+def fd_ROA = if IsNaN(ReturnOnAssets()) then fd_ROA[1] else ReturnOnAssets();
+def fd_ROE = if IsNaN(ReturnOnEquity()) then fd_ROE[1] else ReturnOnEquity();
+def score_Returns = if fd_ROE >= 10 or fd_ROA >= 10 then 1 else 0;
+
+def fd_SPS = if IsNaN(SalesPerShare()) then fd_SPS[1] else SalesPerShare();
+def score_SPS = if fd_SPS > 0 then 1 else 0;
+
+def fd_FinLev = if IsNaN(FinancialLeverage()) then fd_FinLev[1] else FinancialLeverage();
+def score_FinLev = if fd_FinLev < 2 then 1 else 0;
+
+def fd_BookVal = if IsNaN(BookValuePerShare()) then fd_BookVal[1] else BookValuePerShare();
+
+def fd_LTDebt = if IsNaN(LongTermDebtToCapital()) then fd_LTDebt[1] else LongTermDebtToCapital();
+def score_LTDebt = if fd_LTDebt < 5 then 1 else 0;
+
+def fd_score = score_Returns + score_EarnCash + score_Ratios + score_Profits
+             + score_FinLev + score_SPS + score_LTDebt;
+
+# ─── FAIR VALUE (P/E + Graham from live data) ────────────────
+def fv_peBased   = if fd_EPS > 0 then fd_EPS * fairPEMultiple else Double.NaN;
+def fv_graham    = if fd_EPS > 0 and fd_BookVal > 0
+                   then Sqrt(22.5 * fd_EPS * fd_BookVal)
+                   else Double.NaN;
+def fv_pePct     = if fv_peBased > 0 then (close - fv_peBased) / fv_peBased * 100 else Double.NaN;
+def fv_grahamPct = if fv_graham > 0  then (close - fv_graham)  / fv_graham  * 100 else Double.NaN;
+
+# ─── COMBINED VALUATION (avg of P/E FV + Graham) + Score ─────
+def fv_avg = if !IsNaN(fv_peBased) and !IsNaN(fv_graham)
+             then (fv_peBased + fv_graham) / 2
+             else if !IsNaN(fv_peBased) then fv_peBased
+             else if !IsNaN(fv_graham)  then fv_graham
+             else Double.NaN;
+def fv_avgPct = if fv_avg > 0 then (close - fv_avg) / fv_avg * 100 else Double.NaN;
+
+# One label: Verdict | Fair Value $ | Price vs FV % | Fund Score
+#AddLabel(yes,
+#    if IsNaN(fv_avg)
+##        then "No EPS Data  |  Fund " + fd_score + "/15"
+#    else if fv_avgPct <= -20 and fd_score >= 10
+#        then "DEEP VALUE  |  FV $" + Round(fv_avg, 2) + "  |  UV " + Round##(AbsValue(fv_avgPct), 0) + "%  |  Fund " + fd_score + "/15"
+#    else if fv_avgPct <= 0 and fd_score >= 8
+#        then "UNDERVALUED  |  FV $" + Round(fv_avg, 2) + "  |  UV " + Round#(AbsValue(fv_avgPct), 0) + "%  |  Fund " + fd_score + "/15"
+#    else if fv_avgPct <= 15
+#        then "FAIR VALUE  |  FV $" + Round(fv_avg, 2) + "  |  OV " + Round#(fv_avgPct, 0) + "%  |  Fund " + fd_score + "/15"
+#    else "OVERVALUED  |  FV $" + Round(fv_avg, 2) + "  |  OV " + Round#(fv_avgPct, 0) + "%  |  Fund " + fd_score + "/15",
+#    if IsNaN(fv_avg) then Color.GRAY
+#    else if fv_avgPct <= -20 and fd_score >= 10 then Color.CYAN
+#    else if fv_avgPct <= 0 and fd_score >= 8    then Color.GREEN
+#    else if fv_avgPct <= 15                     then Color.YELLOW
+#    else Color.RED);
+
+# ─── CLOUDS ──────────────────────────────────────────────────
+def wy_highAcc     = if wy_hasSpring and !wy_springActive   then high else Double.NaN;
+def wy_lowAcc      = if wy_hasSpring and !wy_springActive   then low  else Double.NaN;
+AddCloud(wy_highAcc, wy_lowAcc, CreateColor(0, 40, 0), CreateColor(0, 40, 0));
+
+def wy_highSpring  = if wy_springActive   then high else Double.NaN;
+def wy_lowSpring   = if wy_springActive   then low  else Double.NaN;
+AddCloud(wy_highSpring, wy_lowSpring, CreateColor(0, 80, 0), CreateColor(0, 80, 0));
+
+def wy_highUpthrust= if wy_upthrustActive then high else Double.NaN;
+def wy_lowUpthrust = if wy_upthrustActive then low  else Double.NaN;
+AddCloud(wy_highUpthrust, wy_lowUpthrust, CreateColor(80, 0, 0), CreateColor(80, 0, 0));
+
+def wy_highChop    = if wy_isChopZone     then high else Double.NaN;
+def wy_lowChop     = if wy_isChopZone     then low  else Double.NaN;
+AddCloud(wy_highChop, wy_lowChop, Color.DARK_GRAY, Color.DARK_GRAY);
+
+# ─── VOLUME BIAS (Schwab Volume Signal Analyzer) ────────────
+def vb_avgVol         = Average(volume, volAvgLength);
+def vb_volRatio       = if vb_avgVol > 0 then volume / vb_avgVol else 0;
+def vb_highVol        = vb_volRatio >= volThreshold;
+def vb_priceMA        = Average(close, volPriceAvgLen);
+def vb_uptrend        = close > vb_priceMA and close > close[1];
+def vb_downtrend      = close < vb_priceMA and close < close[1];
+def vb_recentAvgVol   = Average(volume, 10);
+def vb_olderAvgVol    = Average(volume[10], 10);
+def vb_volIncreasing  = vb_recentAvgVol > vb_olderAvgVol;
+def vb_volDecreasing  = vb_recentAvgVol < vb_olderAvgVol;
+def vb_highestHigh    = Highest(high[1], 20);
+def vb_lowestLow      = Lowest(low[1],  20);
+def vb_upsideBreak    = close > vb_highestHigh;
+def vb_downsideBreak  = close < vb_lowestLow;
+def vb_bullBreakout   = vb_upsideBreak   and vb_highVol;
+def vb_bullTrend      = vb_uptrend       and vb_volIncreasing;
+def vb_weakBull       = vb_uptrend       and vb_volDecreasing;
+def vb_bearBreakout   = vb_downsideBreak and vb_highVol;
+def vb_bearTrend      = vb_downtrend     and vb_volIncreasing;
+def vb_weakBear       = vb_downtrend     and vb_volDecreasing;
+def vb_score =
+    if vb_bullBreakout then 3
+    else if vb_bullTrend then 2
+    else if vb_weakBull then 1
+    else if vb_bearBreakout then -3
+    else if vb_bearTrend then -2
+    else if vb_weakBear then -1
+    else 0;
+
+# ── CONSOLIDATED TRADE ACTION LABEL ──────────────────────────
+def wyBuyActive  = if !IsNaN(WyBuySignal)  and WyBuySignal  then yes else no;
+def wySellActive = if !IsNaN(WySellSignal) and WySellSignal then yes else no;
+
+# Target-reached flip alerts (use high/low so a wick touch triggers it)
+def shortTargetHit = (isBearishBias or is_downtrend) and low <= LL;
+def longTargetHit  = (isBullishBias or is_uptrend)  and high >= HH;
+
+# ── TARGET NA DETECTION ──────────────────────────────────────
+# ENTER LONG target NA: lastBullTop is NaN, zero, or target <= current price
+def enterLongTargetNA = IsNaN(lastBullTop) or lastBullTop <= 0 or lastBullTop <= close;
+# ENTER SHORT target NA: lastBearBottom is NaN, zero, or target >= current price
+def enterShortTargetNA = IsNaN(lastBearBottom) or lastBearBottom <= 0 or lastBearBottom >= close;
+# HOLD LONG target NA: HH is NaN or at/below price (already there)
+def holdLongTargetNA = IsNaN(HH) or HH <= close;
+# HOLD SHORT target NA: LL is NaN or at/above price (already there)
+def holdShortTargetNA = IsNaN(LL) or LL >= close;
+# Wyckoff LONG target NA
+def wyLongTargetNA = wyBuyActive and (IsNaN(wy_upthrustHigh) or wy_upthrustHigh <= 0 or wy_upthrustHigh <= close);
+# Wyckoff SHORT target NA
+def wyShortTargetNA = wySellActive and (IsNaN(wy_supportPrice) or wy_supportPrice <= 0 or wy_supportPrice >= close);
+
+# ── PRICE CONTRADICTION DETECTION ────────────────────────────
+# For LONG: Stop must be BELOW entry, Target must be ABOVE entry
+# For SHORT: Stop must be ABOVE entry, Target must be BELOW entry
+
+# ENTER LONG contradiction check
+def enterLongStop = lastBullBottom - (lastBullTop - lastBullBottom);
+def enterLongTarget = lastBullTop;
+def enterLongContro = bullishEntry and (enterLongStop >= close or enterLongTarget <= close);
+
+# ENTER SHORT contradiction check
+def enterShortStop = lastBearTop + (lastBearTop - lastBearBottom);
+def enterShortTarget = lastBearBottom;
+def enterShortContro = bearishEntry and (enterShortStop <= close or enterShortTarget >= close);
+
+# HOLD LONG contradiction check (Stop = ema50, Target = HH)
+def holdLongContro = (isBullishBias or is_uptrend) and (ema50 >= close or HH <= close);
+
+# HOLD SHORT contradiction check (Stop = ema50, Target = LL)
+def holdShortContro = (isBearishBias or is_downtrend) and (ema50 <= close or LL >= close);
+
+# Wyckoff LONG contradiction check
+def wyLongContro = wyBuyActive and (wy_springLow >= close or wy_upthrustHigh <= close);
+
+# Wyckoff SHORT contradiction check
+def wySellContro = wySellActive and (wy_upthrustHigh <= close or wy_supportPrice >= close);
+
+# Any contradiction active
+def priceContro = enterLongContro or enterShortContro or holdLongContro or holdShortContro or wyLongContro or wySellContro;
+
+# Price Contradiction Warning Label - ALWAYS VISIBLE
+AddLabel(yes, 
+    if priceContro then 
+        "!! PRICE CONTRO !!" + 
+        (if enterLongContro then " LONG: Stop >= Entry" 
+         else if enterShortContro then " SHORT: Stop <= Entry"
+         else if holdLongContro then " HOLD LONG: EMA50 $" + Round(ema50, 2) + " >= Close"
+         else if holdShortContro then " HOLD SHORT: EMA50 $" + Round(ema50, 2) + " <= Close"
+         else if wyLongContro then " WY LONG: Invalid"
+         else if wySellContro then " WY SHORT: Invalid"
+         else "")
+    else "LEVELS OK", 
+    if priceContro then Color.RED else Color.GREEN);
+
+AddLabel(yes,
+    if bullFVGFilled
+        then "EXIT LONG  | Entry " + (if IsNaN(lastBullTop) then "NA" else "$" + Round(lastBullTop, 2)) + "  |  Exit @ $" + Round(close, 2) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if bearFVGFilled
+        then "EXIT SHORT | Entry " + (if IsNaN(lastBearBottom) then "NA" else "$" + Round(lastBearBottom, 2)) + "  |  Exit @ $" + Round(close, 2) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if bullishEntry
+        then "ENTER LONG  | @ $" + Round(close, 2) + "  |  Target " + (if enterLongTargetNA then (if IsNaN(lastBullTop) or lastBullTop <= 0 then "NA (No FVG Target)" else "NA (Price >= FVG $" + Round(lastBullTop, 2) + ")") else "$" + Round(lastBullTop, 2)) + "  |  Stop " + (if IsNaN(lastBullBottom) then "NA" else "$" + Round(lastBullBottom - (lastBullTop - lastBullBottom), 2)) + "  |  Vol: " + (if vb_score >= 2 then "STRONG" else if vb_score == 1 then "WEAK" else if vb_score <= -1 then "CONTRA" else "FLAT")
+    else if bearishEntry
+        then "ENTER SHORT | @ $" + Round(close, 2) + "  |  Target " + (if enterShortTargetNA then (if IsNaN(lastBearBottom) or lastBearBottom <= 0 then "NA (No FVG Target)" else "NA (Price <= FVG $" + Round(lastBearBottom, 2) + ")") else "$" + Round(lastBearBottom, 2)) + "  |  Stop " + (if IsNaN(lastBearTop) then "NA" else "$" + Round(lastBearTop + (lastBearTop - lastBearBottom), 2)) + "  |  Vol: " + (if vb_score <= -2 then "STRONG" else if vb_score == -1 then "WEAK" else if vb_score >= 1 then "CONTRA" else "FLAT")
+    else if wyBuyActive
+        then "ENTER LONG  | Wyckoff Spring @ $" + Round(close, 2) + "  |  Target " + (if wyLongTargetNA then (if IsNaN(wy_upthrustHigh) then "NA (No WY Resist)" else "NA (Price >= WY $" + Round(wy_upthrustHigh, 2) + ")") else "$" + Round(wy_upthrustHigh, 2)) + "  |  Stop " + (if IsNaN(wy_springLow) then "NA" else "$" + Round(wy_springLow, 2)) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if wySellActive
+        then "ENTER SHORT | Wyckoff Upthrust @ $" + Round(close, 2) + "  |  Target " + (if wyShortTargetNA then (if IsNaN(wy_supportPrice) then "NA (No WY Support)" else "NA (Price <= WY $" + Round(wy_supportPrice, 2) + ")") else "$" + Round(wy_supportPrice, 2)) + "  |  Stop " + (if IsNaN(wy_upthrustHigh) then "NA" else "$" + Round(wy_upthrustHigh, 2)) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if shortTargetHit
+        then "COVER SHORT | Target $" + Round(LL, 2) + " Hit @ $" + Round(close, 2) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if longTargetHit
+        then "TAKE PROFIT | Target $" + Round(HH, 2) + " Hit @ $" + Round(close, 2) + "  |  Vol: " + Round(vb_volRatio, 1) + "x"
+    else if isBullishBias or is_uptrend
+        then "HOLD LONG  | @ $" + Round(close, 2) + "  |  Target " + (if holdLongTargetNA then (if IsNaN(HH) then "NA (No High Found)" else "NA (At " + lookbackPeriod + "-bar High $" + Round(HH, 2) + ")") else "$" + Round(HH, 2)) + "  |  Stop $" + Round(ema50, 2) + "  |  Vol: " + (if vb_score >= 2 then "STRONG" else if vb_score == 1 then "WEAK" else if vb_score <= -1 then "CONTRA" else "FLAT")
+    else if isBearishBias or is_downtrend
+        then "HOLD SHORT | @ $" + Round(close, 2) + "  |  Target " + (if holdShortTargetNA then (if IsNaN(LL) then "NA (No Low Found)" else "NA (At " + lookbackPeriod + "-bar Low $" + Round(LL, 2) + ")") else "$" + Round(LL, 2)) + "  |  Stop $" + Round(ema50, 2) + "  |  Vol: " + (if vb_score <= -2 then "STRONG" else if vb_score == -1 then "WEAK" else if vb_score >= 1 then "CONTRA" else "FLAT")
+    else "WAIT | No Active Setup  |  Vol: " + Round(vb_volRatio, 1) + "x",
+    if bullFVGFilled or bearFVGFilled
+        then Color.ORANGE
+    else if bullishEntry or wyBuyActive
+        then Color.GREEN
+    else if bearishEntry or wySellActive
+        then Color.RED
+    else if shortTargetHit or longTargetHit
+        then Color.YELLOW
+    else if isBullishBias or is_uptrend
+        then Color.GREEN
+    else if isBearishBias or is_downtrend
+        then Color.RED
+    else Color.YELLOW);
+
+# ─── INDEX RELATIVE STRENGTH (VIX vs S&P vs DOW vs NASDAQ) ──
+def ix_spx  = close("SPX");
+def ix_djx  = close("$DJI");
+def ix_ndx  = close("COMP");
+def ix_vix  = close("VIX");
+
+def ix_spxChg = if ix_spx[5] > 0 then (ix_spx - ix_spx[5]) / ix_spx[5] * 100 else 0;
+def ix_djxChg = if ix_djx[5] > 0 then (ix_djx - ix_djx[5]) / ix_djx[5] * 100 else 0;
+def ix_ndxChg = if ix_ndx[5] > 0 then (ix_ndx - ix_ndx[5]) / ix_ndx[5] * 100 else 0;
+def ix_vixChg = if ix_vix[5] > 0 then (ix_vix - ix_vix[5]) / ix_vix[5] * 100 else 0;
+
+# Rank each index 0-3 (3=strongest) with tiebreak priority SPX>DOW>NDX>VIX
+def r_spx = (if ix_spxChg >= ix_djxChg then 1 else 0) + (if ix_spxChg >= ix_ndxChg then 1 else 0) + (if ix_spxChg >= ix_vixChg then 1 else 0);
+def r_djx = (if ix_djxChg > ix_spxChg then 1 else 0) + (if ix_djxChg >= ix_ndxChg then 1 else 0) + (if ix_djxChg >= ix_vixChg then 1 else 0);
+def r_ndx = (if ix_ndxChg > ix_spxChg then 1 else 0) + (if ix_ndxChg > ix_djxChg then 1 else 0) + (if ix_ndxChg >= ix_vixChg then 1 else 0);
+def r_vix = (if ix_vixChg > ix_spxChg then 1 else 0) + (if ix_vixChg > ix_djxChg then 1 else 0) + (if ix_vixChg > ix_ndxChg then 1 else 0);
+
+# Position 1 — Strongest
+AddLabel(yes,
+    if r_spx == 3 then "1.SPX " + Round(ix_spxChg, 1) + "%"
+    else if r_djx == 3 then "1.DOW " + Round(ix_djxChg, 1) + "%"
+    else if r_ndx == 3 then "1.NDX " + Round(ix_ndxChg, 1) + "%"
+    else "1.VIX " + Round(ix_vixChg, 1) + "%",
+    if r_vix == 3 then Color.RED else Color.GREEN);
+
+# Position 2
+AddLabel(yes,
+    if r_spx == 2 then "2.SPX " + Round(ix_spxChg, 1) + "%"
+    else if r_djx == 2 then "2.DOW " + Round(ix_djxChg, 1) + "%"
+    else if r_ndx == 2 then "2.NDX " + Round(ix_ndxChg, 1) + "%"
+    else "2.VIX " + Round(ix_vixChg, 1) + "%",
+    Color.LIGHT_GREEN);
+
+# Position 3
+AddLabel(yes,
+    if r_spx == 1 then "3.SPX " + Round(ix_spxChg, 1) + "%"
+    else if r_djx == 1 then "3.DOW " + Round(ix_djxChg, 1) + "%"
+    else if r_ndx == 1 then "3.NDX " + Round(ix_ndxChg, 1) + "%"
+    else "3.VIX " + Round(ix_vixChg, 1) + "%",
+    Color.YELLOW);
+
+# Position 4 — Weakest
+AddLabel(yes,
+    if r_spx == 0 then "4.SPX " + Round(ix_spxChg, 1) + "%"
+    else if r_djx == 0 then "4.DOW " + Round(ix_djxChg, 1) + "%"
+    else if r_ndx == 0 then "4.NDX " + Round(ix_ndxChg, 1) + "%"
+    else "4.VIX " + Round(ix_vixChg, 1) + "%",
+    Color.RED);

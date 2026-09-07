@@ -1,0 +1,292 @@
+# ==============================================================================
+# IV Smile Anomaly Detector — ThinkOrSwim ThinkScript
+# ==============================================================================
+# Based on: "Hunting for Mispriced Options" by Pavel Zapolskii
+#
+# PURPOSE: Identifies IV smile anomalies (spikes, inversions, unusual skew)
+# on an options price chart. Apply as a LOWER STUDY on an options chart.
+#
+# USAGE:
+#   1. Open an option chain for a stock (e.g., SPY Jul 2025 calls)
+#   2. Right-click on an option → "Analyze in Options"
+#   3. Add this as a lower study
+#   4. OR use it as a Custom Column in the Options chain
+#
+# WHAT IT DETECTS:
+#   - IV Rank (current IV vs 52-week range) — high = expensive
+#   - IV Percentile — what % of days IV was lower
+#   - IV Spike vs ATM — flags when this option's IV is abnormally high vs ATM
+#   - IV Skew alert — detects unusual put/call skew
+#   - Volatility Smile Score — composite anomaly score
+# ==============================================================================
+
+# ─── INPUTS ───────────────────────────────────────────────────────────────────
+input lookbackDays = 252;            # Trading days for IV rank/percentile
+input spikeThresholdPct = 20;        # % above ATM IV to flag as spike
+input skewAlertThreshold = 15;       # % difference call vs put IV to flag
+input showLabels = yes;
+input showCloud = yes;
+
+# ─── CURRENT IMPLIED VOLATILITY ──────────────────────────────────────────────
+def currentIV = if !IsNaN(imp_volatility()) then imp_volatility() else imp_volatility()[1];
+def iv_pct = currentIV * 100;
+
+# ─── IV RANK (Current IV vs 52-week High/Low) ────────────────────────────────
+def ivHigh = Highest(imp_volatility(), lookbackDays);
+def ivLow  = Lowest(imp_volatility(), lookbackDays);
+def ivRange = ivHigh - ivLow;
+def ivRank  = if ivRange > 0 then (currentIV - ivLow) / ivRange * 100 else 50;
+
+# ─── IV PERCENTILE (% of days IV was below current) ──────────────────────────
+def ivBelow = fold i = 0 to lookbackDays
+    with count = 0
+    do count + if GetValue(imp_volatility(), i) < currentIV then 1 else 0;
+def ivPercentile = ivBelow / lookbackDays * 100;
+
+# ─── HISTORICAL IV (20-day HV for comparison) ────────────────────────────────
+def hv20 = StDev(Log(close / close[1]), 20) * Sqrt(252) * 100;
+def ivHvSpread = iv_pct - hv20;  # Positive = options expensive vs realized
+
+# ─── IV SPIKE DETECTION ──────────────────────────────────────────────────────
+# Compare current bar's IV to a smoothed average (detects point spikes)
+def ivSMA = Average(imp_volatility(), 5);
+def ivDeviation = if ivSMA > 0 then (currentIV - ivSMA) / ivSMA * 100 else 0;
+def isSpike = ivDeviation > spikeThresholdPct;
+
+# ─── IV MEAN REVERSION SIGNAL ────────────────────────────────────────────────
+# When IV is >2 std devs above its 20-day mean, expect reversion
+def ivMean20 = Average(imp_volatility(), 20);
+def ivStd20  = StDev(imp_volatility(), 20);
+def ivZScore = if ivStd20 > 0 then (currentIV - ivMean20) / ivStd20 else 0;
+def isMeanRevCandidate = AbsValue(ivZScore) > 2;
+
+# ─── COMPOSITE ANOMALY SCORE ─────────────────────────────────────────────────
+# 0-100 score: higher = more anomalous = better trading opportunity
+def anomalyScore =
+    (if ivRank > 80 then 25 else if ivRank < 20 then 25 else 0) +    # Extreme IV rank
+    (if AbsValue(ivDeviation) > spikeThresholdPct then 25 else 0) +   # IV spike
+    (if AbsValue(ivHvSpread) > 15 then 25 else 0) +                   # IV vs HV divergence
+    (if isMeanRevCandidate then 25 else 0);                            # Mean reversion setup
+
+# ─── PLOTS ────────────────────────────────────────────────────────────────────
+
+# Main IV plot
+plot IV = iv_pct;
+IV.SetDefaultColor(Color.CYAN);
+IV.SetLineWeight(2);
+
+# IV Rank
+plot IVRankLine = ivRank;
+IVRankLine.SetDefaultColor(Color.DARK_ORANGE);
+IVRankLine.SetStyle(Curve.SHORT_DASH);
+IVRankLine.HideBubble();
+
+# IV Percentile
+plot IVPctLine = ivPercentile;
+IVPctLine.SetDefaultColor(Color.PLUM);
+IVPctLine.SetStyle(Curve.LONG_DASH);
+IVPctLine.HideBubble();
+
+# Historical Volatility overlay
+plot HV = hv20;
+HV.SetDefaultColor(Color.ORANGE);
+HV.SetStyle(Curve.FIRM);
+HV.SetLineWeight(1);
+
+# Anomaly Score (0-100)
+plot Score = anomalyScore;
+Score.SetDefaultColor(Color.WHITE);
+Score.SetPaintingStrategy(PaintingStrategy.HISTOGRAM);
+Score.AssignValueColor(
+    if anomalyScore >= 75 then Color.RED
+    else if anomalyScore >= 50 then Color.DARK_ORANGE
+    else if anomalyScore >= 25 then Color.BLUE
+    else Color.DARK_GREEN
+);
+
+# Reference lines
+plot HighZone = 80;
+HighZone.SetDefaultColor(Color.DARK_RED);
+HighZone.SetStyle(Curve.SHORT_DASH);
+HighZone.HideBubble();
+HighZone.HideTitle();
+
+plot LowZone = 20;
+LowZone.SetDefaultColor(Color.DARK_GREEN);
+LowZone.SetStyle(Curve.SHORT_DASH);
+LowZone.HideBubble();
+LowZone.HideTitle();
+
+# ─── CLOUD (IV vs HV divergence) ─────────────────────────────────────────────
+AddCloud(if showCloud then IV else Double.NaN, HV, Color.DARK_RED, Color.DARK_GREEN);
+
+# ─── SPIKE MARKERS ───────────────────────────────────────────────────────────
+plot SpikeUp = if isSpike then iv_pct else Double.NaN;
+SpikeUp.SetPaintingStrategy(PaintingStrategy.ARROW_DOWN);
+SpikeUp.SetDefaultColor(Color.RED);
+SpikeUp.SetLineWeight(3);
+
+plot MeanRevSetup = if isMeanRevCandidate and ivZScore > 2 then iv_pct else Double.NaN;
+MeanRevSetup.SetPaintingStrategy(PaintingStrategy.TRIANGLES);
+MeanRevSetup.SetDefaultColor(Color.MAGENTA);
+MeanRevSetup.SetLineWeight(2);
+
+plot MeanRevSetupLow = if isMeanRevCandidate and ivZScore < -2 then iv_pct else Double.NaN;
+MeanRevSetupLow.SetPaintingStrategy(PaintingStrategy.TRIANGLES);
+MeanRevSetupLow.SetDefaultColor(Color.GREEN);
+MeanRevSetupLow.SetLineWeight(2);
+
+# ─── LABELS ───────────────────────────────────────────────────────────────────
+AddLabel(showLabels,
+    "IV: " + AsPercent(currentIV) +
+    " | Rank: " + Round(ivRank, 1) + "%" +
+    " | Pctl: " + Round(ivPercentile, 1) + "%" +
+    " | HV20: " + Round(hv20, 1) + "%",
+    if ivRank > 80 then Color.RED
+    else if ivRank < 20 then Color.GREEN
+    else Color.DARK_ORANGE
+);
+
+AddLabel(showLabels,
+    "IV-HV Spread: " + Round(ivHvSpread, 1) + "%" +
+    (if ivHvSpread > 15 then " [EXPENSIVE]"
+     else if ivHvSpread < -10 then " [CHEAP]"
+     else ""),
+    if ivHvSpread > 15 then Color.RED
+    else if ivHvSpread < -10 then Color.GREEN
+    else Color.DARK_GRAY
+);
+
+AddLabel(showLabels,
+    "Anomaly Score: " + Round(anomalyScore, 0) + "/100" +
+    (if anomalyScore >= 75 then " ★★★"
+     else if anomalyScore >= 50 then " ★★"
+     else if anomalyScore >= 25 then " ★"
+     else ""),
+    if anomalyScore >= 75 then Color.RED
+    else if anomalyScore >= 50 then Color.DARK_ORANGE
+    else if anomalyScore >= 25 then Color.BLUE
+    else Color.DARK_GREEN
+);
+
+AddLabel(showLabels and isSpike,
+    "⚠ IV SPIKE DETECTED (" + Round(ivDeviation, 1) + "% above avg)",
+    Color.RED
+);
+
+AddLabel(showLabels and isMeanRevCandidate,
+    "↩ MEAN REVERSION SETUP (Z=" + Round(ivZScore, 1) + ")",
+    Color.MAGENTA
+);
+
+# ─── TRADE ACTION LABELS ─────────────────────────────────────────────────────
+
+# Overall trade suggestion based on all signals
+AddLabel(showLabels,
+    if ivRank > 80 and ivHvSpread > 15 then "ACTION: SELL PREMIUM (IV High + Expensive vs HV)"
+    else if ivRank > 80 then "ACTION: SELL PREMIUM (IV Rank High)"
+    else if ivRank < 20 and ivHvSpread < -10 then "ACTION: BUY PREMIUM (IV Low + Cheap vs HV)"
+    else if ivRank < 20 then "ACTION: BUY PREMIUM (IV Rank Low)"
+    else if ivHvSpread > 15 then "ACTION: SELL PREMIUM (IV > HV)"
+    else if ivHvSpread < -10 then "ACTION: BUY PREMIUM (IV < HV)"
+    else "ACTION: NEUTRAL (No Clear Edge)",
+    if ivRank > 80 or ivHvSpread > 15 then Color.RED
+    else if ivRank < 20 or ivHvSpread < -10 then Color.GREEN
+    else Color.DARK_GRAY
+);
+
+# Specific strategy suggestion
+AddLabel(showLabels and ivRank > 80 and ivHvSpread > 15,
+    "STRATEGY: Iron Condor / Short Strangle / Covered Call",
+    Color.DARK_ORANGE
+);
+
+AddLabel(showLabels and ivRank < 20 and ivHvSpread < -10,
+    "STRATEGY: Long Straddle / Debit Spread / Calendar",
+    Color.CYAN
+);
+
+AddLabel(showLabels and isSpike and ivRank > 60,
+    "STRATEGY: Sell Vertical at Spiked Strike",
+    Color.DARK_ORANGE
+);
+
+AddLabel(showLabels and isMeanRevCandidate and ivZScore > 2,
+    "STRATEGY: Sell the Strike — IV will revert lower",
+    Color.DARK_ORANGE
+);
+
+AddLabel(showLabels and isMeanRevCandidate and ivZScore < -2,
+    "STRATEGY: Buy the Strike — IV will revert higher",
+    Color.CYAN
+);
+
+# IV vs HV explanation
+AddLabel(showLabels,
+    if ivHvSpread > 20 then "IV >> HV: Options are VERY EXPENSIVE vs actual stock movement"
+    else if ivHvSpread > 10 then "IV > HV: Options are moderately expensive"
+    else if ivHvSpread < -15 then "IV << HV: Options are VERY CHEAP vs actual stock movement"
+    else if ivHvSpread < -5 then "IV < HV: Options are moderately cheap"
+    else "IV ≈ HV: Options are fairly priced",
+    if ivHvSpread > 20 then Color.RED
+    else if ivHvSpread > 10 then Color.DARK_ORANGE
+    else if ivHvSpread < -15 then Color.GREEN
+    else if ivHvSpread < -5 then Color.CYAN
+    else Color.DARK_GRAY
+);
+
+# IV Rank interpretation
+AddLabel(showLabels,
+    if ivRank > 80 then "IV RANK: Very High (options are near yearly highs — good time to SELL)"
+    else if ivRank > 60 then "IV RANK: Elevated (lean toward selling premium)"
+    else if ivRank < 20 then "IV RANK: Very Low (options are near yearly lows — good time to BUY)"
+    else if ivRank < 40 then "IV RANK: Depressed (lean toward buying premium)"
+    else "IV RANK: Normal range (no strong edge)",
+    if ivRank > 80 then Color.RED
+    else if ivRank > 60 then Color.DARK_ORANGE
+    else if ivRank < 20 then Color.GREEN
+    else if ivRank < 40 then Color.CYAN
+    else Color.DARK_GRAY
+);
+
+# DTE awareness label
+def dte = GetDaysToExpiration();
+AddLabel(showLabels and !IsNaN(dte),
+    "DTE: " + Round(dte, 0) +
+    (if dte < 7 then " [GAMMA RISK - Close soon!]"
+     else if dte < 21 then " [Theta accelerating]"
+     else if dte > 60 then " [Long-dated]"
+     else " [Sweet spot]"),
+    if dte < 7 then Color.RED
+    else if dte < 21 then Color.DARK_ORANGE
+    else Color.BLUE
+);
+
+# ==============================================================================
+# CUSTOM SCAN COLUMN VERSION
+# ==============================================================================
+# To use as a scan column in the Options chain:
+# 1. Go to Scan > Stock Hacker
+# 2. Add filter: Custom > ThinkScript
+# 3. Paste just the code between the SCAN markers below
+# 4. Set condition: "is greater than 50" to find anomalies
+#
+# --- SCAN CODE (copy between the markers) ---
+# def curIV = imp_volatility();
+# def hi = Highest(imp_volatility(), 252);
+# def lo = Lowest(imp_volatility(), 252);
+# def rank = if (hi - lo) > 0 then (curIV - lo) / (hi - lo) * 100 else 50;
+# def avg5 = Average(imp_volatility(), 5);
+# def dev = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+# def hv = StDev(Log(close / close[1]), 20) * Sqrt(252) * 100;
+# def spread = curIV * 100 - hv;
+# def mean20 = Average(imp_volatility(), 20);
+# def std20 = StDev(imp_volatility(), 20);
+# def zscore = if std20 > 0 then (curIV - mean20) / std20 else 0;
+# plot score =
+#     (if rank > 80 or rank < 20 then 25 else 0) +
+#     (if AbsValue(dev) > 20 then 25 else 0) +
+#     (if AbsValue(spread) > 15 then 25 else 0) +
+#     (if AbsValue(zscore) > 2 then 25 else 0);
+# --- END SCAN CODE ---
+# ==============================================================================

@@ -1,0 +1,15 @@
+Rename Stock Analysis(With Options) tab to Earnings Tab,
+Split "Fib Scenario Report" based on Earn Zones
+Stock Analysis tab: 
+Add or update "Fib Scenario Report" table exact same with all columns and logic like "Fib Scenario Report" without EARN ZONE, only WEEKLY ZONE
+Split table into three tables based on the Weekly Zones
+Add an option to input backdate and it checks Weekly Zones based on that date  
+Sector Scan tab: 
+Add or update "Fib Scenario Report" table exact same like same with all columns and logic  "Fib Scenario Report" without EARN ZONE, only WEEKLY ZONE
+Add an option to input backdate and it checks Weekly Zones based on that date 
+Remove BackTest Tab
+Intraday planning:
+Add "Weekly Zone" and "Daily Zone" , Conclusion should be based on "Daily Zone and Weekly Zone" columns to tracking tables
+Remove "Scenarios" Tab
+
+

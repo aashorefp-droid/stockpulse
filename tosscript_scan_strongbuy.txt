@@ -1,0 +1,105 @@
+# ============================================================
+# STRONG BUY SCANNER — Based on Fibonacci Master / Weinstein / AGIG
+# Paste into ThinkOrSwim: Scan > Stock Hacker > Add filter > Custom
+# Scans for stocks with multiple bullish confirmations aligned
+# ============================================================
+
+input lookbackPeriod    = 50;
+input fibVolThreshold   = 1.2;
+input ma30Period        = 30;
+input ma10Period        = 10;
+input rsPeriod          = 50;
+input volumePeriod      = 10;
+input highLookback      = 52;
+input lowLookback       = 52;
+input flatnessPct       = 0.08;
+input compSymbol        = "SPY";
+input volAvgLength      = 50;
+input volThreshold      = 1.2;
+input volPriceAvgLen    = 20;
+input minBreakoutScore  = 4;   # Minimum Weinstein score (0-6) to qualify
+
+# ─── EMA TREND ───────────────────────────────────────────────
+def ema20      = ExpAverage(close, 20);
+def ema50      = ExpAverage(close, 50);
+def is_uptrend = ema20 > ema50 and close > ema20;
+
+# ─── PRICE ABOVE EMA50 (valid stop level) ────────────────────
+def aboveStop = close > ema50;
+
+# ─── VOLUME CONVICTION ──────────────────────────────────────
+def avgVol       = Average(volume, 20);
+def highVolume   = volume > (avgVol * fibVolThreshold);
+def barRange     = high - low;
+def closePos     = if barRange > 0 then (close - low) / barRange else 0.5;
+def prevRange    = high[1] - low[1];
+def prevClosePos = if prevRange > 0 then (close[1] - low[1]) / prevRange else 0.5;
+def buyerConv    = highVolume and closePos >= 0.5;
+def strongBuyers = buyerConv and prevClosePos >= 0.5;
+
+# ─── STAN WEINSTEIN CONDITIONS ───────────────────────────────
+def MA30 = Average(close, ma30Period);
+def MA10 = Average(close, ma10Period);
+
+def ma30Slope    = (MA30 - MA30[10]) / MA30[10];
+def maTurningUp  = MA30 > MA30[2] and MA30 > MA30[4];
+def ma10AboveMA30= MA10 > MA30;
+
+def high52       = Highest(high, highLookback);
+def low52        = Lowest(low,  lowLookback);
+def range52      = high52 - low52;
+def distFromHigh = (high52 - close) / close * 100;
+
+def stockChange  = close / close[rsPeriod];
+def indexChange  = close(compSymbol) / close(compSymbol)[rsPeriod];
+def RS           = stockChange / indexChange - 1;
+def rsImproving  = RS > RS[4] and RS > RS[8];
+
+def avgVol10       = Average(volume, volumePeriod);
+def avgVol4        = Average(volume, 4);
+def volumeBuilding = avgVol4 > avgVol10 * 1.1;
+
+# ─── WEINSTEIN BREAKOUT SCORE (0-6) ─────────────────────────
+def score = (if maTurningUp   then 1 else 0) +
+            (if ma10AboveMA30  then 1 else 0) +
+            (if RS > 0         then 1 else 0) +
+            (if rsImproving    then 1 else 0) +
+            (if volumeBuilding then 1 else 0) +
+            (if distFromHigh < 10 then 1 else 0);
+
+# ─── VOLUME BIAS (Schwab Volume Signal) ─────────────────────
+def vb_avgVol        = Average(volume, volAvgLength);
+def vb_volRatio      = if vb_avgVol > 0 then volume / vb_avgVol else 0;
+def vb_highVol       = vb_volRatio >= volThreshold;
+def vb_priceMA       = Average(close, volPriceAvgLen);
+def vb_uptrend       = close > vb_priceMA and close > close[1];
+def vb_recentAvgVol  = Average(volume, 10);
+def vb_olderAvgVol   = Average(volume[10], 10);
+def vb_volIncreasing = vb_recentAvgVol > vb_olderAvgVol;
+def vb_highestHigh   = Highest(high[1], 20);
+def vb_upsideBreak   = close > vb_highestHigh;
+def vb_bullBreakout  = vb_upsideBreak and vb_highVol;
+def vb_bullTrend     = vb_uptrend and vb_volIncreasing;
+def vb_volScore      = if vb_bullBreakout then 3
+                       else if vb_bullTrend then 2
+                       else 0;
+
+# ─── BULL FVG DETECTION (simplified for scanner) ────────────
+def bullFVG = low[1] > high[3] and low[2] > high[3] and high[2] < low[1];
+
+# ════════════════════════════════════════════════════════════
+# STRONG BUY = ALL of these must be true:
+#   1. EMA uptrend (close > ema20 > ema50)
+#   2. Price above EMA50 (stop is valid)
+#   3. Weinstein score >= minBreakoutScore (default 4/6)
+#   4. MA30 curling up
+#   5. Relative Strength positive vs SPY
+#   6. Volume building OR strong buyer conviction
+# ════════════════════════════════════════════════════════════
+
+plot Scan = is_uptrend
+        and aboveStop
+        and score >= minBreakoutScore
+        and maTurningUp
+        and RS > 0
+        and (volumeBuilding or strongBuyers or vb_volScore >= 2);

@@ -1,0 +1,82 @@
+# ==============================================================================
+# INSTITUTIONAL ACCUMULATION SCANNER
+# ==============================================================================
+# Identifies stocks where smart money (institutions) are accumulating
+# Used in: Stock Hacker > Add filter > Custom
+#
+# LOGIC:
+#   1. Price is LOW in recent range (at or below POC - 50% of 26-week range)
+#   2. Volume INCREASED recently (recent vol > prior vol by 10%+)
+#   3. NOT TRENDING DOWN (higher lows = support building)
+#   4. This = Institutions buying dips = ACCUMULATION phase
+#
+# SIGNALS:
+#   GREEN = Accumulation phase active (smart money buying)
+#   Best for SWING trades (2-4 week holds)
+# ==============================================================================
+
+input lookback26w       = 26;        # 26 weeks = 6 months for range
+input volumeThreshold   = 1.10;      # 10% volume increase = accumulation
+input pocLevel          = 0.50;      # POC = 50% of range (price of control)
+
+# ─── CALCULATE 26-WEEK RANGE (PRICE OF CONTROL) ──────────────────────────────
+def high26w    = Highest(high, lookback26w * 5);  # 26 weeks * 5 = 130 bars
+def low26w     = Lowest(low, lookback26w * 5);
+def range26w   = high26w - low26w;
+def poc        = low26w + (range26w * pocLevel);  # 50% of range
+
+# ─── CURRENT PRICE POSITION ──────────────────────────────────────────────────
+def priceAtPOC = close <= poc;  # Price is at or below point of control
+
+# ─── VOLUME TREND ANALYSIS (5-week avg vs 10-week prior) ───────────────────────
+def recentVolAvg   = Average(volume, 25);   # 5 weeks * 5 bars
+def priorVolAvg    = Average(volume[25], 25);  # 5 weeks prior
+def volTrendRatio  = if priorVolAvg > 0 then recentVolAvg / priorVolAvg else 1.0;
+def volumeIncreasing = volTrendRatio > volumeThreshold;
+
+# ─── TREND ANALYSIS (Higher Lows = Support Building / No downtrend) ─────────────
+def lows5w     = Lowest(low, 25);   # 5 weeks low
+def lows5wPrior= Lowest(low[25], 25);  # 5 weeks prior low
+def highs5w    = Highest(high, 25);  # 5 weeks high
+def highs5wPrior = Highest(high[25], 25); # 5 weeks prior high
+
+def trendingDown = low < lows5wPrior;  # Making lower lows = downtrend
+def makingHigherLows = low > lows5wPrior;  # Support building = not trending down
+
+# ─── ACCUMULATION PHASE DEFINITION ────────────────────────────────────────────
+# SMART MONEY ACCUMULATION = Low price + High volume + Highest lows (no panic)
+plot AccumulationPhase = priceAtPOC and volumeIncreasing and (!trendingDown);
+
+# ─── WEIGHTED SCORE (Better filtering in scanner) ───────────────────────────────
+# Ranks strength of accumulation signal (0 = no signal, 3 = strong)
+def score = (if priceAtPOC then 1 else 0) +
+            (if volumeIncreasing then 1 else 0) +
+            (if makingHigherLows then 1 else 0);
+
+plot AccumulationScore = score;  # 3 = strongest signal, 1 = weak signal
+
+# ─── DEBUG VALUES (Optional - comment out in scanner) ─────────────────────────
+# AddLabel(yes, "H26: " + AsText(high26w), Color.GRAY);
+# AddLabel(yes, "L26: " + AsText(low26w), Color.GRAY);
+# AddLabel(yes, "POC: " + AsText(poc), Color.CYAN);
+# AddLabel(yes, "Close: " + AsText(close) + " (vs POC)", if close <= poc then Color.GREEN else Color.RED);
+# AddLabel(yes, "VolRatio: " + AsPercent(volTrendRatio) + "%", if volumeIncreasing then Color.GREEN else Color.RED);
+# AddLabel(yes, "Trend: " + (if makingHigherLows then "STRONG" else "WEAK"), if makingHigherLows then Color.GREEN else Color.RED);
+
+# ─── COLOR CODING ────────────────────────────────────────────────────────────
+AccumulationPhase.AssignValueColor(if AccumulationPhase then Color.GREEN else Color.DARK_RED);
+AccumulationScore.AssignValueColor(
+    if score == 3 then Color.GREEN
+    else if score == 2 then Color.LIGHT_GREEN
+    else Color.RED
+);
+
+# ─── SCANNER USAGE ────────────────────────────────────────────────────────────
+# In Stock Hacker:
+#   1. Filter 1: AccumulationPhase > 0  (Binary filter - is accumulating?)
+#   2. Filter 2: AccumulationScore >= 2 (Strength filter - at least 2/3 conditions met)
+#   3. Additionally filter by:
+#      - Price >= $1 (avoid penny stocks)
+#      - Average Volume >= 500K (liquidity)
+#      - % Change > -5% (recent selling completed)
+# ==============================================================================

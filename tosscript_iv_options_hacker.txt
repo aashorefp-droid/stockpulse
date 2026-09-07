@@ -1,0 +1,191 @@
+# ==============================================================================
+# IV Smile Anomaly Detector — ThinkOrSwim OPTIONS HACKER Version
+# ==============================================================================
+# Use in: Scan > Options Hacker > Add filter > Study > Custom
+#
+# PURPOSE: Finds specific option contracts with IV anomalies (mispricing).
+# Based on: "Hunting for Mispriced Options" by Pavel Zapolskii
+#
+# HOW TO USE:
+#   1. Open ThinkOrSwim → Scan → Options Hacker
+#   2. Set your base filters (e.g., SPY, GLD, QQQ, or All Optionable)
+#   3. Add filter → Study → Custom → Paste ONE of the scans below
+#   4. Set condition as noted for each scan
+#
+# ==============================================================================
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 1: IV SPIKE — Option IV is abnormally high vs its recent average
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "spike" is greater than 20
+# Finds: Contracts where IV is 20%+ above the 5-bar average → sell candidates
+#
+# def curIV = imp_volatility();
+# def avg5 = Average(imp_volatility(), 5);
+# plot spike = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 2: IV DIP — Option IV is abnormally low vs its recent average
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "dip" is less than -15
+# Finds: Contracts where IV is 15%+ below the 5-bar average → buy candidates
+#
+# def curIV = imp_volatility();
+# def avg5 = Average(imp_volatility(), 5);
+# plot dip = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 3: IV vs HV DIVERGENCE — Options expensive vs realized volatility
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "ivhv" is greater than 20
+# Finds: Contracts where IV is 20%+ above HV20 → overpriced, sell premium
+#
+# def hv20 = StDev(Log(close / close[1]), 20) * Sqrt(252);
+# def curIV = imp_volatility();
+# plot ivhv = if hv20 > 0 then (curIV - hv20) / hv20 * 100 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 4: IV CHEAP vs HV — Options cheap relative to realized vol
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "cheap" is less than -20
+# Finds: Contracts where IV is 20%+ below HV20 → underpriced, buy premium
+#
+# def hv20 = StDev(Log(close / close[1]), 20) * Sqrt(252);
+# def curIV = imp_volatility();
+# plot cheap = if hv20 > 0 then (curIV - hv20) / hv20 * 100 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 5: MEAN REVERSION SETUP — IV at extreme Z-score
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "zscore" is greater than 2  (or less than -2 for cheap)
+# Finds: Contracts where IV is >2 std devs from its 20-day mean
+#
+# def curIV = imp_volatility();
+# def mean20 = Average(imp_volatility(), 20);
+# def std20 = StDev(imp_volatility(), 20);
+# plot zscore = if std20 > 0 then (curIV - mean20) / std20 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 6: IV RANK — Extreme IV rank (current vs 52-week range)
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "rank" is greater than 80  (high IV rank = expensive)
+#         OR "rank" is less than 20     (low IV rank = cheap)
+#
+# def curIV = imp_volatility();
+# def hi = Highest(imp_volatility(), 252);
+# def lo = Lowest(imp_volatility(), 252);
+# plot rank = if (hi - lo) > 0 then (curIV - lo) / (hi - lo) * 100 else 50;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 7: COMPOSITE ANOMALY SCORE — All-in-one anomaly detector
+# ──────────────────────────────────────────────────────────────────────────────
+# Condition: "score" is greater than 50  (moderate anomaly)
+#         or "score" is greater than 75  (strong anomaly)
+# Finds: Contracts hitting multiple anomaly criteria simultaneously
+#
+# def curIV = imp_volatility();
+# def hi = Highest(imp_volatility(), 252);
+# def lo = Lowest(imp_volatility(), 252);
+# def rank = if (hi - lo) > 0 then (curIV - lo) / (hi - lo) * 100 else 50;
+# def avg5 = Average(imp_volatility(), 5);
+# def dev = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+# def hv = StDev(Log(close / close[1]), 20) * Sqrt(252);
+# def spread = if hv > 0 then (curIV - hv) / hv * 100 else 0;
+# def mean20 = Average(imp_volatility(), 20);
+# def std20 = StDev(imp_volatility(), 20);
+# def zscore = if std20 > 0 then (curIV - mean20) / std20 else 0;
+# plot score =
+#     (if rank > 80 or rank < 20 then 25 else 0) +
+#     (if AbsValue(dev) > 20 then 25 else 0) +
+#     (if AbsValue(spread) > 20 then 25 else 0) +
+#     (if AbsValue(zscore) > 2 then 25 else 0);
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 8: HIGH OI + IV SPIKE — Liquid contracts with anomalies
+# ──────────────────────────────────────────────────────────────────────────────
+# Use this as TWO filters combined in Options Hacker:
+#
+# Filter 1 (built-in): Open Interest is greater than 500
+# Filter 2 (Custom Study — paste below):
+# Condition: "spike" is greater than 15
+#
+# def curIV = imp_volatility();
+# def avg5 = Average(imp_volatility(), 5);
+# plot spike = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 9: ALL-GREEN BUY PREMIUM — Stocks with all conditions aligned for buying
+# ──────────────────────────────────────────────────────────────────────────────
+# USE IN: Stock Hacker (not Options Hacker) on DAILY timeframe
+# Condition: "buyScore" is equal to 1
+# Finds: Stocks where IV Rank is low + IV < HV + IV below 20-day mean
+#         = all green = cheap options = BUY PREMIUM opportunity
+#
+# def curIV = imp_volatility();
+# def hi = Highest(imp_volatility(), 252);
+# def lo = Lowest(imp_volatility(), 252);
+# def rank = if (hi - lo) > 0 then (curIV - lo) / (hi - lo) * 100 else 50;
+# def hv = StDev(Log(close / close[1]), 20) * Sqrt(252);
+# def ivhvSpread = curIV - hv;
+# def mean20 = Average(imp_volatility(), 20);
+# def std20 = StDev(imp_volatility(), 20);
+# def zscore = if std20 > 0 then (curIV - mean20) / std20 else 0;
+# def avg5 = Average(imp_volatility(), 5);
+# def dev = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+# plot buyScore = if rank < 25 and ivhvSpread < 0 and zscore < -0.5 and dev < 0 then 1 else 0;
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCAN 10: ALL-RED SELL PREMIUM — Stocks with all conditions aligned for selling
+# ──────────────────────────────────────────────────────────────────────────────
+# USE IN: Stock Hacker (not Options Hacker) on DAILY timeframe
+# Condition: "sellScore" is equal to 1
+# Finds: Stocks where IV Rank is high + IV > HV + IV above 20-day mean
+#         = all red = expensive options = SELL PREMIUM opportunity
+#
+# def curIV = imp_volatility();
+# def hi = Highest(imp_volatility(), 252);
+# def lo = Lowest(imp_volatility(), 252);
+# def rank = if (hi - lo) > 0 then (curIV - lo) / (hi - lo) * 100 else 50;
+# def hv = StDev(Log(close / close[1]), 20) * Sqrt(252);
+# def ivhvSpread = curIV - hv;
+# def mean20 = Average(imp_volatility(), 20);
+# def std20 = StDev(imp_volatility(), 20);
+# def zscore = if std20 > 0 then (curIV - mean20) / std20 else 0;
+# def avg5 = Average(imp_volatility(), 5);
+# def dev = if avg5 > 0 then (curIV - avg5) / avg5 * 100 else 0;
+# plot sellScore = if rank > 75 and ivhvSpread > 0 and zscore > 0.5 and dev > 0 then 1 else 0;
+
+
+# ==============================================================================
+# RECOMMENDED OPTIONS HACKER SETUP
+# ==============================================================================
+#
+# For finding mispriced options (Pavel's strategy):
+#
+# 1. Underlying: [your watchlist or "All Optionable"]
+# 2. Expiration range: 7-90 DTE
+# 3. Strike range: Near ATM (within 10-15% of stock price)
+# 4. Open Interest: > 100  (ensures liquidity)
+# 5. Bid-Ask spread: < $0.50  (tight markets)
+# 6. Custom Study: Composite Anomaly Score (Scan 7) > 50
+#
+# Sort results by the anomaly score descending to find the best
+# opportunities first.
+#
+# TRADE IDEAS when anomaly found:
+#   - SPIKE (IV too high): Sell vertical spread or iron condor
+#   - DIP (IV too low): Buy calendar spread or long straddle
+#   - IV > HV: Sell premium (covered calls, cash-secured puts)
+#   - IV < HV: Buy premium (debit spreads, long options)
+#   - Mean Reversion: Sell when Z>2, Buy when Z<-2
+#
+# ==============================================================================
