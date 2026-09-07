@@ -163,6 +163,16 @@ def get_news_details(ticker: str) -> dict:
         "bad_score": bad_score,
         "headlines": scored,
     }
+    # Prune expired/excess entries to cap memory usage
+    if len(_NEWS_CACHE) > 100:
+        expired = [t for t, (ts, _) in _NEWS_CACHE.items() if (now - ts) > _NEWS_CACHE_TTL]
+        for t in expired:
+            _NEWS_CACHE.pop(t, None)
+        if len(_NEWS_CACHE) > 100:
+            oldest = sorted(_NEWS_CACHE.items(), key=lambda x: x[1][0])[:len(_NEWS_CACHE) - 100]
+            for t, _ in oldest:
+                _NEWS_CACHE.pop(t, None)
+
     _NEWS_CACHE[ticker] = (now, result)
     return result
 

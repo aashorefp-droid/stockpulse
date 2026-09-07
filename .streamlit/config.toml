@@ -2,6 +2,11 @@
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+maxUploadSize = 50
+fastReruns = true
+
+[browser]
+gatherUsageStats = false
 
 [theme]
 base = "dark"

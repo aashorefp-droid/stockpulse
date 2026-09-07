@@ -24,6 +24,7 @@ import io
 import sqlite3
 import pytz
 import concurrent.futures
+import gc
 
 try:
     import yfinance as yf
@@ -124,8 +125,8 @@ def get_thread_pool():
 
 @st.cache_resource
 def get_process_pool():
-    """Shared ProcessPoolExecutor for CPU-bound work (backtesting)."""
-    return concurrent.futures.ProcessPoolExecutor(max_workers=4)
+    """Fallback executor reusing thread pool to avoid spawning memory-heavy child processes."""
+    return get_thread_pool()
 
 # ──────────────────────────────────────────────
 # TRADE TRACKER DATABASE (SQLite)
@@ -650,7 +651,7 @@ def send_tracking_price_update(ticker, current_price, entry_price, stop_loss, ta
         return False
 
 
-@st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 min — VIX/SPY don't change that fast
+@st.cache_data(ttl=300, max_entries=20, show_spinner=False)  # Cache for 5 min — VIX/SPY don't change that fast
 def get_market_risk_data():
     """
     Fetch real market data and calculate risk assessment.
@@ -1673,7 +1674,7 @@ def poly_get(endpoint, params, api_key):
     return {}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def get_daily_bars(ticker, start_date, end_date, api_key):
     """Daily adjusted OHLCV from Polygon."""
     endpoint = f"/v2/aggs/ticker/{ticker}/range/1/day/{start_date}/{end_date}"
@@ -1688,7 +1689,7 @@ def get_daily_bars(ticker, start_date, end_date, api_key):
     return df
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def get_hourly_bars(ticker, start_date, end_date, api_key):
     """Hourly adjusted bars from Polygon."""
     endpoint = f"/v2/aggs/ticker/{ticker}/range/1/hour/{start_date}/{end_date}"
@@ -1759,7 +1760,7 @@ def alpaca_get(endpoint, params, api_key, api_secret):
     return {}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def get_daily_bars_alpaca(ticker, start_date, end_date, api_key, api_secret):
     """Daily adjusted OHLCV from Alpaca (IEX feed - free)."""
     endpoint = f"/v2/stocks/{ticker}/bars"
@@ -1783,7 +1784,7 @@ def get_daily_bars_alpaca(ticker, start_date, end_date, api_key, api_secret):
     return df
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def get_hourly_bars_alpaca(ticker, start_date, end_date, api_key, api_secret):
     """Hourly adjusted bars from Alpaca IEX feed (real-time, no delay!)."""
     endpoint = f"/v2/stocks/{ticker}/bars"
@@ -1809,7 +1810,7 @@ def get_hourly_bars_alpaca(ticker, start_date, end_date, api_key, api_secret):
     return df
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=100, show_spinner=False)
 def get_hourly_bars_yfinance(ticker, start_date, end_date):
     """Hourly bars from Yahoo Finance (consolidated data, matches TOS). Free, no key needed."""
     if not YFINANCE_AVAILABLE:
@@ -1835,7 +1836,7 @@ def get_hourly_bars_yfinance(ticker, start_date, end_date):
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=300, show_spinner=False)  # 5 min cache for fresher options data
+@st.cache_data(ttl=300, max_entries=50, show_spinner=False)  # 5 min cache for fresher options data
 def get_options_bias_alpaca(ticker, api_key, api_secret):
     """
     Fetch options chain data from Alpaca and calculate bias metrics.
@@ -1991,7 +1992,7 @@ def get_options_bias_alpaca(ticker, api_key, api_secret):
         return {"error": str(e)[:100], "debug": debug_info if 'debug_info' in dir() else []}
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=50, show_spinner=False)
 def get_options_strategy_alpaca(ticker, current_price, direction, zone, api_key, api_secret):
     """
     Fetch Alpaca options chain and suggest a concrete strategy with real contracts.
@@ -2506,7 +2507,7 @@ def get_options_bias_yfinance(ticker):
         return {"error": str(e)[:100], "debug": debug_info}
 
 
-@st.cache_data(ttl=300, show_spinner=False)  # 5 min cache for fresher options data
+@st.cache_data(ttl=300, max_entries=50, show_spinner=False)  # 5 min cache for fresher options data
 def get_options_bias(ticker, api_key):
     """
     Fetch options chain data from Polygon and calculate bias metrics.
@@ -2679,7 +2680,7 @@ def get_options_bias(ticker, api_key):
         return {"error": str(e)[:100], "debug": debug_info if 'debug_info' in dir() else []}
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def get_earnings_dates_yfinance(ticker):
     """
     Fetch earnings dates from yfinance (free, reliable, includes upcoming).
@@ -2712,7 +2713,7 @@ def get_earnings_dates_yfinance(ticker):
         return []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)  # Cache for 1 hour
 def get_earnings_dates_polygon(ticker, api_key, limit=20):
     """
     Try Polygon vX financials endpoint (requires paid plan).
@@ -2755,7 +2756,7 @@ def get_earnings_dates_polygon(ticker, api_key, limit=20):
     return []
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=100, show_spinner=False)
 def detect_earnings_from_prices(daily_df, min_gap_pct=3.0, min_vol_ratio=1.5):
     """
     Auto-detect likely earnings dates from daily price data.
@@ -2893,7 +2894,7 @@ def estimate_next_earnings(events):
 # FINNHUB EARNINGS CALENDAR
 # ──────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=3600, max_entries=20, show_spinner=False)
 def fetch_earnings_calendar_finnhub(finnhub_key, from_date, to_date):
     """
     Fetch tickers reporting earnings between from_date and to_date
@@ -3835,7 +3836,7 @@ def next_trading_day(d, daily_index):
 # FUNDAMENTALS (via yfinance)
 # ──────────────────────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)  # Cache for 1 hour
+@st.cache_data(ttl=3600, max_entries=150, show_spinner=False)  # Cache for 1 hour
 def get_fundamentals(ticker):
     """
     Fetch fundamental data via yfinance.
@@ -4064,7 +4065,7 @@ else:
     def _macro_get_sector_performance(*a, **kw): return []
 
 # Compatibility wrapper: bridges old (api_key, api_secret, data_source) → new module signature
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=20, show_spinner=False)
 def get_sector_performance(api_key, api_secret, data_source):
     """Thin wrapper around macro_analysis.get_sector_performance."""
     if data_source == "Alpaca":
@@ -4193,7 +4194,7 @@ _DOW_30 = [
     "NKE","NVDA","PG","CRM","SHW","TRV","UNH","V","VZ","WMT",
 ]
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=86400, max_entries=20, show_spinner=False)
 def _fetch_universe(name: str, min_price: float = 5.0, min_mcap: float = 0) -> list:
     """Fetch ticker list using yfinance screener API."""
     import yfinance as yf
@@ -4530,7 +4531,7 @@ def _mtf_signal_action(w, d, h4):
     return _MAP.get(key, (5, "Unknown", "No data"))
 
 
-@st.cache_data(ttl=300, show_spinner=False)  # Cache for 5 min — same ticker won't change between tabs
+@st.cache_data(ttl=300, max_entries=100, show_spinner=False)  # Cache for 5 min — same ticker won't change between tabs
 def scan_single_stock(ticker, api_key, api_secret, data_source, use_fib=True, fib_tol=2.0, use_strategy=False, as_of_date=None):
     """
     Scan a single stock and return verdict/confidence.
@@ -4925,6 +4926,7 @@ def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, 
     bearish_high.sort(key=lambda x: x["score"])
 
     top_setups = bullish_high[:5] + bearish_high[:5]
+    gc.collect()
     return top_setups, results
 
 
@@ -4975,6 +4977,7 @@ def _parallel_scan_with_progress(tickers, api_key, api_secret, data_source,
                               "connection reset", "remotedisconnected", "connection aborted"))
             errors.append((ticker, err_str, is_timeout))
 
+    gc.collect()
     return results, errors, no_data
 
 
@@ -5579,45 +5582,45 @@ _migrate_trades_table()
 # SCHEDULED TELEGRAM MESSAGES (8:00 AM & 8:30 AM CST)
 # ──────────────────────────────────────────────
 if SCHEDULER_AVAILABLE and TELEGRAM_ENABLED:
-    if "scheduler_initialized" not in st.session_state:
+    @st.cache_resource
+    def _init_telegram_scheduler():
         try:
-            scheduler = BackgroundScheduler()
-            
-            # Schedule at 8:00 AM CST - Market Risk (fetches real data)
-            scheduler.add_job(
+            sched = BackgroundScheduler(daemon=True)
+            sched.add_job(
                 send_market_risk_message,
                 "cron",
                 hour=8,
                 minute=0,
                 timezone="US/Central",
-                id="market_risk_8am"
+                id="market_risk_8am",
+                replace_existing=True,
             )
-            
-            # Schedule at 8:30 AM CST - Tracking Initiated
-            scheduler.add_job(
+            sched.add_job(
                 send_tracking_initiated_message,
                 "cron",
                 hour=8,
                 minute=30,
                 timezone="US/Central",
-                id="tracking_initiated_830am"
+                id="tracking_initiated_830am",
+                replace_existing=True,
             )
-
-            # Schedule at 8:35 AM CST - Swing Trade Morning Brief
-            scheduler.add_job(
+            sched.add_job(
                 send_swing_morning_brief,
                 "cron",
                 hour=8,
                 minute=35,
                 timezone="US/Central",
-                id="swing_morning_brief_835am"
+                id="swing_morning_brief_835am",
+                replace_existing=True,
             )
-            
-            scheduler.start()
-            st.session_state.scheduler_initialized = True
-            print("✅ Telegram scheduler started - Messages at 8:00 AM, 8:30 AM, and 8:35 AM CST")
+            sched.start()
+            print("✅ Telegram scheduler started (singleton) - Messages at 8:00 AM, 8:30 AM, and 8:35 AM CST")
+            return sched
         except Exception as e:
             print(f"⚠️ Scheduler setup error: {e}")
+            return None
+
+    _global_telegram_scheduler = _init_telegram_scheduler()
 elif not SCHEDULER_AVAILABLE:
     print("⚠️ APScheduler not installed - scheduled messages disabled")
 
@@ -18411,6 +18414,7 @@ with tab_tos:
                 except Exception as _te:
                     st.warning(f"⚠️ {_tkr}: {_te}")
             _tos_bar.empty()
+            gc.collect()
 
             if _tos_results:
                 st.session_state["_tos_results"] = _tos_results
@@ -18774,6 +18778,7 @@ with tab_bubble:
                 except Exception as _be:
                     st.warning(f"{_bt}: {_be}")
             _bb_bar.empty()
+            gc.collect()
             if _bb_results:
                 st.session_state["_bb_results"] = _bb_results
 
