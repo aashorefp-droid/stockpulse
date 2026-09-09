@@ -1774,12 +1774,12 @@ def alpaca_get(endpoint, params, api_key, api_secret):
         "APCA-API-SECRET-KEY": api_secret,
     }
     url = ALPACA_DATA_BASE + endpoint
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=15)
+            r = requests.get(url, params=params, headers=headers, timeout=8)
 
             if r.status_code == 429:
-                time.sleep(5)
+                time.sleep(1)
                 continue
 
             if r.status_code in (401, 403):
@@ -6593,19 +6593,21 @@ with tab_estimator:
         _fib_progress = st.progress(0)
         _fib_status = st.empty()
         _fib_total = len(estimator_watchlist)
-        for _fib_i, symbol in enumerate(estimator_watchlist):
-            _fib_status.text(f"Scanning {symbol}... ({_fib_i+1}/{_fib_total})")
-            _fib_progress.progress((_fib_i + 1) / _fib_total)
+        def _calc_fib_single(symbol):
             try:
                 if not YFINANCE_AVAILABLE:
-                    continue
-                
-                # Fetch daily data for week calculation
+                    return None
                 df_daily = yf.download(symbol, period="2y", progress=False)
                 if df_daily is None or df_daily.empty:
-                    continue
+                    return None
                 if isinstance(df_daily.columns, pd.MultiIndex):
                     df_daily.columns = df_daily.columns.get_level_values(0)
+                
+                # Apply backdate filter
+                _est_bd = pd.Timestamp(est_fib_backdate)
+                df_daily = df_daily[df_daily.index <= _est_bd]
+                if df_daily.empty:
+                    return None
                 
                 # ── Get last earnings date and calculate earnings week ──
                 try:
@@ -6618,19 +6620,13 @@ with tab_estimator:
                         _est_prev_earn_date = pd.Timestamp(_est_earn_evts[-2][0])
                     elif _est_earn_evts:
                         _est_last_earn_date = pd.Timestamp(_est_earn_evts[-1][0])
-                        _est_prev_earn_date = _est_last_earn_date - pd.Timedelta(days=90)  # fallback: 90 days
+                        _est_prev_earn_date = _est_last_earn_date - pd.Timedelta(days=90)
                     else:
                         _est_last_earn_date = pd.Timestamp(est_fib_backdate)
                         _est_prev_earn_date = _est_last_earn_date - pd.Timedelta(days=90)
                 except Exception:
                     _est_last_earn_date = pd.Timestamp(est_fib_backdate)
                     _est_prev_earn_date = _est_last_earn_date - pd.Timedelta(days=90)
-                
-                # Apply backdate filter
-                _est_bd = pd.Timestamp(est_fib_backdate)
-                df_daily = df_daily[df_daily.index <= _est_bd]
-                if df_daily.empty:
-                    continue
                 
                 _wk_close = _safe_float(df_daily["Close"].iloc[-1])
                 
@@ -6641,8 +6637,6 @@ with tab_estimator:
                 # Get daily data for that week
                 _di_dates = np.array([d.date() if hasattr(d, "date") else d for d in df_daily.index])
                 _wk_slice = df_daily[(_di_dates >= _wk_start_d.date()) & (_di_dates <= _wk_end_d.date())]
-                
-                # Fallback to last 5 days if week data not available
                 if _wk_slice.empty:
                     _wk_slice = df_daily.tail(5)
                 
@@ -6709,46 +6703,37 @@ with tab_estimator:
 
                 # ── Earn Zone: use close on last earnings date vs earnings swing ──
                 try:
-                    # Get earnings swing (high/low between previous and last earnings)
                     _earn_dates = np.array([d.date() if hasattr(d, "date") else d for d in df_daily.index])
                     _earn_date_mask = ((_earn_dates >= _est_prev_earn_date.date()) & (_earn_dates <= _est_last_earn_date.date()))
                     _earn_slice = df_daily[_earn_date_mask]
                     
                     if _earn_slice.empty:
-                        # Fallback to last 60 days if exact swing dates not found
                         _earn_slice = df_daily.tail(60)
                     
                     _earn_hi = _safe_float(_earn_slice["High"].max())
                     _earn_lo = _safe_float(_earn_slice["Low"].min())
                     _earn_rng = _earn_hi - _earn_lo
                     
-                    # Get close on last earnings date
                     _earn_close_slice = df_daily[_earn_dates == _est_last_earn_date.date()]
                     if not _earn_close_slice.empty:
                         _est_earn_close = _safe_float(_earn_close_slice["Close"].iloc[-1])
                     else:
                         _est_earn_close = _wk_close
                     
-                    # Calculate Earn Zone based on earnings swing
                     _est_earn_pos = (_est_earn_close - _earn_lo) / _earn_rng * 100 if _earn_rng > 0 else 50.0
                     _est_earn_zone = "HIGH" if _est_earn_pos >= 70 else ("LOW" if _est_earn_pos <= 30 else "MID")
                 except Exception:
                     _est_earn_close = _wk_close
                     _est_earn_zone = _wk_zone
 
-                # ── Institutional vs Retail Control + Phase ────────────────
+                # ── Institutional vs Retail Control (resampled weekly: 0 extra network calls) ──
                 try:
-                    df_wk = yf.download(symbol, period="2y", interval="1wk", progress=False)
-                    if df_wk is not None and not df_wk.empty:
-                        if isinstance(df_wk.columns, pd.MultiIndex):
-                            df_wk.columns = df_wk.columns.get_level_values(0)
-                        _wk_bd = pd.Timestamp(est_fib_backdate)
-                        df_wk = df_wk[df_wk.index <= _wk_bd]
-                        if not df_wk.empty:
-                            _inst_control, _inst_phase, _inst_emoji, _inst_days = analyze_institutional_control(df_wk)
-                            _inst_str = f"{_inst_emoji} {_inst_control} | {_inst_phase} ({_inst_days}d)" if _inst_control != "N/A" else "N/A"
-                        else:
-                            _inst_str = "N/A"
+                    df_wk = df_daily.resample('W-FRI').agg({
+                        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
+                    }).dropna()
+                    if not df_wk.empty:
+                        _inst_control, _inst_phase, _inst_emoji, _inst_days = analyze_institutional_control(df_wk)
+                        _inst_str = f"{_inst_emoji} {_inst_control} | {_inst_phase} ({_inst_days}d)" if _inst_control != "N/A" else "N/A"
                     else:
                         _inst_str = "N/A"
                 except Exception:
@@ -6772,9 +6757,27 @@ with tab_estimator:
                     f"{_wk_conclusion_base} | Hi: ${_wk_hi10:.2f} Lo: ${_wk_lo10:.2f} | "
                     f"{_est_fund_txt} | {_est_news_txt}"
                 )
-                fib_rows.append(_est_fib_row)
-            except Exception as e:
-                st.warning(f"{symbol}: {e}")
+                return _est_fib_row
+            except Exception:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as _fib_pool:
+            _fut_map = {_fib_pool.submit(_calc_fib_single, sym): sym for sym in estimator_watchlist}
+            _completed = 0
+            for _fut in concurrent.futures.as_completed(_fut_map):
+                _completed += 1
+                _sym = _fut_map[_fut]
+                _fib_status.text(f"Scanning {_sym}... ({_completed}/{_fib_total})")
+                _fib_progress.progress(_completed / _fib_total)
+                try:
+                    res = _fut.result()
+                    if res:
+                        fib_rows.append(res)
+                except Exception:
+                    pass
+
+        _order_map = {s: i for i, s in enumerate(estimator_watchlist)}
+        fib_rows.sort(key=lambda r: _order_map.get(r["Ticker"], 999))
 
         _fib_progress.empty()
         _fib_status.empty()
@@ -6944,6 +6947,7 @@ with tab_estimator:
                              height=min(len(_gz1_rows) * 35 + 48, 300))
         else:
             st.info("No data could be retrieved for the given tickers.")
+        trim_memory()
 
 # ╔══════════════════════════════════════════════════════════════════════════════╗
 # ║ TAB 3: SECTOR SCAN                                                          ║
@@ -7796,10 +7800,10 @@ try:
             try:
                 from news_sentiment import get_news_sentiment_batch
                 _tickers_list = df_all["ticker"].tolist()
-                _news_map = get_news_sentiment_batch(_tickers_list, max_workers=16)
+                _news_map = get_news_sentiment_batch(_tickers_list, max_workers=4)
                 df_all["news"] = df_all["ticker"].map(_news_map).fillna("No")
             except Exception:
-                df_all["news"] = df_all["ticker"].apply(lambda t: get_news_sentiment(t))
+                df_all["news"] = "No"
 
         # ── Overall Fundamental label: Strong / Weak / Neutral ──
         def _calc_fund_label(row):
@@ -7847,9 +7851,11 @@ try:
         # ── Alpaca Options Strategy column ──
         if not df_all.empty and api_secret:
             _opt_status = st.empty()
-            _opt_status.caption("⏳ Fetching Alpaca options strategies...")
+            _opt_status.caption("⏳ Fetching Alpaca options strategies for actionable setups...")
             def _fetch_opt(row):
                 try:
+                    if str(row.get("entry_status", "")).upper() != "ENTER":
+                        return "—"
                     _vrd = str(row.get("verdict","")).upper()
                     if _vrd not in ("BULLISH", "BEARISH"):
                         return "—"
@@ -17120,10 +17126,10 @@ with tab_holdings:
             try:
                 from news_sentiment import get_news_sentiment_batch
                 _mh_tickers_list = _mh_sdf["ticker"].tolist()
-                _mh_news_map = get_news_sentiment_batch(_mh_tickers_list, max_workers=16)
+                _mh_news_map = get_news_sentiment_batch(_mh_tickers_list, max_workers=4)
                 _mh_sdf["news"] = _mh_sdf["ticker"].map(_mh_news_map).fillna("No")
             except Exception:
-                _mh_sdf["news"] = _mh_sdf["ticker"].apply(lambda t: get_news_sentiment(t))
+                _mh_sdf["news"] = "No"
 
             # ── Overall Fundamental label: Strong / Weak / Neutral ──
             def _calc_fundamental_label(row):
