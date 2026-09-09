@@ -11,6 +11,12 @@ Data Sources:
 import sys
 import os
 os.environ["MALLOC_ARENA_MAX"] = "2"
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try: sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try: sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception: pass
 # Ensure local module imports work regardless of working directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
@@ -29,7 +35,19 @@ import gc
 import ctypes
 
 import logging
+import warnings
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+warnings.filterwarnings("ignore", message=".*Styler.applymap.*")
+warnings.filterwarnings("ignore", message=".*use_container_width.*")
+
+try:
+    from pandas.io.formats.style import Styler
+    if hasattr(Styler, "map"):
+        Styler.applymap = Styler.map
+    else:
+        Styler.map = Styler.applymap
+except Exception:
+    pass
 
 
 def _safe_float(val, default=0.0):
@@ -5684,7 +5702,7 @@ if SCHEDULER_AVAILABLE and TELEGRAM_ENABLED:
             print("✅ Telegram scheduler started (singleton) - Messages at 8:00 AM, 8:30 AM, and 8:35 AM CST")
             return sched
         except Exception as e:
-            print(f"⚠️ Scheduler setup error: {e}")
+            print(f"[!] Scheduler setup error: {e}")
             return None
 
     _global_telegram_scheduler = _init_telegram_scheduler()

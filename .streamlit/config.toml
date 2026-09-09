@@ -3,8 +3,6 @@ headless = true
 enableCORS = false
 enableXsrfProtection = false
 maxUploadSize = 25
-fastReruns = true
-disconnectTimeout = 10
 
 [browser]
 gatherUsageStats = false
