@@ -3430,14 +3430,20 @@ def analyze_institutional_control(weekly_df, lookback=26):
         if df_wk.empty or len(df_wk) < 5:
             return "N/A", "N/A", "❓", 0
         
+        # Ensure 1D series for all OHLCV columns (flattens any MultiIndex or (N,1) column slices)
+        close_s = df_wk["Close"].squeeze()
+        high_s  = df_wk["High"].squeeze()
+        low_s   = df_wk["Low"].squeeze()
+        vol_s   = df_wk["Volume"].squeeze()
+
         # Get current and previous week close, high, low
-        current_close = float(df_wk["Close"].iloc[-1])
-        current_high = float(df_wk["High"].iloc[-1])
-        current_low = float(df_wk["Low"].iloc[-1])
+        current_close = float(np.asarray(close_s.iloc[-1]).squeeze())
+        current_high = float(np.asarray(high_s.iloc[-1]).squeeze())
+        current_low = float(np.asarray(low_s.iloc[-1]).squeeze())
         
         # Calculate 26-week (6-month) high/low for context
-        wk_high_26 = float(df_wk["High"].max())
-        wk_low_26 = float(df_wk["Low"].min())
+        wk_high_26 = float(np.asarray(high_s.max()).squeeze())
+        wk_low_26 = float(np.asarray(low_s.min()).squeeze())
         wk_range = wk_high_26 - wk_low_26
         
         if wk_range <= 0:
@@ -3449,15 +3455,15 @@ def analyze_institutional_control(weekly_df, lookback=26):
         val = wk_low_26 + (wk_range * 0.30)  # Value Area Low
         
         # Volume trend: recent vs prior
-        recent_vol = float(df_wk["Volume"].iloc[-5:].mean()) if len(df_wk) >= 5 else float(df_wk["Volume"].mean())
-        prior_vol = float(df_wk["Volume"].iloc[-15:-5].mean()) if len(df_wk) >= 15 else float(df_wk["Volume"].mean())
+        recent_vol = float(np.asarray(vol_s.iloc[-5:].mean()).squeeze()) if len(df_wk) >= 5 else float(np.asarray(vol_s.mean()).squeeze())
+        prior_vol = float(np.asarray(vol_s.iloc[-15:-5].mean()).squeeze()) if len(df_wk) >= 15 else float(np.asarray(vol_s.mean()).squeeze())
         vol_trend_ratio = recent_vol / prior_vol if prior_vol > 0 else 1.0
         
         # Price trend: is price making higher highs or lower lows?
-        highs_5 = df_wk["High"].iloc[-5:].values
-        lows_5 = df_wk["Low"].iloc[-5:].values
-        price_trend_up = bool(float(highs_5[-1]) > float(highs_5[0]))  # Latest high > 5 weeks ago high
-        price_trend_down = bool(float(lows_5[-1]) < float(lows_5[0]))  # Latest low < 5 weeks ago low
+        highs_5 = np.asarray(high_s.iloc[-5:]).ravel()
+        lows_5 = np.asarray(low_s.iloc[-5:]).ravel()
+        price_trend_up = bool(float(highs_5[-1]) > float(highs_5[0])) if len(highs_5) > 0 else False
+        price_trend_down = bool(float(lows_5[-1]) < float(lows_5[0])) if len(lows_5) > 0 else False
         
         # Close position relative to range
         close_pct = (current_close - wk_low_26) / wk_range * 100 if wk_range > 0 else 50.0
@@ -3515,11 +3521,11 @@ def analyze_institutional_control(weekly_df, lookback=26):
             
             # Walk backwards from second-to-last week to find phase transition point
             for i in range(len(df_wk) - 2, -1, -1):
-                prev_close = float(df_wk["Close"].iloc[i])
-                prev_highs_5 = df_wk["High"].iloc[max(0, i-4):i+1].values
-                prev_lows_5 = df_wk["Low"].iloc[max(0, i-4):i+1].values
-                prev_vol_recent = float(df_wk["Volume"].iloc[max(0, i-4):i+1].mean())
-                prev_vol_prior = float(df_wk["Volume"].iloc[max(0, i-14):max(0, i-4)].mean()) if i >= 4 else prev_vol_recent
+                prev_close = float(np.asarray(close_s.iloc[i]).squeeze())
+                prev_highs_5 = np.asarray(high_s.iloc[max(0, i-4):i+1]).ravel()
+                prev_lows_5 = np.asarray(low_s.iloc[max(0, i-4):i+1]).ravel()
+                prev_vol_recent = float(np.asarray(vol_s.iloc[max(0, i-4):i+1].mean()).squeeze())
+                prev_vol_prior = float(np.asarray(vol_s.iloc[max(0, i-14):max(0, i-4)].mean()).squeeze()) if i >= 4 else prev_vol_recent
                 prev_vol_ratio = prev_vol_recent / prev_vol_prior if prev_vol_prior > 0 else 1.0
                 prev_trend_up = bool(float(prev_highs_5[-1]) > float(prev_highs_5[0])) if len(prev_highs_5) > 0 else False
                 prev_trend_down = bool(float(prev_lows_5[-1]) < float(prev_lows_5[0])) if len(prev_lows_5) > 0 else False
