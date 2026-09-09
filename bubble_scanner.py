@@ -183,7 +183,7 @@ def analyze_ticker(ticker: str, period: str = "3y", as_of_date=None) -> dict | N
 #  MULTI-TICKER
 # ═════════════════════════════════════════════════════════════════════════════
 
-def analyze_multiple(tickers: list[str], period: str = "3y", as_of_date=None, max_workers: int = 8) -> list[dict]:
+def analyze_multiple(tickers: list[str], period: str = "3y", as_of_date=None, max_workers: int = 4) -> list[dict]:
     results = []
     if not tickers:
         return results

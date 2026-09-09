@@ -714,7 +714,7 @@ def scan_single_stock(ticker, api_key, api_secret, data_source, use_fib=True, fi
         raise RuntimeError(f"scan_single_stock({ticker}): {type(e).__name__}: {e}") from e
 
 
-def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, fib_tol=2.0, use_strategy=False, max_workers=12):
+def scan_stocks(api_key, api_secret, data_source, watchlist=None, use_fib=True, fib_tol=2.0, use_strategy=False, max_workers=4):
     """
     Scan multiple stocks in parallel and return bullish + high confidence ones.
     Returns (top_setups, all_results).

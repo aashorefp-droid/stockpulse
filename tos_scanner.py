@@ -934,7 +934,7 @@ def scan_ticker(ticker: str, spy_weekly: pd.DataFrame = None,
     return result
 
 
-def scan_multiple(tickers: list[str], max_workers: int = 12) -> list[dict]:
+def scan_multiple(tickers: list[str], max_workers: int = 4) -> list[dict]:
     """Scan a list of tickers in parallel. Pre-fetches SPY for RS comparison."""
     try:
         spy = yf.Ticker("SPY")

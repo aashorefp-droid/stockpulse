@@ -182,7 +182,7 @@ def get_news_sentiment(ticker: str) -> str:
     return get_news_details(ticker)["label"]
 
 
-def get_news_sentiment_batch(tickers: list[str], max_workers: int = 16) -> dict:
+def get_news_sentiment_batch(tickers: list[str], max_workers: int = 4) -> dict:
     """Fetch news sentiment for multiple tickers in parallel. Returns {ticker: label}."""
     if not tickers:
         return {}

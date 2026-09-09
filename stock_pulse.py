@@ -131,8 +131,8 @@ if "_telegram_chat_id" not in st.session_state:
 
 @st.cache_resource
 def get_thread_pool():
-    """Shared ThreadPoolExecutor for I/O-bound work (API calls, Telegram sends)."""
-    return concurrent.futures.ThreadPoolExecutor(max_workers=16)
+    """Shared ThreadPoolExecutor for I/O-bound work (API calls, Telegram sends). Capped at 4 for 512MB RAM tier."""
+    return concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 @st.cache_resource
 def get_process_pool():
@@ -4988,6 +4988,10 @@ def _parallel_scan_with_progress(tickers, api_key, api_secret, data_source,
                               "connection reset", "remotedisconnected", "connection aborted"))
             errors.append((ticker, err_str, is_timeout))
 
+        # Periodic memory trimming to keep RSS bounded during long scans
+        if completed % 10 == 0:
+            trim_memory()
+
     trim_memory()
     return results, errors, no_data
 
@@ -7762,8 +7766,10 @@ try:
             _opt_status.caption("⏳ Fetching Alpaca options strategies...")
             def _fetch_opt(row):
                 try:
-                    _dir = "LONG" if str(row.get("verdict","")).upper() == "BULLISH" else (
-                        "SHORT" if str(row.get("verdict","")).upper() == "BEARISH" else None)
+                    _vrd = str(row.get("verdict","")).upper()
+                    if _vrd not in ("BULLISH", "BEARISH"):
+                        return "—"
+                    _dir = "LONG" if _vrd == "BULLISH" else "SHORT"
                     _price = float(row.get("price", 0)) if row.get("price") else 0
                     if _price <= 0:
                         return "N/A"
@@ -7779,10 +7785,11 @@ try:
                 return "N/A"
             from concurrent.futures import ThreadPoolExecutor
             _opt_rows = df_all.to_dict("records")
-            with ThreadPoolExecutor(max_workers=4) as _opt_pool:
+            with ThreadPoolExecutor(max_workers=3) as _opt_pool:
                 _opt_results = list(_opt_pool.map(_fetch_opt, _opt_rows))
             df_all["alpaca_options"] = _opt_results
             _opt_status.empty()
+            trim_memory()
 
         # Split: actionable (ENTER) vs filtered
         actionable = df_all[df_all["entry_status"] == "ENTER"].copy()
@@ -8177,7 +8184,7 @@ try:
             try:
                 _fri_raw = yf.download(
                     _wr_tickers, start=_fri_start, end=_fri_end,
-                    auto_adjust=True, progress=False, threads=True,
+                    auto_adjust=True, progress=False, threads=False,
                 )
                 _fri_closes = {}
                 if _fri_raw is not None and not _fri_raw.empty:
