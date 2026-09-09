@@ -28,6 +28,32 @@ import concurrent.futures
 import gc
 import ctypes
 
+import logging
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
+def _safe_float(val, default=0.0):
+    """Safely convert scalar, single-element Series, or array to float without triggering deprecation warnings."""
+    if val is None:
+        return default
+    try:
+        arr = np.asarray(val)
+        if arr.size == 0:
+            return default
+        scalar = arr.item() if arr.size == 1 else arr.ravel()[0]
+        if pd.isna(scalar):
+            return default
+        return float(scalar)
+    except Exception:
+        try:
+            return float(val)
+        except Exception:
+            return default
+
+
+_to_scalar_float = _safe_float
+
+
 def trim_memory():
     """Trigger Python GC and command glibc to trim cached arenas back to the OS."""
     gc.collect()
@@ -2191,21 +2217,6 @@ def _safe_int(val):
         return 0
 
 
-def _safe_float(val):
-    """Convert a value to float, treating NaN/None as 0."""
-    if val is None:
-        return 0.0
-    try:
-        if pd.isna(val):
-            return 0.0
-    except (TypeError, ValueError):
-        pass
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def get_options_bias_yfinance(ticker):
     """
     Fetch options chain data via yfinance (free, no API key needed).
@@ -2701,8 +2712,12 @@ def get_earnings_dates_yfinance(ticker):
         return []
     try:
         t = yf.Ticker(ticker)
-        ed = t.earnings_dates
-        if ed is None or ed.empty:
+        ed = None
+        try:
+            ed = t.earnings_dates
+        except Exception:
+            return []
+        if ed is None or not hasattr(ed, "empty") or ed.empty:
             return []
         events = []
         for ts, row in ed.iterrows():
@@ -3864,10 +3879,41 @@ def get_fundamentals(ticker):
     
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
+        info = None
+        try:
+            info = stock.info
+        except Exception:
+            info = None
         
-        if not info or "symbol" not in info:
-            return None
+        if not info or not isinstance(info, dict) or "symbol" not in info:
+            # Fallback to fast_info if quoteSummary / crumb failed (e.g. 401 on cloud platforms)
+            try:
+                fi = stock.fast_info
+                cp = _safe_float(getattr(fi, "last_price", None))
+                if cp <= 0:
+                    return None
+                hi52 = _safe_float(getattr(fi, "year_high", None))
+                lo52 = _safe_float(getattr(fi, "year_low", None))
+                mc = _safe_float(getattr(fi, "market_cap", None))
+                pos52 = ((cp - lo52) / (hi52 - lo52) * 100) if (hi52 and lo52 and hi52 > lo52) else 50
+                pct_hi = ((cp - hi52) / hi52 * 100) if hi52 and hi52 > 0 else None
+                mc_str = (f"${mc / 1e12:.1f}T" if mc >= 1e12 else f"${mc / 1e9:.1f}B" if mc >= 1e9 else f"${mc / 1e6:.1f}M" if mc >= 1e6 else f"${mc:,.0f}") if mc else "N/A"
+                return {
+                    "symbol": ticker, "pe_ratio": None, "forward_pe": None, "peg_ratio": None,
+                    "market_cap": mc, "market_cap_str": mc_str, "current_price": cp,
+                    "target_price": None, "target_low": None, "target_high": None, "target_upside": None,
+                    "revenue_growth": None, "earnings_growth": None, "revenue": None, "revenue_str": "N/A",
+                    "profit_margin": None, "gross_margin": None, "operating_margin": None,
+                    "roe": None, "roa": None, "debt_to_equity": None, "current_ratio": None,
+                    "beta": None, "short_ratio": None, "short_pct": None, "dividend_yield": None,
+                    "payout_ratio": None, "sector": "N/A", "industry": "N/A",
+                    "week52_high": hi52, "week52_low": lo52, "week52_position": pos52, "pct_from_high": pct_hi,
+                    "recommendation": "", "rec_mean": None, "num_analysts": None,
+                    "trailing_eps": None, "forward_eps": None, "valuation": "N/A", "valuation_color": "#6b7099",
+                    "flags": [],
+                }
+            except Exception:
+                return None
         
         pe_ratio = info.get("trailingPE") or info.get("forwardPE")
         forward_pe = info.get("forwardPE")
@@ -6461,15 +6507,17 @@ with tab_estimator:
         try:
             _vix_df_wk = yf.download("^VIX", period="2y", interval="1wk", progress=False)
             if _vix_df_wk is not None and not _vix_df_wk.empty:
+                if isinstance(_vix_df_wk.columns, pd.MultiIndex):
+                    _vix_df_wk.columns = _vix_df_wk.columns.get_level_values(0)
                 _vix_bd = pd.Timestamp(est_fib_backdate)
                 _vix_df_wk = _vix_df_wk[_vix_df_wk.index <= _vix_bd]
                 if not _vix_df_wk.empty:
                     _vix_c_s = _vix_df_wk["Close"].squeeze() if hasattr(_vix_df_wk["Close"], 'squeeze') else _vix_df_wk["Close"]
                     _vix_h_s = _vix_df_wk["High"].squeeze() if hasattr(_vix_df_wk["High"], 'squeeze') else _vix_df_wk["High"]
                     _vix_l_s = _vix_df_wk["Low"].squeeze() if hasattr(_vix_df_wk["Low"], 'squeeze') else _vix_df_wk["Low"]
-                    _vix_close = float(_vix_c_s.iloc[-1])
-                    _vix_hi10 = float(_vix_h_s.iloc[-10:].max())
-                    _vix_lo10 = float(_vix_l_s.iloc[-10:].min())
+                    _vix_close = _safe_float(_vix_c_s.iloc[-1])
+                    _vix_hi10 = _safe_float(_vix_h_s.iloc[-10:].max())
+                    _vix_lo10 = _safe_float(_vix_l_s.iloc[-10:].min())
                     _vix_rng = _vix_hi10 - _vix_lo10
                     _vix_pos = (_vix_close - _vix_lo10) / _vix_rng * 100 if _vix_rng > 0 else 50.0
                     _vix_zone = "HIGH" if _vix_pos >= 70 else ("LOW" if _vix_pos <= 30 else "MID")
@@ -6534,9 +6582,19 @@ with tab_estimator:
                 if not YFINANCE_AVAILABLE:
                     continue
                 
+                # Fetch daily data for week calculation
+                df_daily = yf.download(symbol, period="2y", progress=False)
+                if df_daily is None or df_daily.empty:
+                    continue
+                if isinstance(df_daily.columns, pd.MultiIndex):
+                    df_daily.columns = df_daily.columns.get_level_values(0)
+                
                 # ── Get last earnings date and calculate earnings week ──
                 try:
                     _est_earn_evts = get_earnings_dates_yfinance(symbol)
+                    if not _est_earn_evts:
+                        # Fallback to price/volume gap detection if yfinance crumb 401 or empty
+                        _est_earn_evts = detect_earnings_from_prices(df_daily)
                     if _est_earn_evts and len(_est_earn_evts) >= 2:
                         _est_last_earn_date = pd.Timestamp(_est_earn_evts[-1][0])
                         _est_prev_earn_date = pd.Timestamp(_est_earn_evts[-2][0])
@@ -6550,18 +6608,13 @@ with tab_estimator:
                     _est_last_earn_date = pd.Timestamp(est_fib_backdate)
                     _est_prev_earn_date = _est_last_earn_date - pd.Timedelta(days=90)
                 
-                # Fetch daily data for week calculation
-                df_daily = yf.download(symbol, period="2y", progress=False)
-                if df_daily is None or df_daily.empty:
-                    continue
-                
                 # Apply backdate filter
                 _est_bd = pd.Timestamp(est_fib_backdate)
                 df_daily = df_daily[df_daily.index <= _est_bd]
                 if df_daily.empty:
                     continue
                 
-                _wk_close = float(df_daily["Close"].iloc[-1])
+                _wk_close = _safe_float(df_daily["Close"].iloc[-1])
                 
                 # Calculate week containing earnings date (Monday-Friday)
                 _wk_start_d = _est_last_earn_date - pd.Timedelta(days=_est_last_earn_date.weekday())
@@ -6575,8 +6628,8 @@ with tab_estimator:
                 if _wk_slice.empty:
                     _wk_slice = df_daily.tail(5)
                 
-                _wk_hi10 = float(_wk_slice["High"].max())
-                _wk_lo10 = float(_wk_slice["Low"].min())
+                _wk_hi10 = _safe_float(_wk_slice["High"].max())
+                _wk_lo10 = _safe_float(_wk_slice["Low"].min())
                 _wk_rng = _wk_hi10 - _wk_lo10
                 _wk_pos = (_wk_close - _wk_lo10) / _wk_rng * 100 if _wk_rng > 0 else 50.0
                 if _wk_pos >= 70:
@@ -6647,14 +6700,14 @@ with tab_estimator:
                         # Fallback to last 60 days if exact swing dates not found
                         _earn_slice = df_daily.tail(60)
                     
-                    _earn_hi = float(_earn_slice["High"].max())
-                    _earn_lo = float(_earn_slice["Low"].min())
+                    _earn_hi = _safe_float(_earn_slice["High"].max())
+                    _earn_lo = _safe_float(_earn_slice["Low"].min())
                     _earn_rng = _earn_hi - _earn_lo
                     
                     # Get close on last earnings date
                     _earn_close_slice = df_daily[_earn_dates == _est_last_earn_date.date()]
                     if not _earn_close_slice.empty:
-                        _est_earn_close = float(_earn_close_slice["Close"].iloc[-1])
+                        _est_earn_close = _safe_float(_earn_close_slice["Close"].iloc[-1])
                     else:
                         _est_earn_close = _wk_close
                     
@@ -6669,6 +6722,8 @@ with tab_estimator:
                 try:
                     df_wk = yf.download(symbol, period="2y", interval="1wk", progress=False)
                     if df_wk is not None and not df_wk.empty:
+                        if isinstance(df_wk.columns, pd.MultiIndex):
+                            df_wk.columns = df_wk.columns.get_level_values(0)
                         _wk_bd = pd.Timestamp(est_fib_backdate)
                         df_wk = df_wk[df_wk.index <= _wk_bd]
                         if not df_wk.empty:
@@ -6720,7 +6775,7 @@ with tab_estimator:
                 _est_live_prices = {}
                 for _ltk in _est_live_tickers:
                     try:
-                        _est_live_prices[_ltk] = float(_est_lp_series[_ltk]) if _ltk in _est_lp_series.index else float(yf.Ticker(_ltk).fast_info.last_price)
+                        _est_live_prices[_ltk] = _safe_float(_est_lp_series[_ltk]) if _ltk in _est_lp_series.index else _safe_float(getattr(yf.Ticker(_ltk).fast_info, 'last_price', None))
                     except Exception:
                         _est_live_prices[_ltk] = None
             except Exception:
@@ -6926,13 +6981,14 @@ with tab_sector:
         fib_rows = []
         for etf, info in SECTOR_ETFS.items():
             try:
-                # Get weekly bars for the sector ETF (use yfinance for reliability)
                 if YFINANCE_AVAILABLE:
                     df = yf.download(etf, period="2y", interval="1wk", progress=False)
                 else:
                     continue
                 if df is None or df.empty:
                     continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
                 # Apply backdate filter — use data up to (and including) sector_fib_backdate
                 _bd = pd.Timestamp(sector_fib_backdate)
                 df = df[df.index <= _bd]
@@ -6941,9 +6997,9 @@ with tab_sector:
                 _sc = df["Close"].squeeze() if hasattr(df["Close"], 'squeeze') else df["Close"]
                 _sh = df["High"].squeeze() if hasattr(df["High"], 'squeeze') else df["High"]
                 _sl = df["Low"].squeeze() if hasattr(df["Low"], 'squeeze') else df["Low"]
-                close = float(_sc.iloc[-1])
-                wk_hi = float(_sh.iloc[-10:].max())
-                wk_lo = float(_sl.iloc[-10:].min())
+                close = _safe_float(_sc.iloc[-1])
+                wk_hi = _safe_float(_sh.iloc[-10:].max())
+                wk_lo = _safe_float(_sl.iloc[-10:].min())
                 wk_range = wk_hi - wk_lo
                 wk_pos_pct = (close - wk_lo) / wk_range * 100 if wk_range > 0 else 50.0
                 if wk_pos_pct >= 70:
@@ -7237,6 +7293,8 @@ with tab_scan_holdings:
                     if _hld_df_wk is None or _hld_df_wk.empty:
                         st.warning(f"{_hld_sym}: No weekly data")
                         continue
+                    if isinstance(_hld_df_wk.columns, pd.MultiIndex):
+                        _hld_df_wk.columns = _hld_df_wk.columns.get_level_values(0)
                     _hld_bd = pd.Timestamp(holdings_fib_backdate)
                     _hld_df_wk = _hld_df_wk[_hld_df_wk.index <= _hld_bd]
                     if _hld_df_wk.empty:
@@ -7245,9 +7303,9 @@ with tab_scan_holdings:
                     _hc = _hld_df_wk["Close"].squeeze() if hasattr(_hld_df_wk["Close"], 'squeeze') else _hld_df_wk["Close"]
                     _hh = _hld_df_wk["High"].squeeze() if hasattr(_hld_df_wk["High"], 'squeeze') else _hld_df_wk["High"]
                     _hl = _hld_df_wk["Low"].squeeze() if hasattr(_hld_df_wk["Low"], 'squeeze') else _hld_df_wk["Low"]
-                    _hld_close = float(_hc.iloc[-1])
-                    _hld_wk_hi = float(_hh.iloc[-10:].max())
-                    _hld_wk_lo = float(_hl.iloc[-10:].min())
+                    _hld_close = _safe_float(_hc.iloc[-1])
+                    _hld_wk_hi = _safe_float(_hh.iloc[-10:].max())
+                    _hld_wk_lo = _safe_float(_hl.iloc[-10:].min())
                     _hld_wk_rng = _hld_wk_hi - _hld_wk_lo
                     _hld_wk_pos = (_hld_close - _hld_wk_lo) / _hld_wk_rng * 100 if _hld_wk_rng > 0 else 50.0
                     if _hld_wk_pos >= 70:
@@ -7266,7 +7324,9 @@ with tab_scan_holdings:
                             if _hld_earn_hist is None or _hld_earn_hist.empty:
                                 _hld_earn_close = _hld_close
                             else:
-                                _hld_earn_close = float(_hld_earn_hist["Close"].iloc[0])
+                                if isinstance(_hld_earn_hist.columns, pd.MultiIndex):
+                                    _hld_earn_hist.columns = _hld_earn_hist.columns.get_level_values(0)
+                                _hld_earn_close = _safe_float(_hld_earn_hist["Close"].iloc[0])
                             _hld_earn_pos = (_hld_earn_close - _hld_wk_lo) / _hld_wk_rng * 100 if _hld_wk_rng > 0 else 50.0
                             _hld_earn_zone = "HIGH" if _hld_earn_pos >= 70 else ("LOW" if _hld_earn_pos <= 30 else "MID")
                         else:
@@ -7356,7 +7416,7 @@ with tab_scan_holdings:
                     _hld_live_prices = {}
                     for _ltk in _hld_live_tks:
                         try:
-                            _hld_live_prices[_ltk] = float(_hld_lp_series[_ltk]) if _ltk in _hld_lp_series.index else float(yf.Ticker(_ltk).fast_info.last_price)
+                            _hld_live_prices[_ltk] = _safe_float(_hld_lp_series[_ltk]) if _ltk in _hld_lp_series.index else _safe_float(getattr(yf.Ticker(_ltk).fast_info, 'last_price', None))
                         except Exception:
                             _hld_live_prices[_ltk] = None
                 except Exception:
