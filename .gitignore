@@ -65,6 +65,9 @@ Documents - Shortcut.lnk
 bounce.bat
 start_backend.*
 start_frontend.*
+start_stockpulse.*
+stop_stockpulse.*
+run_stockpulse*
 prompt
 test.py
 
