@@ -45,6 +45,7 @@ frontend - Copy/
 go-backend - Copy/
 go-backend-scan-timeout2/
 go-backend/
+backend/
 frontend/
 node_modules/
 .next/
@@ -68,6 +69,9 @@ start_frontend.*
 start_stockpulse.*
 stop_stockpulse.*
 run_stockpulse*
+start_all.*
+stop_all.*
+run_all*
 prompt
 test.py
 
