@@ -22,6 +22,8 @@ env/
 *.sqlite3
 .watchlist_cache/
 *.log
+.gmail_cache/
+**/.gmail_cache/
 
 # ── Large Archives & Heavy Folders ──────────────────
 *.zip
@@ -45,10 +47,10 @@ frontend - Copy/
 go-backend - Copy/
 go-backend-scan-timeout2/
 go-backend/
-backend/
-frontend/
 node_modules/
+**/node_modules/
 .next/
+**/.next/
 *.tsbuildinfo
 
 # ── Scratch & Corrupted Files ───────────────────────

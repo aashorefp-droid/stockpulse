@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+
+:root { color-scheme: dark; }
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'Inter', sans-serif;
+}
+
+.card {
+  @apply bg-card border border-border rounded-xl p-4;
+}
+
+.badge-bullish  { @apply bg-green/10  text-green  border border-green/30  px-2 py-0.5 rounded text-xs font-semibold; }
+.badge-bearish  { @apply bg-red/10    text-red    border border-red/30    px-2 py-0.5 rounded text-xs font-semibold; }
+.badge-neutral  { @apply bg-muted/10  text-muted  border border-border    px-2 py-0.5 rounded text-xs font-semibold; }
+.badge-confirmed { @apply bg-green/10 text-green  border border-green/30  px-2 py-0.5 rounded text-xs font-semibold; }
+.badge-diverged  { @apply bg-yellow/10 text-yellow border border-yellow/30 px-2 py-0.5 rounded text-xs font-semibold; }

@@ -22,6 +22,8 @@ from config import (
     ALPACA_PAPER_API_KEY,
     ALPACA_PAPER_API_SECRET,
     ALPACA_PAPER_BASE_URL,
+    ALPACA_API_KEY,
+    ALPACA_API_SECRET,
 )
 import paper_config as pc
 
@@ -668,21 +670,35 @@ class PaperTrader:
         r["win_rate"] = round(wins / closed * 100, 1) if closed > 0 else 0
         return r
 
-    def get_alpaca_account(self):
-        """Fetch Alpaca paper account info."""
-        if not _alpaca_enabled():
-            return {"error": "Paper trading keys not configured"}
+    def get_alpaca_account(self, mode="paper"):
+        """Fetch Alpaca paper or live account info."""
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = "https://api.alpaca.markets/v2/account"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+                "Content-Type": "application/json",
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/account"
+            headers = _alpaca_headers()
         try:
-            resp = requests.get(
-                f"{ALPACA_PAPER_BASE_URL}/v2/account",
-                headers=_alpaca_headers(),
-                timeout=10,
-            )
+            resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
-                return resp.json()
-            return {"error": f"HTTP {resp.status_code}"}
+                data = resp.json()
+                data["_mode"] = mode
+                return data
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code, "_mode": mode}
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": str(e), "_mode": mode}
 
     def delete_trade(self, trade_id):
         self.db.execute("DELETE FROM paper_trades WHERE id=?", (trade_id,))
@@ -692,35 +708,63 @@ class PaperTrader:
         self.db.execute("DELETE FROM paper_trades")
         self.db.commit()
 
-    def get_alpaca_positions(self):
-        """Fetch open positions from Alpaca paper account."""
-        if not _alpaca_enabled():
-            return {"error": "Paper trading keys not configured"}
+    def get_alpaca_positions(self, mode="paper"):
+        """Fetch open positions from Alpaca paper or live account."""
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = "https://api.alpaca.markets/v2/positions"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+                "Content-Type": "application/json",
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/positions"
+            headers = _alpaca_headers()
         try:
-            resp = requests.get(
-                f"{ALPACA_PAPER_BASE_URL}/v2/positions",
-                headers=_alpaca_headers(),
-                timeout=10,
-            )
+            resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 return resp.json()
-            return {"error": f"HTTP {resp.status_code}"}
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
         except Exception as e:
             return {"error": str(e)}
 
-    def get_alpaca_orders(self, status="open", limit=20):
-        """Fetch recent orders from Alpaca paper account."""
-        if not _alpaca_enabled():
-            return {"error": "Paper trading keys not configured"}
+    def get_alpaca_orders(self, status="all", limit=20, mode="paper"):
+        """Fetch recent orders from Alpaca paper or live account."""
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = "https://api.alpaca.markets/v2/orders"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+                "Content-Type": "application/json",
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/orders"
+            headers = _alpaca_headers()
         try:
             resp = requests.get(
-                f"{ALPACA_PAPER_BASE_URL}/v2/orders",
-                headers=_alpaca_headers(),
+                url,
+                headers=headers,
                 params={"status": status, "limit": limit, "direction": "desc"},
                 timeout=10,
             )
             if resp.status_code == 200:
                 return resp.json()
-            return {"error": f"HTTP {resp.status_code}"}
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
         except Exception as e:
             return {"error": str(e)}
