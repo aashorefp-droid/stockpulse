@@ -9,7 +9,23 @@ Run:  streamlit run news_theme_scanner.py
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import streamlit as st
+try:
+    import streamlit as st
+except ImportError:
+    class _DummyStreamlit:
+        def cache_data(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        def cache_resource(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        def __getattr__(self, name):
+            def noop(*args, **kwargs):
+                return None
+            return noop
+    st = _DummyStreamlit()
 import pandas as pd
 import numpy as np
 import requests

@@ -5,7 +5,9 @@ from typing import Optional, List, Dict, Any
 from datetime import date, datetime
 import concurrent.futures
 
-sys.path.insert(0, r"C:\Users\malla\git\streamlit")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 import future_growth_scan as fgs
 
 router = APIRouter(prefix="/api/growth", tags=["growth"])

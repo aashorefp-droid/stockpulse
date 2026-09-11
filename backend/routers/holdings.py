@@ -8,7 +8,9 @@ from pydantic import BaseModel
 import pandas as pd
 import yfinance as yf
 
-sys.path.insert(0, r"C:\Users\malla\git\streamlit")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from backend.services.analysis import (
     calc_fib_levels, get_fundamentals, full_score_pipeline,
@@ -21,9 +23,9 @@ from backend.config import ALPACA_API_KEY, ALPACA_API_SECRET
 
 router = APIRouter(prefix="/api/holdings", tags=["holdings"])
 
-_DB_PATH = r"C:\Users\malla\git\streamlit\stockpulse_trades.db"
-_HOLDINGS_CSV = r"C:\Users\malla\git\streamlit\my_holdings.csv"
-_LEGACY_CSV = r"C:\Users\malla\git\streamlit\holdings.csv"
+_DB_PATH = os.path.join(_ROOT, "stockpulse_trades.db")
+_HOLDINGS_CSV = os.path.join(_ROOT, "my_holdings.csv")
+_LEGACY_CSV = os.path.join(_ROOT, "holdings.csv")
 
 
 def _safe_float(val, default=None):

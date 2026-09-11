@@ -5,7 +5,9 @@ from typing import Optional, List, Dict, Any
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, r"C:\Users\malla\git\streamlit")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 import bubble_scanner
 
 router = APIRouter(prefix="/api/bubble", tags=["bubble"])

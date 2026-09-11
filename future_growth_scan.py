@@ -6,7 +6,23 @@ Run standalone:  python future_growth_scan.py
 Or via Streamlit: streamlit run future_growth_scan.py
 """
 
-import streamlit as st
+try:
+    import streamlit as st
+except ImportError:
+    class _DummyStreamlit:
+        def cache_data(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        def cache_resource(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        def __getattr__(self, name):
+            def noop(*args, **kwargs):
+                return None
+            return noop
+    st = _DummyStreamlit()
 import yfinance as yf
 import pandas as pd
 from datetime import date, timedelta

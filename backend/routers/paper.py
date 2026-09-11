@@ -3,7 +3,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 
-sys.path.insert(0, r"C:\Users\malla\git\streamlit")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 from alpaca_paper import PaperTrader
 
 router = APIRouter(prefix="/api/paper", tags=["paper"])

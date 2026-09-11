@@ -3,10 +3,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 
-sys.path.insert(0, r"C:\Users\malla\git\streamlit")
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 router = APIRouter(prefix="/api/trades", tags=["trades"])
-_DB_PATH = r"C:\Users\malla\git\streamlit\stockpulse_trades.db"
+_DB_PATH = os.path.join(_ROOT, "stockpulse_trades.db")
 
 def _get_db():
     conn = sqlite3.connect(_DB_PATH, timeout=30)
