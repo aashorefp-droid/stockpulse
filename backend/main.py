@@ -60,6 +60,17 @@ app.include_router(plan.router)
 app.include_router(telegram.router)
 
 
+@app.get("/")
+def root():
+    return {
+        "service": "StockPulse API",
+        "status": "online",
+        "docs_url": "/docs",
+        "health_url": "/health",
+        "message": "StockPulse Backend API is running successfully on Render."
+    }
+
+
 @app.get("/health")
 def health():
     from backend.services.scheduler import scheduler as sched
