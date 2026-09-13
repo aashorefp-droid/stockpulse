@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useState, useCallback } from "react";
+import { fmtNum, fmtPrice } from "@/lib/format";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -290,7 +291,7 @@ export default function PaperTradingPage() {
           <div className="bg-surface/50 border border-border/60 rounded-lg p-4">
             <div className="text-xs font-semibold text-muted uppercase tracking-wider">Equity</div>
             <div className="text-2xl font-bold font-mono text-white mt-1">
-              ${account ? account.equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+              ${fmtNum(account?.equity, 2, "0.00")}
             </div>
             <div className="text-[11px] text-muted mt-1">Total portfolio value</div>
           </div>
@@ -298,7 +299,7 @@ export default function PaperTradingPage() {
           <div className="bg-surface/50 border border-border/60 rounded-lg p-4">
             <div className="text-xs font-semibold text-muted uppercase tracking-wider">Buying Power</div>
             <div className="text-2xl font-bold font-mono text-accent mt-1">
-              ${account ? account.buying_power.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+              ${fmtNum(account?.buying_power, 2, "0.00")}
             </div>
             <div className="text-[11px] text-muted mt-1">Available trading margin</div>
           </div>
@@ -306,9 +307,9 @@ export default function PaperTradingPage() {
           <div className="bg-surface/50 border border-border/60 rounded-lg p-4">
             <div className="text-xs font-semibold text-muted uppercase tracking-wider">Day P&L</div>
             <div className={`text-2xl font-bold font-mono mt-1 ${
-              (account?.day_pl || 0) >= 0 ? "text-bull" : "text-bear"
+              (Number(account?.day_pl) || 0) >= 0 ? "text-bull" : "text-bear"
             }`}>
-              {(account?.day_pl || 0) >= 0 ? "+" : ""}${account ? account.day_pl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+              {(Number(account?.day_pl) || 0) >= 0 ? "+" : ""}${fmtNum(account?.day_pl, 2, "0.00")}
             </div>
             <div className="text-[11px] text-muted mt-1">Today's unrealized shift</div>
           </div>
@@ -316,7 +317,7 @@ export default function PaperTradingPage() {
           <div className="bg-surface/50 border border-border/60 rounded-lg p-4">
             <div className="text-xs font-semibold text-muted uppercase tracking-wider">Cash</div>
             <div className="text-2xl font-bold font-mono text-white mt-1">
-              ${account ? account.cash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "0.00"}
+              ${fmtNum(account?.cash, 2, "0.00")}
             </div>
             <div className="text-[11px] text-muted mt-1">Settled currency balance</div>
           </div>
@@ -334,16 +335,16 @@ export default function PaperTradingPage() {
           <div className="bg-surface/40 border border-border/50 rounded-lg p-3">
             <div className="text-[11px] text-muted font-medium">Total P&L</div>
             <div className={`text-lg font-bold font-mono mt-0.5 ${
-              (stats?.total_pnl || 0) >= 0 ? "text-bull" : "text-bear"
+              (Number(stats?.total_pnl) || 0) >= 0 ? "text-bull" : "text-bear"
             }`}>
-              {(stats?.total_pnl || 0) >= 0 ? "+" : ""}${stats ? stats.total_pnl.toFixed(2) : "0.00"}
+              {(Number(stats?.total_pnl) || 0) >= 0 ? "+" : ""}${fmtNum(stats?.total_pnl, 2, "0.00")}
             </div>
           </div>
 
           <div className="bg-surface/40 border border-border/50 rounded-lg p-3">
             <div className="text-[11px] text-muted font-medium">Win Rate</div>
             <div className="text-lg font-bold font-mono text-white mt-0.5">
-              {stats ? stats.win_rate.toFixed(1) : "0.0"}%
+              {fmtNum(stats?.win_rate, 1, "0.0")}%
             </div>
             <div className="text-[10px] text-muted">
               {stats?.wins || 0}W / {stats?.losses || 0}L
@@ -363,23 +364,23 @@ export default function PaperTradingPage() {
           <div className="bg-surface/40 border border-border/50 rounded-lg p-3">
             <div className="text-[11px] text-muted font-medium">Best Trade</div>
             <div className="text-lg font-bold font-mono text-bull mt-0.5">
-              {stats?.best_trade ? `+$${stats.best_trade.toFixed(2)}` : "—"}
+              {stats?.best_trade != null ? `+$${fmtNum(stats.best_trade, 2)}` : "—"}
             </div>
           </div>
 
           <div className="bg-surface/40 border border-border/50 rounded-lg p-3">
             <div className="text-[11px] text-muted font-medium">Worst Trade</div>
             <div className="text-lg font-bold font-mono text-bear mt-0.5">
-              {stats?.worst_trade ? `$${stats.worst_trade.toFixed(2)}` : "—"}
+              {stats?.worst_trade != null ? `$${fmtNum(stats.worst_trade, 2)}` : "—"}
             </div>
           </div>
 
           <div className="bg-surface/40 border border-border/50 rounded-lg p-3">
             <div className="text-[11px] text-muted font-medium">Avg P&L %</div>
             <div className={`text-lg font-bold font-mono mt-0.5 ${
-              (stats?.avg_pnl_pct || 0) >= 0 ? "text-bull" : "text-bear"
+              (Number(stats?.avg_pnl_pct) || 0) >= 0 ? "text-bull" : "text-bear"
             }`}>
-              {(stats?.avg_pnl_pct || 0) >= 0 ? "+" : ""}{stats ? stats.avg_pnl_pct.toFixed(2) : "0.00"}%
+              {(Number(stats?.avg_pnl_pct) || 0) >= 0 ? "+" : ""}{fmtNum(stats?.avg_pnl_pct, 2, "0.00")}%
             </div>
           </div>
         </div>
@@ -513,10 +514,10 @@ export default function PaperTradingPage() {
                               {t.direction}
                             </span>
                           </td>
-                          <td className="px-4 py-3 font-mono text-white">${t.entry_price.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-bear">${t.stop_price.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-bull">${t.t1_price.toFixed(2)}</td>
-                          <td className="px-4 py-3 font-mono text-bull">${t.t2_price.toFixed(2)}</td>
+                          <td className="px-4 py-3 font-mono text-white">{fmtPrice(t.entry_price)}</td>
+                          <td className="px-4 py-3 font-mono text-bear">{fmtPrice(t.stop_price)}</td>
+                          <td className="px-4 py-3 font-mono text-bull">{fmtPrice(t.t1_price)}</td>
+                          <td className="px-4 py-3 font-mono text-bull">{fmtPrice(t.t2_price)}</td>
                           <td className="px-4 py-3 font-mono text-white">{t.shares}</td>
                           <td className="px-4 py-3 text-xs text-muted">{t.scenario || "—"}</td>
                           <td className="px-4 py-3 text-right">
@@ -583,15 +584,15 @@ export default function PaperTradingPage() {
                                 {t.direction}
                               </span>
                             </td>
-                            <td className="px-4 py-3 font-mono text-white">${t.entry_price.toFixed(2)}</td>
+                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(t.entry_price)}</td>
                             <td className="px-4 py-3 font-mono text-white">
-                              {t.exit_price ? `$${t.exit_price.toFixed(2)}` : "—"}
+                              {fmtPrice(t.exit_price)}
                             </td>
                             <td className="px-4 py-3 font-mono text-white">{t.shares}</td>
                             <td className="px-4 py-3 font-mono font-bold">
                               {t.pnl_dollars !== null && t.pnl_dollars !== undefined ? (
-                                <span className={t.pnl_dollars >= 0 ? "text-bull" : "text-bear"}>
-                                  {t.pnl_dollars >= 0 ? "+" : ""}${t.pnl_dollars.toFixed(2)}
+                                <span className={Number(t.pnl_dollars) >= 0 ? "text-bull" : "text-bear"}>
+                                  {Number(t.pnl_dollars) >= 0 ? "+" : ""}${fmtNum(t.pnl_dollars, 2)}
                                 </span>
                               ) : (
                                 "—"
@@ -599,8 +600,8 @@ export default function PaperTradingPage() {
                             </td>
                             <td className="px-4 py-3 font-mono">
                               {t.pnl_pct !== null && t.pnl_pct !== undefined ? (
-                                <span className={t.pnl_pct >= 0 ? "text-bull" : "text-bear"}>
-                                  {t.pnl_pct >= 0 ? "+" : ""}{t.pnl_pct.toFixed(2)}%
+                                <span className={Number(t.pnl_pct) >= 0 ? "text-bull" : "text-bear"}>
+                                  {Number(t.pnl_pct) >= 0 ? "+" : ""}{fmtNum(t.pnl_pct, 2)}%
                                 </span>
                               ) : (
                                 "—"
@@ -661,13 +662,13 @@ export default function PaperTradingPage() {
                             <td className="px-4 py-3 font-mono">{d.total_trades}</td>
                             <td className="px-4 py-3 font-mono text-bull">{d.wins}</td>
                             <td className="px-4 py-3 font-mono text-bear">{d.losses}</td>
-                            <td className="px-4 py-3 font-mono text-white">{winRate.toFixed(1)}%</td>
+                            <td className="px-4 py-3 font-mono text-white">{fmtNum(winRate, 1, "0.0")}%</td>
                             <td className="px-4 py-3 font-mono text-accent">{d.open_trades}</td>
-                            <td className={`px-4 py-3 font-mono font-bold ${d.total_pnl >= 0 ? "text-bull" : "text-bear"}`}>
-                              {d.total_pnl >= 0 ? "+" : ""}${d.total_pnl.toFixed(2)}
+                            <td className={`px-4 py-3 font-mono font-bold ${Number(d.total_pnl) >= 0 ? "text-bull" : "text-bear"}`}>
+                              {Number(d.total_pnl) >= 0 ? "+" : ""}${fmtNum(d.total_pnl, 2, "0.00")}
                             </td>
-                            <td className={`px-4 py-3 font-mono ${d.avg_pnl_pct >= 0 ? "text-bull" : "text-bear"}`}>
-                              {d.avg_pnl_pct >= 0 ? "+" : ""}{d.avg_pnl_pct ? d.avg_pnl_pct.toFixed(2) : "0.00"}%
+                            <td className={`px-4 py-3 font-mono ${Number(d.avg_pnl_pct) >= 0 ? "text-bull" : "text-bear"}`}>
+                              {Number(d.avg_pnl_pct) >= 0 ? "+" : ""}{fmtNum(d.avg_pnl_pct, 2, "0.00")}%
                             </td>
                           </tr>
                         );
@@ -718,15 +719,15 @@ export default function PaperTradingPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3 font-mono text-white">{p.qty}</td>
-                            <td className="px-4 py-3 font-mono text-white">${parseFloat(p.avg_entry_price || 0).toFixed(2)}</td>
-                            <td className="px-4 py-3 font-mono text-white">${parseFloat(p.current_price || 0).toFixed(2)}</td>
+                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.avg_entry_price)}</td>
+                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.current_price)}</td>
                             <td className={`px-4 py-3 font-mono font-bold ${pl >= 0 ? "text-bull" : "text-bear"}`}>
-                              {pl >= 0 ? "+" : ""}${pl.toFixed(2)}
+                              {pl >= 0 ? "+" : ""}${fmtNum(pl, 2)}
                             </td>
                             <td className={`px-4 py-3 font-mono font-bold ${plpc >= 0 ? "text-bull" : "text-bear"}`}>
-                              {plpc >= 0 ? "+" : ""}{plpc.toFixed(2)}%
+                              {plpc >= 0 ? "+" : ""}{fmtNum(plpc, 2)}%
                             </td>
-                            <td className="px-4 py-3 font-mono text-white">${parseFloat(p.market_value || 0).toFixed(2)}</td>
+                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.market_value)}</td>
                           </tr>
                         );
                       })

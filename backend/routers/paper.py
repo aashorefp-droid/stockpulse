@@ -146,8 +146,20 @@ def get_alpaca_orders(status: str = "all", limit: int = 20, mode: str = "paper")
 def get_paper_stats():
     pt = PaperTrader()
     try:
-        stats = pt.get_overall_stats()
-        return {"status": "ok", "stats": stats}
+        stats = pt.get_overall_stats() or {}
+        cleaned_stats = {
+            "total_trades": int(stats.get("total_trades") or 0),
+            "closed": int(stats.get("closed") or 0),
+            "open_count": int(stats.get("open_count") or 0),
+            "wins": int(stats.get("wins") or 0),
+            "losses": int(stats.get("losses") or 0),
+            "total_pnl": float(stats.get("total_pnl") or 0.0),
+            "avg_pnl_pct": float(stats.get("avg_pnl_pct") or 0.0),
+            "best_trade": float(stats["best_trade"]) if stats.get("best_trade") is not None else None,
+            "worst_trade": float(stats["worst_trade"]) if stats.get("worst_trade") is not None else None,
+            "win_rate": float(stats.get("win_rate") or 0.0),
+        }
+        return {"status": "ok", "stats": cleaned_stats}
     finally:
         pt.close()
 
