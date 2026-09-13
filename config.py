@@ -30,13 +30,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 WATCHLIST_BOT_TOKEN = os.getenv("WATCHLIST_BOT_TOKEN", "")
 WATCHLIST_CHAT_ID = os.getenv("WATCHLIST_CHAT_ID", "")
 
-# ── Alpaca API (real-time market data) ──────────────────────────────────────
+# ── Alpaca API (real-time market data / live brokerage) ─────────────────────
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
 
 # ── Alpaca Paper Trading API ───────────────────────────────────────────────
-ALPACA_PAPER_API_KEY = os.getenv("ALPACA_PAPER_API_KEY", "")
-ALPACA_PAPER_API_SECRET = os.getenv("ALPACA_PAPER_API_SECRET", "")
+ALPACA_PAPER_API_KEY = os.getenv("ALPACA_PAPER_API_KEY") or ALPACA_API_KEY
+ALPACA_PAPER_API_SECRET = os.getenv("ALPACA_PAPER_API_SECRET") or ALPACA_API_SECRET
 ALPACA_PAPER_BASE_URL = os.getenv("ALPACA_PAPER_BASE_URL", "https://paper-api.alpaca.markets")
 
 # ── Polygon API (earnings / delayed bars) ──────────────────────────────────
