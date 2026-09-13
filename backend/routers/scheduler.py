@@ -118,3 +118,40 @@ def trigger_holdings_summary():
     from backend.services.scheduler import holdings_summary_job
     holdings_summary_job()
     return {"status": "holdings summary completed"}
+
+
+@router.post("/run-default50-scan")
+def trigger_default50_scan():
+    """Manually trigger the 8:00 AM Default 50 pre-market scan."""
+    from backend.services.scheduler import default50_premarket_scan_job
+    res = default50_premarket_scan_job()
+    return {
+        "status": "default50_premarket_scan completed",
+        "valid_count": res.get("valid_count", 0),
+        "scanned_count": res.get("scanned_count", 0),
+    }
+
+
+@router.post("/run-default50-near-entry")
+def trigger_default50_near_entry():
+    """Manually trigger the 8:30 AM Default 50 Near Entry check & alert."""
+    from backend.services.scheduler import default50_near_entry_alert_job
+    res = default50_near_entry_alert_job()
+    return {
+        "status": "default50_near_entry_alert completed",
+        "near_count": res.get("count", 0),
+        "items": [
+            {
+                "ticker": item.get("ticker"),
+                "direction": item.get("direction"),
+                "current_price": item.get("current_price"),
+                "entry": item.get("entry"),
+                "stop_loss": item.get("stop_loss"),
+                "target1": item.get("target1"),
+                "target2": item.get("target2"),
+                "diff_pct": item.get("diff_pct"),
+                "scenario": item.get("scenario_label"),
+            }
+            for item in res.get("items", [])
+        ],
+    }

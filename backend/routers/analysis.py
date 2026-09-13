@@ -57,30 +57,73 @@ def _clean_nans(obj):
 
 
 @router.get("/{ticker}")
-async def get_stock_analysis(ticker: str):
+async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
     ticker = ticker.upper().strip()
+    from datetime import datetime
 
-    # ── 1. Chart data (required — 404 if missing) ─────────────────────────────
-    chart_data = _safe(get_ohlcv_for_chart, [], ticker, "6mo")
-    if not chart_data:
-        raise HTTPException(404, f"No price data found for {ticker}")
-    current_price = chart_data[-1]["close"]
-
-    # ── 2. Daily bars ─────────────────────────────────────────────────────────
-    end = date.today(); start = end - timedelta(days=365)
-    daily_df = _safe(get_daily_bars_alpaca, None, ticker, str(start), str(end), ALPACA_API_KEY, ALPACA_API_SECRET)
-    if daily_df is None or daily_df.empty:
+    as_of_date = None
+    if as_of:
         try:
-            daily_df = yf.Ticker(ticker).history(period="1y", interval="1d")
-            daily_df.columns = [c.lower() for c in daily_df.columns]
+            as_of_date = datetime.strptime(as_of.strip(), "%Y-%m-%d").date()
         except Exception:
-            daily_df = None
+            as_of_date = None
 
-    # ── 3. Hourly bars ────────────────────────────────────────────────────────
-    hourly_df = _safe(get_hourly_bars_yfinance, None, ticker, str(end - timedelta(days=5)), str(end))
+    df_future = pd.DataFrame()
+
+    if as_of_date:
+        # ── Backtest Mode: slice history up to as_of_date ──────────────────────
+        target_ts = pd.Timestamp(as_of_date)
+        try:
+            df = yf.Ticker(ticker).history(period="3y", interval="1d")
+            if df.empty:
+                raise HTTPException(404, f"No price data found for {ticker}")
+            df.columns = [c.lower() for c in df.columns]
+            if hasattr(df.index, "tz_localize") and df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+
+            df_hist = df[df.index <= target_ts]
+            if df_hist.empty or len(df_hist) < 20:
+                raise HTTPException(404, f"Not enough historical data for {ticker} as of {as_of}")
+
+            df_future = df[df.index > target_ts]
+            daily_df = df_hist
+            current_price = round(float(daily_df["close"].iloc[-1]), 2)
+
+            chart_slice = df_hist.tail(126)
+            chart_data = []
+            for i in range(len(chart_slice)):
+                chart_data.append({
+                    "time": chart_slice.index[i].strftime("%Y-%m-%d"),
+                    "open": round(float(chart_slice["open"].iloc[i]), 2),
+                    "high": round(float(chart_slice["high"].iloc[i]), 2),
+                    "low": round(float(chart_slice["low"].iloc[i]), 2),
+                    "close": round(float(chart_slice["close"].iloc[i]), 2),
+                    "volume": int(chart_slice["volume"].iloc[i]) if "volume" in chart_slice else 0,
+                })
+            hourly_df = None
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"Error fetching backtest data for {ticker}: {str(e)}")
+    else:
+        # ── Live Mode (Today) ──────────────────────────────────────────────────
+        chart_data = _safe(get_ohlcv_for_chart, [], ticker, "6mo")
+        if not chart_data:
+            raise HTTPException(404, f"No price data found for {ticker}")
+        current_price = chart_data[-1]["close"]
+
+        end = date.today(); start = end - timedelta(days=365)
+        daily_df = _safe(get_daily_bars_alpaca, None, ticker, str(start), str(end), ALPACA_API_KEY, ALPACA_API_SECRET)
+        if daily_df is None or daily_df.empty:
+            try:
+                daily_df = yf.Ticker(ticker).history(period="1y", interval="1d")
+                daily_df.columns = [c.lower() for c in daily_df.columns]
+            except Exception:
+                daily_df = None
+
+        hourly_df = _safe(get_hourly_bars_yfinance, None, ticker, str(end - timedelta(days=5)), str(end))
 
     # ── 4. Full scoring pipeline (objective — no direction input) ─────────────
-    import pandas as pd
     _daily = daily_df if daily_df is not None else pd.DataFrame()
 
     scored     = _safe(full_score_pipeline, {"verdict": "NEUTRAL", "confidence": "N/A", "score": 0, "signals": []}, _daily)
@@ -148,9 +191,37 @@ async def get_stock_analysis(ticker: str):
 
     stock_verdict = _safe(get_stock_verdict, None, ticker)
 
+    backtest_outcome = None
+    if as_of_date and not df_future.empty:
+        try:
+            from backend.services.trade_backtest import evaluate_trade_outcome
+            subsequent_bars = []
+            for i in range(len(df_future.head(60))):
+                subsequent_bars.append({
+                    "time": df_future.index[i].strftime("%Y-%m-%d"),
+                    "open": round(float(df_future["open"].iloc[i]), 2),
+                    "high": round(float(df_future["high"].iloc[i]), 2),
+                    "low": round(float(df_future["low"].iloc[i]), 2),
+                    "close": round(float(df_future["close"].iloc[i]), 2),
+                    "volume": int(df_future["volume"].iloc[i]) if "volume" in df_future else 0,
+                })
+            backtest_outcome = evaluate_trade_outcome(
+                subsequent_bars=subsequent_bars,
+                direction=direction,
+                entry=trade_levels.get("entry", current_price),
+                stop_loss=trade_levels.get("stop_loss"),
+                target1=trade_levels.get("target1"),
+                target2=trade_levels.get("target2"),
+            )
+        except Exception as e:
+            backtest_outcome = {"error": str(e)}
+
     return _clean_nans({
-        "ticker":        ticker,
-        "current_price": current_price,
+        "ticker":            ticker,
+        "is_backtest":       bool(as_of_date),
+        "as_of":             as_of.strip() if as_of_date and as_of else None,
+        "backtest_outcome":  backtest_outcome,
+        "current_price":     current_price,
         "direction":     direction,
         "chart_data":    chart_data,
         "verdict":       verdict,

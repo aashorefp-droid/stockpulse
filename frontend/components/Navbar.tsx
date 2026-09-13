@@ -8,8 +8,19 @@ export default function Navbar() {
   const router = useRouter();
 
   const search = () => {
-    const t = q.trim().toUpperCase();
-    if (t) { router.push(`/stock/${t}`); setQ(""); }
+    const raw = q.trim();
+    if (!raw) return;
+    const parts = raw.split(/[\s,]+/);
+    const t = parts[0].toUpperCase();
+    const dateMatch = parts[1] && /^\d{4}-\d{2}-\d{2}$/.test(parts[1]) ? parts[1] : "";
+    if (t) {
+      if (dateMatch) {
+        router.push(`/stock/${t}?as_of=${dateMatch}`);
+      } else {
+        router.push(`/stock/${t}`);
+      }
+      setQ("");
+    }
   };
 
   return (
@@ -38,8 +49,8 @@ export default function Navbar() {
 
         <div className="ml-auto flex gap-2">
           <input
-            className="bg-surface border border-border rounded-lg px-3 py-1.5 text-sm text-white placeholder-muted focus:outline-none focus:border-accent w-40"
-            placeholder="Search ticker…"
+            className="bg-surface border border-border rounded-lg px-3 py-1.5 text-sm text-white placeholder-muted focus:outline-none focus:border-accent w-48 lg:w-64"
+            placeholder="Search ticker (e.g. AAPL 2024-05-15)…"
             value={q}
             onChange={(e) => setQ(e.target.value.toUpperCase())}
             onKeyDown={(e) => e.key === "Enter" && search()}

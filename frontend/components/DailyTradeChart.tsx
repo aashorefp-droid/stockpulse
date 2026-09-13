@@ -37,6 +37,13 @@ export default function DailyTradeChart({
   const [historyData, setHistoryData] = useState<any>(null);
   const [historyDays, setHistoryDays] = useState(365);
 
+  useEffect(() => {
+    if (initialAsOfDate !== undefined) {
+      setAsOfDate(initialAsOfDate);
+      setBacktestMode(Boolean(initialAsOfDate));
+    }
+  }, [initialAsOfDate]);
+
   // Fetch daily chart data with calculated trade levels (and backtest outcome if asOfDate is active)
   useEffect(() => {
     let isMounted = true;

@@ -102,10 +102,11 @@ export interface StockVerdict {
   fetched_at?: string;
 }
 
-export async function fetchAnalysis(ticker: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/analysis/${ticker}`, {
-    next: { revalidate: 60 },
-  });
+export async function fetchAnalysis(ticker: string, asOf?: string): Promise<any> {
+  const url = asOf
+    ? `${API_BASE}/api/analysis/${ticker}?as_of=${encodeURIComponent(asOf.trim())}`
+    : `${API_BASE}/api/analysis/${ticker}`;
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to fetch ${ticker}`);

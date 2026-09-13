@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.routers import (
     analysis, scanner, earnings, tracker, macro,
-    sector, bubble, tos, growth, news, paper, holdings, trades, plan
+    sector, bubble, tos, growth, news, paper, holdings, trades, plan, telegram
 )
 from backend.routers import scheduler as scheduler_router
 from backend.services.scheduler import scheduler, setup_scheduler
@@ -57,6 +57,7 @@ app.include_router(paper.router)
 app.include_router(holdings.router)
 app.include_router(trades.router)
 app.include_router(plan.router)
+app.include_router(telegram.router)
 
 
 @app.get("/health")

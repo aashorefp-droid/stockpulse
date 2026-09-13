@@ -24,6 +24,7 @@ env/
 *.log
 .gmail_cache/
 **/.gmail_cache/
+data/
 
 # ── Large Archives & Heavy Folders ──────────────────
 *.zip

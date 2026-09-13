@@ -14,6 +14,7 @@ EPS poll logic (runs every 1 min, 3–6 PM CST):
 import logging
 import sys
 import os
+import json
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -433,6 +434,290 @@ def stop_eps_polling():
         logger.info("[scheduler] EPS polling stopped")
 
 
+# ── Default 50 Pre-Market & 8:30 AM Near-Entry Jobs ───────────────────────────
+
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data")
+_DEFAULT50_CACHE_FILE = os.path.join(_CACHE_DIR, "default50_premarket_cache.json")
+_DEFAULT50_SCAN_CACHE: dict = {}
+
+
+def default50_premarket_scan_job() -> dict:
+    """
+    8:00 AM CST (Mon-Fri) — Scan all 50 tickers in Default Watchlist.
+    Caches trade setups (entry, stop, targets, direction, grade, options)
+    ready for 8:30 AM market open Near Entry evaluation.
+    """
+    global _DEFAULT50_SCAN_CACHE
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from backend.services.scanner import scan_single, WATCHLISTS
+
+    tickers = WATCHLISTS.get("default", [])
+    logger.info(f"[scheduler] Default 50 pre-market scan started for {len(tickers)} tickers at 8:00 AM CT")
+
+    valid_setups = []
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(scan_single, t): t for t in tickers}
+        for fut in as_completed(futures):
+            try:
+                r = fut.result()
+                if not r.get("error") and r.get("entry") is not None and r.get("price", 0) > 0:
+                    valid_setups.append(r)
+            except Exception as e:
+                logger.warning(f"[scheduler] Error scanning ticker: {e}")
+
+    # Sort setups by score descending
+    valid_setups.sort(key=lambda x: -(x.get("score") or 0))
+
+    long_count = sum(1 for r in valid_setups if r.get("direction") == "LONG" and r.get("verdict") != "NEUTRAL")
+    short_count = sum(1 for r in valid_setups if r.get("direction") == "SHORT" and r.get("verdict") != "NEUTRAL")
+    neutral_count = sum(1 for r in valid_setups if r.get("verdict") == "NEUTRAL")
+
+    now_dt = datetime.now(CST)
+    _DEFAULT50_SCAN_CACHE = {
+        "date": today_str(),
+        "timestamp": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        "scanned_count": len(tickers),
+        "valid_count": len(valid_setups),
+        "items": valid_setups,
+    }
+
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        with open(_DEFAULT50_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(_DEFAULT50_SCAN_CACHE, f, indent=2)
+    except Exception as e:
+        logger.warning(f"[scheduler] Failed writing Default 50 cache to disk: {e}")
+
+    # Dispatch pre-market Telegram confirmation
+    now_str = now_dt.strftime("%I:%M %p CT")
+    msg = (
+        f"🌅 <b>StockPulse Default 50 Pre-Market Scan ({now_str})</b>\n"
+        f"Scanned: {len(tickers)} tickers · {len(valid_setups)} valid setups ready\n"
+        f"🟢 Long: {long_count}  |  🔴 Short: {short_count}  |  ⚪ Neutral: {neutral_count}\n\n"
+        f"🔒 <i>Setups locked with Entry, Stop, and Targets. Standing by for 8:30 AM CT market open to evaluate Near Entry tickers.</i>"
+    )
+    send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
+    logger.info(f"[scheduler] Default 50 pre-market scan complete: {len(valid_setups)} setups saved")
+    return _DEFAULT50_SCAN_CACHE
+
+
+def _fetch_default50_open_prices(tickers: list[str]) -> dict[str, dict]:
+    """
+    Fetch open/current price snapshot for tickers at 8:30 AM.
+    Uses Alpaca latest bars batch first, falls back to yfinance.
+    """
+    prices: dict[str, dict] = {}
+    remaining = list(tickers)
+
+    # Strategy 1: Alpaca batch bars/latest
+    try:
+        from backend.config import ALPACA_API_KEY, ALPACA_API_SECRET, ALPACA_DATA_BASE
+        import requests
+        syms = ",".join(remaining)
+        r = requests.get(
+            f"{ALPACA_DATA_BASE}/v2/stocks/bars/latest",
+            params={"symbols": syms, "feed": "iex"},
+            headers={
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+            },
+            timeout=8,
+        )
+        if r.status_code == 200:
+            bars = r.json().get("bars", {})
+            for sym, b in bars.items():
+                if b and b.get("c"):
+                    prices[sym] = {
+                        "price": round(float(b.get("c")), 2),
+                        "open": round(float(b.get("o") or b.get("c")), 2),
+                        "high": round(float(b.get("h") or b.get("c")), 2),
+                        "low": round(float(b.get("l") or b.get("c")), 2),
+                        "source": "Alpaca",
+                    }
+                    if sym in remaining:
+                        remaining.remove(sym)
+    except Exception as e:
+        logger.warning(f"[scheduler] Alpaca batch open fetch error: {e}")
+
+    # Strategy 2: yfinance fallback for any missing tickers
+    if remaining:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import yfinance as yf
+
+        def _get_yf_price(t: str):
+            try:
+                tk = yf.Ticker(t)
+                fi = tk.fast_info
+                p = fi.get("last_price") or fi.get("regular_market_price")
+                op = fi.get("open") or fi.get("regular_market_open") or p
+                if p:
+                    return t, {"price": round(float(p), 2), "open": round(float(op), 2), "source": "yfinance"}
+            except Exception:
+                pass
+            return t, None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futs = {pool.submit(_get_yf_price, t): t for t in remaining}
+            for fut in as_completed(futs):
+                t, res = fut.result()
+                if res:
+                    prices[t] = res
+
+    return prices
+
+
+def default50_near_entry_alert_job() -> dict:
+    """
+    8:30:15 AM CST (Mon-Fri) — Evaluate market open prices for Default 50 setups.
+    Identifies tickers opening Near Entry (within ±0.75% of entry on safe side of stop)
+    and sends actionable trade alerts with Entry, Stop, T1, T2 to Telegram.
+    """
+    global _DEFAULT50_SCAN_CACHE
+    logger.info("[scheduler] 8:30 AM Default 50 Near Entry check triggered")
+
+    # Ensure we have pre-market setups from 8:00 AM
+    if not _DEFAULT50_SCAN_CACHE or not _DEFAULT50_SCAN_CACHE.get("items"):
+        if os.path.exists(_DEFAULT50_CACHE_FILE):
+            try:
+                with open(_DEFAULT50_CACHE_FILE, "r", encoding="utf-8") as f:
+                    _DEFAULT50_SCAN_CACHE = json.load(f)
+            except Exception:
+                pass
+
+    if not _DEFAULT50_SCAN_CACHE or not _DEFAULT50_SCAN_CACHE.get("items"):
+        logger.info("[scheduler] No cached setups found; running Default 50 scan now")
+        default50_premarket_scan_job()
+
+    setups = _DEFAULT50_SCAN_CACHE.get("items", [])
+    if not setups:
+        send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+                      f"⚠️ <b>Default 50 Alert ({today_str()})</b>\nCould not fetch setups to evaluate open prices.")
+        return {"count": 0, "items": []}
+
+    tickers = [s["ticker"] for s in setups]
+    open_prices = _fetch_default50_open_prices(tickers)
+
+    near_entries = []
+    for s in setups:
+        ticker = s["ticker"]
+        verdict = s.get("verdict", "NEUTRAL")
+        direction = s.get("direction", "LONG")
+        entry = s.get("entry")
+        stop = s.get("stop_loss")
+        t1 = s.get("target1")
+        t2 = s.get("target2")
+
+        if verdict in ("NEUTRAL",) or entry is None or stop is None or entry <= 0:
+            continue
+
+        p_info = open_prices.get(ticker)
+        if not p_info or not p_info.get("price"):
+            current_p = s.get("price")
+            open_p = current_p
+        else:
+            current_p = p_info["price"]
+            open_p = p_info.get("open", current_p)
+
+        if not current_p or current_p <= 0:
+            continue
+
+        diff_pct = round((current_p - entry) / entry * 100, 2)
+
+        is_near = False
+        scenario_label = ""
+
+        if direction == "LONG":
+            if 0.0 <= diff_pct <= 0.75:
+                is_near = True
+                scenario_label = "✅ OPENS NEAR ENTRY"
+            elif -0.75 <= diff_pct < 0.0 and current_p > stop:
+                is_near = True
+                scenario_label = "⚡ NEAR ENTRY (PULLBACK)"
+        else:  # SHORT
+            if -0.75 <= diff_pct <= 0.0:
+                is_near = True
+                scenario_label = "✅ OPENS NEAR ENTRY"
+            elif 0.0 < diff_pct <= 0.75 and current_p < stop:
+                is_near = True
+                scenario_label = "⚡ NEAR ENTRY (PULLBACK)"
+
+        if is_near:
+            near_entries.append({
+                **s,
+                "current_price": current_p,
+                "open_price": open_p,
+                "diff_pct": diff_pct,
+                "scenario_label": scenario_label,
+            })
+
+    # Sort: highest score first, then smallest distance from entry
+    near_entries.sort(key=lambda x: (-(x.get("score") or 0), abs(x.get("diff_pct") or 0)))
+
+    now_str = datetime.now(CST).strftime("%I:%M %p CT")
+    if not near_entries:
+        msg = (
+            f"🎯 <b>8:30 AM Market Open — Near Entry Report</b>\n"
+            f"Default 50 Watchlist · {now_str}\n\n"
+            f"Scanned {len(setups)} setups at open.\n"
+            f"No tickers opened within ±0.75% of entry price today."
+        )
+        send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
+        logger.info("[scheduler] 8:30 AM Near Entry check: 0 matches found")
+        return {"count": 0, "items": []}
+
+    lines = [
+        f"🎯 <b>8:30 AM Market Open — NEAR ENTRY ALERTS</b>",
+        f"Default 50 Watchlist · {now_str} · <b>{len(near_entries)} Actionable Setup(s)</b>\n"
+    ]
+
+    for item in near_entries[:10]:
+        tk = item["ticker"]
+        dirn = item.get("direction", "LONG")
+        icon = "🟢" if dirn == "LONG" else "🔴"
+        verdict = item.get("verdict", "—")
+        score = item.get("score", 0)
+        grade = item.get("entry_grade", "—")
+        wr = item.get("expected_wr")
+        cp = item["current_price"]
+        entry = item.get("entry", 0)
+        stop = item.get("stop_loss", 0)
+        t1 = item.get("target1", 0)
+        t2 = item.get("target2", 0)
+        rr = item.get("rr_t1")
+        diff = item["diff_pct"]
+        sc_label = item["scenario_label"]
+        opt_strat = item.get("opt_strategy")
+        opt_sum = item.get("opt_summary")
+
+        sign = "+" if diff > 0 else ""
+        header = f"{icon} <b>{tk}</b> ${cp:.2f} · {dirn} ({verdict}, score {score:+d})"
+        lines.append(header)
+        lines.append(f"   Status: <b>{sc_label}</b> ({sign}{diff:.2f}% from entry)")
+        level_str = f"   Entry: <b>${entry:.2f}</b>  |  Stop: <b>${stop:.2f}</b>"
+        if t1:
+            level_str += f"  |  T1: <b>${t1:.2f}</b>"
+        if t2:
+            level_str += f"  |  T2: <b>${t2:.2f}</b>"
+        if rr:
+            level_str += f"  (R:R {rr:.1f}×)"
+        lines.append(level_str)
+        if grade and grade != "—":
+            wr_str = f" · {wr:.0f}% exp WR" if wr else ""
+            lines.append(f"   Grade: <b>{grade}</b>{wr_str}")
+        if opt_strat:
+            lines.append(f"   Options: {opt_strat}")
+        elif opt_sum:
+            lines.append(f"   Options: {opt_sum}")
+        lines.append("")
+
+    if len(near_entries) > 10:
+        lines.append(f"<i>+{len(near_entries) - 10} additional near entry setups</i>")
+
+    send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "\n".join(lines).strip())
+    logger.info(f"[scheduler] 8:30 AM Near Entry alert sent for {len(near_entries)} tickers")
+    return {"count": len(near_entries), "items": near_entries}
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -442,6 +727,22 @@ def setup_scheduler():
     """
     init_db()
     init_watchlist()  # creates watchlist table if not exists
+
+    scheduler.add_job(
+        default50_premarket_scan_job,
+        CronTrigger(hour=8, minute=0, day_of_week="mon-fri", timezone=CST),
+        id="default50_premarket_scan",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+
+    scheduler.add_job(
+        default50_near_entry_alert_job,
+        CronTrigger(hour=8, minute=30, second=15, day_of_week="mon-fri", timezone=CST),
+        id="default50_near_entry_alert",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
 
     scheduler.add_job(
         pre_earnings_job,
@@ -474,6 +775,7 @@ def setup_scheduler():
     )
 
     logger.info(
-        "[scheduler] registered: pre_earnings@8:30CST, "
-        "polling 15:00–18:00 CST"
+        "[scheduler] registered: default50_scan@8:00CST, "
+        "default50_near_entry@8:30CST, pre_earnings@8:30CST, "
+        "momentum@8:45CST, polling 15:00–18:00 CST"
     )
