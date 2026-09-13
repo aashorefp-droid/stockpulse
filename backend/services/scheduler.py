@@ -15,7 +15,7 @@ import logging
 import sys
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -679,14 +679,19 @@ def default50_near_entry_alert_job() -> dict:
         return {"count": 0, "items": []}
 
     is_filtered_good_rr = bool(good_rr_entries)
-    title_suffix = "BEST R/R ≥ 1.5×" if is_filtered_good_rr else "NEAR ENTRY"
-    lines = [
-        f"🎯 <b>8:30 AM Market Open — {title_suffix} ALERTS</b>",
-        f"Default 50 Watchlist · {now_str} · <b>{len(target_entries)} Top Setup(s)</b>",
-        f"<i>Ranked by highest Reward-to-Risk ratio first</i>\n"
-    ]
+    title_suffix = "TOP R/R ≥ 1.5×" if is_filtered_good_rr else "NEAR ENTRY"
+    header_msg = (
+        f"🎯 <b>8:30 AM Market Open — {title_suffix} ALERTS</b>\n"
+        f"Default 50 Watchlist · {now_str}\n"
+        f"Found <b>{len(target_entries)}</b> setups near entry (ranked by highest R/R first).\n"
+        f"<i>Sending top individual trade cards below:</i>"
+    )
+    send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, header_msg)
 
-    for item in target_entries[:8]:
+    import time
+    cards_sent = 0
+    # Send up to top 6 best setups as individual clean cards
+    for item in target_entries[:6]:
         tk = item["ticker"]
         dirn = item.get("direction", "LONG")
         icon = "🟢" if dirn == "LONG" else "🔴"
@@ -705,33 +710,69 @@ def default50_near_entry_alert_job() -> dict:
         opt_strat = item.get("opt_strategy")
         opt_sum = item.get("opt_summary")
 
+        # Dynamic ATM Strike calculation
+        if cp >= 200:
+            step = 5.0
+        elif cp >= 50:
+            step = 2.5
+        elif cp >= 20:
+            step = 1.0
+        else:
+            step = 0.5
+        atm_strike = round(round(cp / step) * step, 2)
+        atm_str = f"${atm_strike:.0f}" if atm_strike.is_integer() else f"${atm_strike:.2f}"
+
+        # Upcoming Friday expiry date
+        now_cst = datetime.now(CST)
+        days_to_fri = (4 - now_cst.weekday()) % 7
+        if days_to_fri == 0 and now_cst.hour >= 15:
+            days_to_fri = 7
+        exp_fri = (now_cst + timedelta(days=days_to_fri)).strftime("%b %d")
+
+        opt_contract = f"Buy {atm_str} Call (Exp {exp_fri})" if dirn == "LONG" else f"Buy {atm_str} Put (Exp {exp_fri})"
+
         sign = "+" if diff > 0 else ""
-        header = f"{icon} <b>{tk}</b> ${cp:.2f} · {dirn} ({verdict}, score {score:+d})"
-        lines.append(header)
-        lines.append(f"   Status: <b>{sc_label}</b> ({sign}{diff:.2f}% from entry)")
-        level_str = f"   Entry: <b>${entry:.2f}</b>  |  Stop: <b>${stop:.2f}</b>"
-        if t1:
-            level_str += f"  |  T1: <b>${t1:.2f}</b>"
+        stop_dist_pct = abs((stop - cp) / cp * 100) if cp > 0 else 0
+        t1_dist_pct = abs((t1 - cp) / cp * 100) if cp > 0 else 0
+        t2_dist_pct = abs((t2 - cp) / cp * 100) if cp > 0 else 0
+        wr_str = f" · {wr:.0f}% exp WR" if wr else ""
+
+        card_lines = [
+            f"{icon} <b>{tk}</b> · <b>${cp:.2f}</b> ({dirn})",
+            f"━━━━━━━━━━━━━━━━━━━",
+            f"📊 <b>Setup</b>: {verdict} (Score: {score:+d} · Grade: {grade}{wr_str})",
+            f"🎯 <b>Status</b>: {sc_label} ({sign}{diff:.2f}% from entry)",
+            f"",
+            f"📍 <b>Trade Levels</b>:",
+            f"• Entry: <b>${entry:.2f}</b>",
+            f"• Stop Loss: <b>${stop:.2f}</b> (-{stop_dist_pct:.1f}%)",
+            f"• Target 1: <b>${t1:.2f}</b> (+{t1_dist_pct:.1f}%)",
+        ]
         if t2:
-            level_str += f"  |  T2: <b>${t2:.2f}</b>"
+            card_lines.append(f"• Target 2: <b>${t2:.2f}</b> (+{t2_dist_pct:.1f}%)")
         if rr:
-            level_str += f"  (R:R {rr:.1f}×)"
-        lines.append(level_str)
-        if grade and grade != "—":
-            wr_str = f" · {wr:.0f}% exp WR" if wr else ""
-            lines.append(f"   Grade: <b>{grade}</b>{wr_str}")
-        if opt_strat:
-            lines.append(f"   Options: {opt_strat}")
-        elif opt_sum:
-            lines.append(f"   Options: {opt_sum}")
-        lines.append("")
+            card_lines.append(f"• Risk/Reward: <b>{rr:.1f}×</b>")
 
-    if len(near_entries) > 10:
-        lines.append(f"<i>+{len(near_entries) - 10} additional near entry setups</i>")
+        card_lines.append("")
+        card_lines.append("💡 <b>Options Contract</b>:")
+        card_lines.append(f"• ATM Strike: <b>{opt_contract}</b>")
 
-    send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "\n".join(lines).strip())
-    logger.info(f"[scheduler] 8:30 AM Near Entry alert sent for {len(near_entries)} tickers")
-    return {"count": len(near_entries), "items": near_entries}
+        # Include detailed spread strikes if available
+        if opt_sum:
+            clean_sum = opt_sum
+            if ":" in clean_sum:
+                clean_sum = clean_sum.split(":", 1)[1].strip()
+            card_lines.append(f"• Spread: <i>{clean_sum}</i>")
+        elif opt_strat:
+            card_lines.append(f"• Strategy: <i>{opt_strat}</i>")
+
+        card_msg = "\n".join(card_lines)
+        send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, card_msg)
+        cards_sent += 1
+        time.sleep(0.3)
+
+    logger.info(f"[scheduler] 8:30 AM Near Entry alert sent {cards_sent} separate ticker cards")
+    return {"count": len(target_entries), "cards_sent": cards_sent, "items": target_entries}
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
