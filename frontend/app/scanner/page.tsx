@@ -15,7 +15,7 @@ const WATCHLISTS = [
   { key: "custom",        label: "Custom",           count: 0  },
 ];
 
-type Filter = "all" | "fresh_curl" | "curl_vol" | "rank1" | "exceptional" | "high_short";
+type Filter = "all" | "fresh_curl" | "curl_vol" | "rank1" | "exceptional" | "good_rr" | "high_short";
 
 interface OptLeg {
   action:     string;
@@ -207,7 +207,8 @@ export default function ScannerPage() {
       if (filter === "fresh_curl")  return Boolean(r.is_fresh_stage2 || r.stage2_status === "FRESH");
       if (filter === "curl_vol")    return Boolean(r.is_30w_curl);
       if (filter === "rank1")       return r.mtf_rank === 1;
-      if (filter === "high_short") return (r.short_pct ?? 0) >= 10;
+      if (filter === "good_rr")     return (r.rr_t1 ?? 0) >= 1.5;
+      if (filter === "high_short")  return (r.short_pct ?? 0) >= 10;
       // Matches original: score≥4 + HIGH conf + grade A/S + rank1 + ACCUMULATING vol
       if (filter === "exceptional")
         return ["S", "A"].includes(r.entry_grade ?? "")
@@ -371,8 +372,11 @@ export default function ScannerPage() {
       {results.length > 0 && (
         <div className="flex flex-wrap gap-4 items-center">
           <div className="flex flex-wrap gap-1 bg-card border border-border rounded-lg p-1">
-            {(["all", "fresh_curl", "curl_vol", "rank1", "exceptional", "high_short"] as Filter[]).map(f => (
-              <button key={f} onClick={() => setFilter(f)}
+            {(["all", "fresh_curl", "curl_vol", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
+              <button key={f} onClick={() => {
+                setFilter(f);
+                if (f === "good_rr") setSortBy("rr");
+              }}
                 className={`px-3 py-1 text-xs rounded-md font-semibold transition-colors ${
                   filter === f ? "bg-accent text-black" : "text-muted hover:text-white"
                 }`}>
@@ -380,6 +384,7 @@ export default function ScannerPage() {
                 : f === "fresh_curl"? `🎉 Fresh Breakout (${results.filter(r => r.is_fresh_stage2 || r.stage2_status === "FRESH").length})`
                 : f === "curl_vol"  ? `⚡ 30W Advancing (${results.filter(r => r.is_30w_curl).length})`
                 : f === "rank1"     ? `Rank 1 (${results.filter(r => r.mtf_rank === 1).length})`
+                : f === "good_rr"   ? `🎯 Good R/R ≥1.5× (${results.filter(r => (r.rr_t1 ?? 0) >= 1.5).length})`
                 : f === "high_short"? `🔥 High Short (${results.filter(r => (r.short_pct ?? 0) >= 10).length})`
                 : `Exceptional (${results.filter(r => ["S","A"].includes(r.entry_grade ?? "") && r.mtf_rank === 1 && r.vol_trend === "ACCUMULATING").length})`}
               </button>
