@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useState, useMemo } from "react";
+import { fmtNum, fmtPrice } from "@/lib/format";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -708,7 +709,7 @@ export default function TosScannerPage() {
                           }`}
                         >
                           <td className="px-3 py-2.5 font-mono font-bold text-accent">{r.ticker}</td>
-                          <td className="px-3 py-2.5 font-mono text-white">${r.price?.toFixed(2)}</td>
+                          <td className="px-3 py-2.5 font-mono text-white">{fmtPrice(r.price)}</td>
                           <td className="px-3 py-2.5">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                               isBull
@@ -731,8 +732,8 @@ export default function TosScannerPage() {
                           <td className="px-3 py-2.5 font-mono text-[11px] text-muted">{r.w_bias}</td>
                           <td className="px-3 py-2.5 font-mono text-[11px] text-muted">{r.d_bias}</td>
                           <td className="px-3 py-2.5 font-mono font-semibold">
-                            <span className={r.d_rsi <= 30 ? "text-bull" : r.d_rsi >= 70 ? "text-bear" : "text-white"}>
-                              {r.d_rsi?.toFixed(1)}
+                            <span className={r.d_rsi != null && Number(r.d_rsi) <= 30 ? "text-bull" : r.d_rsi != null && Number(r.d_rsi) >= 70 ? "text-bear" : "text-white"}>
+                              {fmtNum(r.d_rsi, 1)}
                             </span>
                           </td>
                           <td className="px-3 py-2.5 text-muted">{r.d_macd_label}</td>
@@ -758,7 +759,7 @@ export default function TosScannerPage() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
                 <div className="flex items-center gap-3">
                   <span className="text-xl font-bold font-mono text-white">{activeDetailRow.ticker}</span>
-                  <span className="text-sm font-mono text-muted">${activeDetailRow.price?.toFixed(2)}</span>
+                  <span className="text-sm font-mono text-muted">{fmtPrice(activeDetailRow.price)}</span>
                   <span className="px-2.5 py-0.5 rounded text-xs font-bold bg-bull/20 text-bull border border-bull/30">
                     Grade {activeDetailRow.signal_grade} · Score {activeDetailRow.signal_score}
                   </span>
@@ -789,7 +790,7 @@ export default function TosScannerPage() {
                     📅 Weekly Timeframe
                   </h3>
                   <div className="text-muted">Bias: <b className="text-white">{activeDetailRow.w_bias}</b></div>
-                  <div className="text-muted">RSI: <b className="text-white">{activeDetailRow.w_rsi?.toFixed(1)}</b></div>
+                  <div className="text-muted">RSI: <b className="text-white">{fmtNum(activeDetailRow.w_rsi, 1)}</b></div>
                   <div className="text-muted">EMA Trend: <b className="text-white">{activeDetailRow.w_ema_trend}</b></div>
                   <div className="text-muted">Fib Zone: <b className="text-white">{activeDetailRow.w_fib_zone}</b></div>
                   <div className="text-muted">Conviction: <b className="text-white">{activeDetailRow.w_conviction}</b></div>
@@ -804,7 +805,7 @@ export default function TosScannerPage() {
                     📈 Daily Timeframe
                   </h3>
                   <div className="text-muted">Bias: <b className="text-white">{activeDetailRow.d_bias}</b></div>
-                  <div className="text-muted">RSI: <b className="text-white">{activeDetailRow.d_rsi?.toFixed(1)}</b> ({activeDetailRow.d_rsi_label})</div>
+                  <div className="text-muted">RSI: <b className="text-white">{fmtNum(activeDetailRow.d_rsi, 1)}</b> ({activeDetailRow.d_rsi_label})</div>
                   <div className="text-muted">MACD: <b className="text-white">{activeDetailRow.d_macd_label}</b></div>
                   <div className="text-muted">EMA Trend: <b className="text-white">{activeDetailRow.d_ema_trend}</b></div>
                   <div className="text-muted">Fib Zone: <b className="text-white">{activeDetailRow.d_fib_zone} ({activeDetailRow.d_fib_position}%)</b></div>
@@ -831,8 +832,8 @@ export default function TosScannerPage() {
                   {activeDetailRow.golden_cross && <div className="text-bull font-semibold">✅ Golden Cross Active</div>}
                   {activeDetailRow.death_cross && <div className="text-bear font-semibold">❌ Death Cross Active</div>}
                   <div className="pt-2 border-t border-border/60">
-                    <div className="text-muted">BB Width: <b className="text-white">{activeDetailRow.bb_bandwidth?.toFixed(1)}%</b></div>
-                    <div className="text-muted">BB %B: <b className="text-white">{activeDetailRow.bb_pct_b?.toFixed(2)}</b></div>
+                    <div className="text-muted">BB Width: <b className="text-white">{fmtNum(activeDetailRow.bb_bandwidth, 1)}%</b></div>
+                    <div className="text-muted">BB %B: <b className="text-white">{fmtNum(activeDetailRow.bb_pct_b, 2)}</b></div>
                     <div className="text-muted">BB Position: <b className="text-white">{activeDetailRow.bb_position}</b></div>
                     {activeDetailRow.bb_squeeze && (
                       <div className="text-amber-400 font-bold mt-1">⚡ Bollinger Squeeze Active — breakout imminent</div>

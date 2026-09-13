@@ -565,6 +565,7 @@ export default function PlanPage() {
   // Download CSV export
   const downloadCSV = () => {
     if (!planData || !planData.rows.length) return;
+    const headers = Object.keys(planData.rows[0]).filter((k) => !k.startsWith("_"));
     const csvContent = [
       headers.join(","),
       ...planData.rows.map((row: any) =>

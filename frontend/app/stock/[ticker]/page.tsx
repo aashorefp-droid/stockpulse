@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchAnalysis } from "@/lib/api";
 import { BiasBadge } from "@/components/BiasCard";
+import { fmtNum, fmtPrice } from "@/lib/format";
 import SignalBanner from "@/components/SignalBanner";
 import FibTable from "@/components/FibTable";
 import FundamentalsCard from "@/components/FundamentalsCard";
@@ -260,7 +261,7 @@ export default function StockPage({ params }: StockPageProps) {
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 mt-0.5">
-                  Projected trade entered at <b className="text-white">${trade?.entry?.toFixed(2)}</b> on <b>{as_of}</b> following a <b>{verdict}</b> signal.
+                  Projected trade entered at <b className="text-white">{fmtPrice(trade?.entry)}</b> on <b>{as_of}</b> following a <b>{verdict}</b> signal.
                 </p>
               </div>
             </div>
@@ -281,15 +282,15 @@ export default function StockPage({ params }: StockPageProps) {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs font-mono">
             <div className="bg-[#090d1a] p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] uppercase">Projected Entry</span>
-              <span className="text-white font-bold text-sm">${trade?.entry?.toFixed(2)}</span>
+              <span className="text-white font-bold text-sm">{fmtPrice(trade?.entry)}</span>
             </div>
             <div className="bg-[#090d1a] p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] uppercase">Protective Stop</span>
-              <span className="text-red-400 font-bold text-sm">${trade?.stop_loss?.toFixed(2)}</span>
+              <span className="text-red-400 font-bold text-sm">{fmtPrice(trade?.stop_loss)}</span>
             </div>
             <div className="bg-[#090d1a] p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] uppercase">Target 1</span>
-              <span className="text-emerald-400 font-bold text-sm">${trade?.target1?.toFixed(2)}</span>
+              <span className="text-emerald-400 font-bold text-sm">{fmtPrice(trade?.target1)}</span>
             </div>
             <div className="bg-[#090d1a] p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] uppercase">Outcome Date</span>
@@ -335,7 +336,7 @@ export default function StockPage({ params }: StockPageProps) {
 
         <div className="text-right">
           <div className="text-3xl font-mono font-black text-white">
-            ${current_price.toFixed(2)}
+            {fmtPrice(current_price)}
           </div>
           <div className="text-xs text-slate-400 mt-0.5">
             {is_backtest ? `Closing price as of ${as_of}` : "Last close"}

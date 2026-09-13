@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
+import { fmtNum, fmtPrice } from "@/lib/format";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const REFRESH_MS = 5 * 60 * 1000;
@@ -162,20 +163,22 @@ export default function MarketRisk() {
         {/* Key tickers — pushed to the right */}
         <div className="flex items-center gap-4 ml-auto">
           {keyItems.map(item => {
-            const pos  = item.chg_1d > 0;
-            const neg  = item.chg_1d < 0;
+            const chg  = Number(item.chg_1d);
+            const pos  = !isNaN(chg) && chg > 0;
+            const neg  = !isNaN(chg) && chg < 0;
             const col  = pos ? "text-green" : neg ? "text-red" : "text-muted";
             const sign = pos ? "+" : "";
+            const pxStr = item.ticker === "^VIX"
+              ? fmtNum(item.price, 2)
+              : fmtPrice(item.price, 2);
             return (
               <div key={item.ticker} className="flex flex-col items-end leading-tight">
                 <span className="text-[9px] text-muted uppercase tracking-wider">{item.label}</span>
                 <span className="text-[12px] font-mono font-semibold text-white">
-                  {item.ticker === "^VIX"
-                    ? item.price.toFixed(2)
-                    : `$${item.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
+                  {pxStr}
                 </span>
                 <span className={`text-[10px] font-mono ${col}`}>
-                  {sign}{item.chg_1d.toFixed(2)}%
+                  {sign}{fmtNum(item.chg_1d, 2)}%
                 </span>
               </div>
             );
