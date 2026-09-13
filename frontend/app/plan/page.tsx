@@ -565,31 +565,30 @@ export default function PlanPage() {
   // Download CSV export
   const downloadCSV = () => {
     if (!planData || !planData.rows.length) return;
-    const headers = Object.keys(planData.rows[0]).filter((k) => !k.startsWith("_"));
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [
-        headers.join(","),
-        ...planData.rows.map((row: any) =>
-          headers
-            .map((h) => {
-              const val = row[h];
-              if (typeof val === "string" && val.includes(",")) {
-                return `"${val.replace(/"/g, '""')}"`;
-              }
-              return val;
-            })
-            .join(",")
-        ),
-      ].join("\n");
+    const csvContent = [
+      headers.join(","),
+      ...planData.rows.map((row: any) =>
+        headers
+          .map((h) => {
+            const val = row[h];
+            if (typeof val === "string" && val.includes(",")) {
+              return `"${val.replace(/"/g, '""')}"`;
+            }
+            return val;
+          })
+          .join(",")
+      ),
+    ].join("\n");
 
-    const encodedUri = encodeURI(csvContent);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", `intraday_plan_${planData.plan_for}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const countdownFormatted = `${Math.floor(countdown / 60)}:${(countdown % 60).toString().padStart(2, "0")}`;

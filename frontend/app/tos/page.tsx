@@ -173,7 +173,8 @@ export default function TosScannerPage() {
           setSelectedTickerDetail(data.items[0].ticker);
         }
       } else {
-        alert("TOS scan failed. Check server logs.");
+        const errText = await res.text().catch(() => "");
+        alert(`TOS scan failed (${res.status}): ${errText || res.statusText}`);
       }
     } catch (e: any) {
       alert(`Network error: ${e.message}`);

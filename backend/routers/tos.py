@@ -18,6 +18,27 @@ class TosScanRequest(BaseModel):
     tickers: Optional[List[str]] = None
     filters: Optional[Dict[str, Any]] = None
 
+import numpy as np
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert numpy types (bool_, int64, float64, ndarray) to native Python types."""
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return [sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.integer, int)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, float)):
+        return float(obj) if not np.isnan(obj) else None
+    elif isinstance(obj, np.ndarray):
+        return [sanitize_for_json(v) for v in obj.tolist()]
+    return obj
+
+
 @router.get("/watchlists")
 def get_tos_watchlists():
     return {"watchlists": getattr(tos_scanner, "WATCHLISTS", {})}
@@ -28,7 +49,7 @@ def get_tos_ticker(ticker: str):
     res = tos_scanner.scan_ticker(ticker)
     if not res:
         raise HTTPException(status_code=404, detail=f"TOS scan unavailable for {ticker}")
-    return res
+    return sanitize_for_json(res)
 
 @router.post("/scan")
 def post_tos_scan(req: TosScanRequest):
@@ -63,18 +84,18 @@ def post_tos_scan(req: TosScanRequest):
     return {
         "status": "ok",
         "summary": {
-            "scanned": n_scanned,
-            "filtered": n_filtered,
-            "bullish": n_bull,
-            "bearish": n_bear,
-            "mixed": n_mixed,
-            "a_plus": n_aplus,
-            "a": n_a,
-            "bb_squeeze": n_bb_sq,
-            "golden_cross": n_gc,
+            "scanned": int(n_scanned),
+            "filtered": int(n_filtered),
+            "bullish": int(n_bull),
+            "bearish": int(n_bear),
+            "mixed": int(n_mixed),
+            "a_plus": int(n_aplus),
+            "a": int(n_a),
+            "bb_squeeze": int(n_bb_sq),
+            "golden_cross": int(n_gc),
         },
-        "items": filtered,
-        "raw_items": raw_results,
+        "items": sanitize_for_json(filtered),
+        "raw_items": sanitize_for_json(raw_results),
     }
 
 @router.get("/scan")

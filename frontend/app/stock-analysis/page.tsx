@@ -157,16 +157,17 @@ export default function StockAnalysisPage() {
     const keys = Object.keys(rows[0]).filter((k) => typeof rows[0][k] !== "object");
     const header = keys.join(",");
     const lines = rows.map((r) => keys.map((k) => `"${r[k] ?? ""}"`).join(","));
-    const csvContent = "data:text/csv;charset=utf-8," + [header, ...lines].join("\n");
+    const csvContent = [header, ...lines].join("\n");
 
-
-    const encodedUri = encodeURI(csvContent);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    link.setAttribute("href", url);
     link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
