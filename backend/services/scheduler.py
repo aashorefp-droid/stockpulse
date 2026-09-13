@@ -650,27 +650,43 @@ def default50_near_entry_alert_job() -> dict:
                 "scenario_label": scenario_label,
             })
 
-    # Sort: highest score first, then smallest distance from entry
-    near_entries.sort(key=lambda x: (-(x.get("score") or 0), abs(x.get("diff_pct") or 0)))
+    # Filter & Prioritize Best Stocks with Good R/R (R:R >= 1.5x and Grade S/A/B)
+    good_rr_entries = [
+        item for item in near_entries
+        if (item.get("rr_t1") or 0) >= 1.5 and item.get("entry_grade") in ("S", "A", "B", "B-")
+    ]
+
+    # If we have tickers with R/R >= 1.5x and solid grade, focus on them; otherwise fallback to all near entries
+    target_entries = good_rr_entries if good_rr_entries else near_entries
+
+    # Sort primarily by Best R/R descending, then by Score descending
+    target_entries.sort(key=lambda x: (
+        -(x.get("rr_t1") or 0),
+        -(x.get("score") or 0),
+        abs(x.get("diff_pct") or 0),
+    ))
 
     now_str = datetime.now(CST).strftime("%I:%M %p CT")
-    if not near_entries:
+    if not target_entries:
         msg = (
             f"🎯 <b>8:30 AM Market Open — Near Entry Report</b>\n"
             f"Default 50 Watchlist · {now_str}\n\n"
             f"Scanned {len(setups)} setups at open.\n"
-            f"No tickers opened within ±0.75% of entry price today."
+            f"No tickers opened near entry today."
         )
         send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
         logger.info("[scheduler] 8:30 AM Near Entry check: 0 matches found")
         return {"count": 0, "items": []}
 
+    is_filtered_good_rr = bool(good_rr_entries)
+    title_suffix = "BEST R/R ≥ 1.5×" if is_filtered_good_rr else "NEAR ENTRY"
     lines = [
-        f"🎯 <b>8:30 AM Market Open — NEAR ENTRY ALERTS</b>",
-        f"Default 50 Watchlist · {now_str} · <b>{len(near_entries)} Actionable Setup(s)</b>\n"
+        f"🎯 <b>8:30 AM Market Open — {title_suffix} ALERTS</b>",
+        f"Default 50 Watchlist · {now_str} · <b>{len(target_entries)} Top Setup(s)</b>",
+        f"<i>Ranked by highest Reward-to-Risk ratio first</i>\n"
     ]
 
-    for item in near_entries[:10]:
+    for item in target_entries[:8]:
         tk = item["ticker"]
         dirn = item.get("direction", "LONG")
         icon = "🟢" if dirn == "LONG" else "🔴"
