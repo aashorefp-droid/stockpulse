@@ -3,7 +3,15 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
-from backend.services.plan_service import generate_intraday_plan, check_open_prices, refresh_locked_prices
+from backend.services.plan_service import (
+    generate_intraday_plan,
+    check_open_prices,
+    refresh_locked_prices,
+    get_persisted_plan,
+    save_locked_830_cache,
+    save_locked_820_cache,
+    clear_plan_cache,
+)
 
 router = APIRouter(prefix="/api/plan", tags=["plan"])
 
@@ -26,6 +34,10 @@ class PlanCheckOpenRequest(BaseModel):
 
 class PlanRefreshLockedRequest(BaseModel):
     locked_rows: List[Dict[str, Any]]
+
+class PlanLockRequest(BaseModel):
+    locked_data: Dict[str, Any]
+    lock_type: str = "830"
 
 @router.post("/calculate")
 def calculate_trade_plan(req: PlanCalculateRequest):
@@ -71,3 +83,24 @@ def check_open_endpoint(req: PlanCheckOpenRequest):
 @router.post("/refresh-locked")
 def refresh_locked_endpoint(req: PlanRefreshLockedRequest):
     return refresh_locked_prices(req.locked_rows)
+
+@router.get("/latest")
+def get_latest_plan_endpoint():
+    """Retrieve persisted trade plan and locked 8:30 playbook valid until next morning 8:00 AM CST."""
+    return get_persisted_plan()
+
+@router.post("/lock")
+def lock_plan_endpoint(req: PlanLockRequest):
+    """Persist 8:30 or 8:20 locked playbook to disk."""
+    if req.lock_type == "820":
+        res = save_locked_820_cache(req.locked_data)
+    else:
+        res = save_locked_830_cache(req.locked_data)
+    return {"status": "ok", "lock_type": req.lock_type, "data": res}
+
+@router.post("/unlock")
+def unlock_plan_endpoint():
+    """Release 8:30 locked playbook on disk."""
+    clear_plan_cache(lock_only=True)
+    return {"status": "ok", "message": "Lock released"}
+

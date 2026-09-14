@@ -214,6 +214,14 @@ export default function PlanPage() {
   const isLocked830Ref = useRef(isLocked830);
   isLocked830Ref.current = isLocked830;
 
+  const [persistedInfo, setPersistedInfo] = useState<{
+    is_valid?: boolean;
+    expires_at_label?: string;
+    expires_at_cst?: string;
+    saved_at_cst?: string;
+  } | null>(null);
+  const [persistedLoaded, setPersistedLoaded] = useState(false);
+
   // Query open paper positions
   const fetchPaperPositions = useCallback(async () => {
     try {
@@ -228,9 +236,111 @@ export default function PlanPage() {
     }
   }, []);
 
+  // Load persisted plan on mount (LocalStorage first, then API)
+  const fetchPersistedPlan = useCallback(async () => {
+    // 1. Try LocalStorage for instantaneous render
+    try {
+      const localStr = typeof window !== "undefined" ? localStorage.getItem("trade_plan_persisted_v1") : null;
+      if (localStr) {
+        const local = JSON.parse(localStr);
+        if (local && local.expiresAt && Date.now() < local.expiresAt) {
+          if (local.planData) setPlanData(local.planData);
+          if (local.openCheckData) {
+            setOpenCheckData(local.openCheckData);
+            if (local.isLocked830) {
+              setIsLocked830(true);
+              setLockedAt830(local.lockedAt830 || "8:30 AM CST");
+              setActiveViewMode("830_locked");
+            }
+          }
+          if (local.locked820Data) {
+            setLocked820Data(local.locked820Data);
+            setIsLocked820(true);
+            setLockedAt820(local.lockedAt820 || "8:20 AM CST");
+          }
+          if (local.planDate) setPlanDate(local.planDate);
+          setPersistedInfo({
+            is_valid: true,
+            expires_at_label: local.expiresAtLabel || "Tomorrow at 8:00 AM CST",
+            saved_at_cst: local.savedAtCst || "Persisted",
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Error reading local plan cache:", e);
+    }
+
+    // 2. Fetch latest persisted from backend
+    try {
+      const res = await fetch(`${API_BASE}/api/plan/latest`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.status === "ok") {
+          setPersistedInfo({
+            is_valid: data.is_valid,
+            expires_at_label: data.expires_at_label || "Tomorrow at 8:00 AM CST",
+            expires_at_cst: data.expires_at_cst,
+            saved_at_cst: data.now_cst,
+          });
+
+          if (data.has_plan && data.plan_data) {
+            setPlanData(data.plan_data);
+            if (data.plan_data.plan_date) {
+              setPlanDate(data.plan_data.plan_date);
+            }
+          }
+
+          if (data.has_locked_830 && data.locked_830_data) {
+            setOpenCheckData(data.locked_830_data);
+            setIsLocked830(true);
+            setLockedAt830(data.locked_830_data.locked_at || data.locked_830_data.checked_time || "8:30 AM CST");
+            setActiveViewMode("830_locked");
+          }
+
+          if (data.has_locked_820 && data.locked_820_data) {
+            setLocked820Data(data.locked_820_data);
+            setIsLocked820(true);
+            setLockedAt820(data.locked_820_data.locked_at || "8:20 AM CST");
+          }
+
+          // Cache in LocalStorage
+          if (data.has_plan || data.has_locked_830) {
+            try {
+              const expTime = data.expires_at_cst ? new Date(data.expires_at_cst).getTime() : Date.now() + 24 * 3600 * 1000;
+              localStorage.setItem(
+                "trade_plan_persisted_v1",
+                JSON.stringify({
+                  planData: data.plan_data,
+                  openCheckData: data.locked_830_data,
+                  isLocked830: data.has_locked_830,
+                  lockedAt830: data.locked_830_data?.locked_at || "8:30 AM CST",
+                  locked820Data: data.locked_820_data,
+                  isLocked820: data.has_locked_820,
+                  lockedAt820: data.locked_820_data?.locked_at || "8:20 AM CST",
+                  planDate: data.plan_data?.plan_date,
+                  expiresAt: expTime,
+                  expiresAtLabel: data.expires_at_label,
+                  savedAtCst: data.now_cst,
+                })
+              );
+            } catch (le) {
+              console.warn("Could not save to localStorage:", le);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error fetching persisted plan from server:", err);
+    } finally {
+      setPersistedLoaded(true);
+    }
+  }, []);
+
   useEffect(() => {
     fetchPaperPositions();
-  }, [fetchPaperPositions]);
+    fetchPersistedPlan();
+  }, [fetchPaperPositions, fetchPersistedPlan]);
+
 
   // Push individual ticker to paper trading
   const handlePushToPaper = async (row: CheckOpenRow) => {
@@ -406,17 +516,56 @@ export default function PlanPage() {
       big_gap: lockedRows.filter((r: any) => r["Scenario ID"] === "big_gap"),
     };
 
-    setOpenCheckData({
+    const finalLockedData = {
       ...dataToLock,
       rows: lockedRows,
       grouped,
-    });
+      locked_at: timeStr,
+    };
+
+    setOpenCheckData(finalLockedData);
     setIsLocked830(true);
     setLockedAt830(timeStr);
     setActiveViewMode("830_locked");
-    setPaperMessage("🔒 8:30 AM Market Open Locked! Tickers are anchored into their scenario tables (Past Stop, Near Entry, etc.). Live prices will refresh dynamically.");
+    setPaperMessage("🔒 8:30 AM Market Open Locked! Persisted until next morning 8:00 AM CST.");
     setTimeout(() => setPaperMessage(null), 6000);
-  }, []);
+
+    // Sync lock to server backend
+    try {
+      fetch(`${API_BASE}/api/plan/lock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lock_type: "830",
+          locked_data: finalLockedData,
+        }),
+      });
+    } catch (e) {
+      console.error("Error saving 8:30 lock to server:", e);
+    }
+
+    // Sync to localStorage
+    try {
+      localStorage.setItem(
+        "trade_plan_persisted_v1",
+        JSON.stringify({
+          planData: planDataRef.current,
+          openCheckData: finalLockedData,
+          isLocked830: true,
+          lockedAt830: timeStr,
+          locked820Data,
+          isLocked820,
+          lockedAt820,
+          planDate,
+          expiresAt: Date.now() + 24 * 3600 * 1000,
+          expiresAtLabel: "Tomorrow at 8:00 AM CST",
+          savedAtCst: timeStr,
+        })
+      );
+    } catch (le) {
+      console.warn("Error updating localStorage:", le);
+    }
+  }, [locked820Data, isLocked820, lockedAt820, planDate]);
 
   // ⚡ Lock 8:20 AM Pre-Market Snapshot
   const handleLock820 = useCallback((overrideData?: any) => {
@@ -426,14 +575,30 @@ export default function PlanPage() {
     const cst = getCSTDate();
     const timeStr = cst.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " CST";
 
-    setIsLocked820(true);
-    setLockedAt820(timeStr);
-    setLocked820Data({
+    const final820 = {
       ...dataToLock,
       locked_at: timeStr,
-    });
-    setPaperMessage("⚡ 8:20 AM Pre-Market Snapshot Locked!");
+    };
+
+    setIsLocked820(true);
+    setLockedAt820(timeStr);
+    setLocked820Data(final820);
+    setPaperMessage("⚡ 8:20 AM Pre-Market Snapshot Locked & Persisted!");
     setTimeout(() => setPaperMessage(null), 5000);
+
+    // Sync to server backend
+    try {
+      fetch(`${API_BASE}/api/plan/lock`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lock_type: "820",
+          locked_data: final820,
+        }),
+      });
+    } catch (e) {
+      console.error("Error saving 8:20 lock to server:", e);
+    }
   }, []);
 
   // 🔓 Unlock 8:30 AM Playbook
@@ -442,6 +607,12 @@ export default function PlanPage() {
     setLockedAt830(null);
     setPaperMessage("🔓 8:30 AM Lock released. Scenario distribution will re-evaluate on next check.");
     setTimeout(() => setPaperMessage(null), 4000);
+
+    try {
+      fetch(`${API_BASE}/api/plan/unlock`, { method: "POST" });
+    } catch (e) {
+      console.error("Error unlocking on server:", e);
+    }
   };
 
   // 🔄 Refresh live quotes for existing locked rows without altering table grouping
@@ -684,6 +855,23 @@ export default function PlanPage() {
               <span>{isLocked830 ? "🔒" : "🔔"}</span>
               <span>8:30 AM Market Open {isLocked830 ? `(Locked ${lockedAt830})` : ""}</span>
             </span>
+
+            {persistedInfo?.expires_at_label && (
+              <span
+                className={`px-2 py-0.5 rounded font-mono text-[11px] border flex items-center gap-1 ${
+                  persistedInfo.is_valid !== false
+                    ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                    : "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                }`}
+              >
+                <span>{persistedInfo.is_valid !== false ? "💾" : "⏳"}</span>
+                <span>
+                  {persistedInfo.is_valid !== false
+                    ? `Persisted until ${persistedInfo.expires_at_label}`
+                    : "Plan Expired at 8 AM — Ready for New Plan"}
+                </span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

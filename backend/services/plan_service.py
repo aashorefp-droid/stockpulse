@@ -1,9 +1,39 @@
 import sys, os
+import json
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Optional, Dict, Any
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+CST = ZoneInfo("America/Chicago")
+_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data"))
+_PLAN_CACHE_FILE = os.path.join(_CACHE_DIR, "trade_plan_latest.json")
+_LOCKED_CACHE_FILE = os.path.join(_CACHE_DIR, "trade_plan_locked_latest.json")
+_LOCKED_820_CACHE_FILE = os.path.join(_CACHE_DIR, "trade_plan_locked_820_latest.json")
+
+def get_next_8am_cst(from_dt: Optional[datetime] = None) -> datetime:
+    """
+    Returns the next 8:00 AM CST strictly after from_dt (or now CST).
+    If that falls on a weekend (Saturday/Sunday), advances to Monday 8:00 AM CST.
+    """
+    if from_dt is None:
+        from_dt = datetime.now(CST)
+    elif from_dt.tzinfo is None:
+        from_dt = from_dt.replace(tzinfo=CST)
+    else:
+        from_dt = from_dt.astimezone(CST)
+
+    target = from_dt.replace(hour=8, minute=0, second=0, microsecond=0)
+    if from_dt >= target:
+        target += timedelta(days=1)
+
+    while target.weekday() >= 5:  # 5=Sat, 6=Sun
+        target += timedelta(days=1)
+
+    return target
+
 
 def next_trading_day(d: date, skip: int = 1) -> date:
     """Return the Nth next trading day from d, skipping weekends."""
@@ -145,6 +175,168 @@ def get_multiframe_bias(ticker: str, entry_price: float, direction: str) -> Dict
     except Exception:
         pass
     return res
+
+
+def save_plan_cache(plan_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist trade plan to disk, valid until next morning 8:00 AM CST."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        now_cst = datetime.now(CST)
+        expires_at = get_next_8am_cst(now_cst)
+
+        payload = {
+            **plan_data,
+            "saved_at_cst": now_cst.strftime("%Y-%m-%d %H:%M:%S CST"),
+            "expires_at_cst": expires_at.isoformat(),
+            "expires_at_label": expires_at.strftime("%A, %b %d at 8:00 AM CST"),
+            "is_valid": True,
+        }
+        with open(_PLAN_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        p_date = plan_data.get("plan_date") or now_cst.strftime("%Y-%m-%d")
+        dated_file = os.path.join(_CACHE_DIR, f"trade_plan_{p_date}.json")
+        with open(dated_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return payload
+    except Exception as e:
+        print(f"Error saving plan cache: {e}")
+        return plan_data
+
+
+def save_locked_830_cache(locked_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist locked 8:30 AM open check playbook to disk, valid until next morning 8:00 AM CST."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        now_cst = datetime.now(CST)
+        expires_at = get_next_8am_cst(now_cst)
+
+        payload = {
+            **locked_data,
+            "is_locked": True,
+            "is_locked_830": True,
+            "saved_at_cst": now_cst.strftime("%Y-%m-%d %H:%M:%S CST"),
+            "expires_at_cst": expires_at.isoformat(),
+            "expires_at_label": expires_at.strftime("%A, %b %d at 8:00 AM CST"),
+            "is_valid": True,
+        }
+        with open(_LOCKED_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
+        c_date = locked_data.get("check_date") or now_cst.strftime("%Y-%m-%d")
+        dated_file = os.path.join(_CACHE_DIR, f"trade_plan_locked_{c_date}.json")
+        with open(dated_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return payload
+    except Exception as e:
+        print(f"Error saving locked 8:30 cache: {e}")
+        return locked_data
+
+
+def save_locked_820_cache(locked_820: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist locked 8:20 AM pre-market snapshot to disk."""
+    try:
+        os.makedirs(_CACHE_DIR, exist_ok=True)
+        now_cst = datetime.now(CST)
+        expires_at = get_next_8am_cst(now_cst)
+        payload = {
+            **locked_820,
+            "saved_at_cst": now_cst.strftime("%Y-%m-%d %H:%M:%S CST"),
+            "expires_at_cst": expires_at.isoformat(),
+        }
+        with open(_LOCKED_820_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        return payload
+    except Exception as e:
+        print(f"Error saving locked 8:20 cache: {e}")
+        return locked_820
+
+
+def clear_plan_cache(lock_only: bool = False) -> None:
+    """Clear plan cache on disk."""
+    try:
+        if os.path.exists(_LOCKED_CACHE_FILE):
+            os.remove(_LOCKED_CACHE_FILE)
+        if not lock_only and os.path.exists(_PLAN_CACHE_FILE):
+            os.remove(_PLAN_CACHE_FILE)
+    except Exception as e:
+        print(f"Error clearing plan cache: {e}")
+
+
+def get_persisted_plan() -> Dict[str, Any]:
+    """
+    Returns the latest persisted trade plan and locked 8:30/8:20 snapshots.
+    Evaluates validity against next morning 8:00 AM CST.
+    """
+    now_cst = datetime.now(CST)
+    plan_data = None
+    locked_830 = None
+    locked_820 = None
+
+    if os.path.exists(_PLAN_CACHE_FILE):
+        try:
+            with open(_PLAN_CACHE_FILE, "r", encoding="utf-8") as f:
+                plan_data = json.load(f)
+        except Exception as e:
+            print(f"Error reading plan cache: {e}")
+
+    if os.path.exists(_LOCKED_CACHE_FILE):
+        try:
+            with open(_LOCKED_CACHE_FILE, "r", encoding="utf-8") as f:
+                locked_830 = json.load(f)
+        except Exception as e:
+            print(f"Error reading locked cache: {e}")
+
+    if os.path.exists(_LOCKED_820_CACHE_FILE):
+        try:
+            with open(_LOCKED_820_CACHE_FILE, "r", encoding="utf-8") as f:
+                locked_820 = json.load(f)
+        except Exception as e:
+            print(f"Error reading locked 820 cache: {e}")
+
+    is_valid = False
+    expires_at_cst = None
+    expires_at_label = None
+
+    ref_data = locked_830 or plan_data
+    if ref_data:
+        exp_iso = ref_data.get("expires_at_cst")
+        if exp_iso:
+            try:
+                exp_dt = datetime.fromisoformat(exp_iso)
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=CST)
+                is_valid = (now_cst < exp_dt)
+                expires_at_cst = exp_dt.strftime("%Y-%m-%d %H:%M:%S CST")
+                expires_at_label = exp_dt.strftime("%A, %b %d at 8:00 AM CST")
+            except Exception:
+                is_valid = True
+        else:
+            p_date_str = ref_data.get("plan_date") or ref_data.get("check_date")
+            if p_date_str:
+                try:
+                    p_d = datetime.strptime(p_date_str, "%Y-%m-%d").date()
+                    exp_dt = get_next_8am_cst(datetime(p_d.year, p_d.month, p_d.day, 8, 30, tzinfo=CST))
+                    is_valid = (now_cst < exp_dt)
+                    expires_at_cst = exp_dt.strftime("%Y-%m-%d %H:%M:%S CST")
+                    expires_at_label = exp_dt.strftime("%A, %b %d at 8:00 AM CST")
+                except Exception:
+                    is_valid = True
+
+    return {
+        "status": "ok",
+        "has_plan": bool(plan_data),
+        "has_locked_830": bool(locked_830),
+        "has_locked_820": bool(locked_820),
+        "is_valid": is_valid,
+        "now_cst": now_cst.strftime("%Y-%m-%d %H:%M:%S CST"),
+        "expires_at_cst": expires_at_cst,
+        "expires_at_label": expires_at_label,
+        "plan_data": plan_data,
+        "locked_830_data": locked_830,
+        "locked_820_data": locked_820,
+    }
+
 
 def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -411,7 +603,7 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
         "best": sum(1 for r in plan_rows if r["Best Setup"] == "Y"),
     }
 
-    return {
+    res = {
         "plan_date": p_date.strftime("%Y-%m-%d"),
         "plan_for": plan_for.strftime("%Y-%m-%d"),
         "plan_label": plan_label,
@@ -420,6 +612,7 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
         "summary": summary,
         "rows": plan_rows,
     }
+    return save_plan_cache(res)
 
 def check_open_prices(plan_rows: List[Dict[str, Any]], check_date_str: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -666,7 +859,7 @@ def refresh_locked_prices(locked_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "big_gap": len(grouped["big_gap"]),
     }
 
-    return {
+    res = {
         "success": True,
         "check_date": date.today().strftime("%Y-%m-%d"),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -679,3 +872,4 @@ def refresh_locked_prices(locked_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "rows": updated_rows,
         "is_locked": True,
     }
+    return save_locked_830_cache(res)

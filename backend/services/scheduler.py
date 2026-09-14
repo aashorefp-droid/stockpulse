@@ -498,6 +498,16 @@ def default50_premarket_scan_job() -> dict:
     )
     send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
     logger.info(f"[scheduler] Default 50 pre-market scan complete: {len(valid_setups)} setups saved")
+
+    # Also auto-generate and persist the full trade plan for top setups so /plan page is immediately ready
+    try:
+        from backend.services.plan_service import generate_intraday_plan
+        plan_tickers = [s["ticker"] for s in valid_setups[:25]] or tickers[:25]
+        generate_intraday_plan(plan_tickers, today_str())
+        logger.info(f"[scheduler] Auto-generated and persisted trade plan for {len(plan_tickers)} tickers at 8:00 AM CT")
+    except Exception as pe:
+        logger.warning(f"[scheduler] Auto-generating trade plan on scan error: {pe}")
+
     return _DEFAULT50_SCAN_CACHE
 
 
@@ -805,6 +815,19 @@ def default50_near_entry_alert_job() -> dict:
         time.sleep(0.3)
 
     logger.info(f"[scheduler] 8:30 AM Near Entry alert sent {cards_sent} separate ticker cards and logged to paper trading")
+
+    # Also auto-evaluate and lock the 8:30 AM playbook snapshot to disk
+    try:
+        from backend.services.plan_service import get_persisted_plan, check_open_prices, save_locked_830_cache
+        cached = get_persisted_plan()
+        if cached.get("plan_data") and cached["plan_data"].get("rows"):
+            check_res = check_open_prices(cached["plan_data"]["rows"], today_str())
+            if check_res and check_res.get("rows"):
+                save_locked_830_cache(check_res)
+                logger.info(f"[scheduler] Auto-locked 8:30 AM open check playbook for {len(check_res['rows'])} tickers")
+    except Exception as lock_err:
+        logger.warning(f"[scheduler] Auto-locking 8:30 AM open check playbook failed: {lock_err}")
+
     return {"count": len(target_entries), "cards_sent": cards_sent, "items": target_entries}
 
 
