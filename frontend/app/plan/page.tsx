@@ -244,7 +244,11 @@ export default function PlanPage() {
       if (localStr) {
         const local = JSON.parse(localStr);
         if (local && local.expiresAt && Date.now() < local.expiresAt) {
-          if (local.planData) setPlanData(local.planData);
+          if (local.planData) {
+            setPlanData(local.planData);
+            const tkStr = (local.planData.rows || []).map((r: any) => r.Ticker).join(", ");
+            if (tkStr) setTickersRaw(tkStr);
+          }
           if (local.openCheckData) {
             setOpenCheckData(local.openCheckData);
             if (local.isLocked830) {
@@ -252,6 +256,8 @@ export default function PlanPage() {
               setLockedAt830(local.lockedAt830 || "8:30 AM CST");
               setActiveViewMode("830_locked");
             }
+          } else if (local.planData) {
+            setActiveViewMode("plan");
           }
           if (local.locked820Data) {
             setLocked820Data(local.locked820Data);
@@ -288,6 +294,8 @@ export default function PlanPage() {
             if (data.plan_data.plan_date) {
               setPlanDate(data.plan_data.plan_date);
             }
+            const tkStr = (data.plan_data.rows || []).map((r: any) => r.Ticker).join(", ");
+            if (tkStr) setTickersRaw(tkStr);
           }
 
           if (data.has_locked_830 && data.locked_830_data) {
@@ -295,6 +303,8 @@ export default function PlanPage() {
             setIsLocked830(true);
             setLockedAt830(data.locked_830_data.locked_at || data.locked_830_data.checked_time || "8:30 AM CST");
             setActiveViewMode("830_locked");
+          } else if (data.has_plan && data.plan_data) {
+            setActiveViewMode("plan");
           }
 
           if (data.has_locked_820 && data.locked_820_data) {
