@@ -766,13 +766,110 @@ def default50_near_entry_alert_job() -> dict:
         elif opt_strat:
             card_lines.append(f"• Strategy: <i>{opt_strat}</i>")
 
+        # Automatically enter into Paper Trading engine
+        paper_trade_id = None
+        try:
+            from alpaca_paper import PaperTrader
+            pt = PaperTrader()
+            try:
+                open_res = pt.open_trade(
+                    ticker=tk,
+                    direction=dirn,
+                    entry_price=cp or entry,
+                    stop_price=stop,
+                    t1_price=t1,
+                    t2_price=t2 or t1,
+                    trade_date=today_str(),
+                    scenario=sc_label,
+                    confidence=str(score),
+                )
+                if isinstance(open_res, dict) and open_res.get("id"):
+                    paper_trade_id = open_res["id"]
+                elif isinstance(open_res, int):
+                    paper_trade_id = open_res
+                logger.info(f"[scheduler] Auto-opened paper trade for {tk}: {open_res}")
+            finally:
+                pt.close()
+        except Exception as pe:
+            logger.warning(f"[scheduler] Auto-logging paper trade failed for {tk}: {pe}")
+
+        card_lines.append("")
+        if paper_trade_id:
+            card_lines.append(f"📝 <b>Paper Trading</b>: Active (Trade #{paper_trade_id})")
+        else:
+            card_lines.append(f"📝 <b>Paper Trading</b>: Auto-logged in Paper DB")
+
         card_msg = "\n".join(card_lines)
         send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, card_msg)
         cards_sent += 1
         time.sleep(0.3)
 
-    logger.info(f"[scheduler] 8:30 AM Near Entry alert sent {cards_sent} separate ticker cards")
+    logger.info(f"[scheduler] 8:30 AM Near Entry alert sent {cards_sent} separate ticker cards and logged to paper trading")
     return {"count": len(target_entries), "cards_sent": cards_sent, "items": target_entries}
+
+
+def paper_exit_monitor_job(force: bool = False) -> dict:
+    """
+    Intraday Paper Trading Monitor (runs every 5 mins from 8:35 AM to 3:00 PM CST, Mon-Fri).
+    Fetches current market prices for open paper trades, evaluates stop loss and profit targets,
+    and automatically executes exits with Telegram notifications.
+    """
+    now_cst = datetime.now(CST)
+    if not force:
+        # Check regular market hours: 8:35 AM to 3:05 PM CST
+        if now_cst.hour < 8 or (now_cst.hour == 8 and now_cst.minute < 35):
+            return {"status": "market_not_open_yet"}
+        if now_cst.hour > 15 or (now_cst.hour == 15 and now_cst.minute > 5):
+            return {"status": "market_closed"}
+
+    try:
+        from alpaca_paper import PaperTrader
+        pt = PaperTrader()
+        try:
+            open_trades = pt.get_open_trades()
+            if not open_trades:
+                return {"status": "no_open_trades", "count": 0}
+
+            tickers = list({t["ticker"] for t in open_trades})
+            prices = _fetch_default50_open_prices(tickers)
+
+            exited_trades = []
+            for tr in open_trades:
+                tk = tr["ticker"]
+                p_info = prices.get(tk)
+                if not p_info or not p_info.get("price"):
+                    continue
+                cur_price = p_info["price"]
+
+                exits = pt.check_exits(tk, cur_price)
+                if exits:
+                    for ex in exits:
+                        exited_trades.append(ex)
+                        outcome = ex.get("outcome", "FLAT")
+                        pnl_dol = ex.get("pnl_dollars", 0.0)
+                        pnl_pct = ex.get("pnl_pct", 0.0)
+                        reason = ex.get("reason", "EXIT")
+
+                        icon = "🎯" if outcome == "WIN" else "🛑"
+                        sign = "+" if pnl_dol >= 0 else ""
+
+                        msg = (
+                            f"{icon} <b>Paper Trade Exit: {tk}</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"• Outcome: <b>{outcome}</b> ({reason})\n"
+                            f"• Exit Price: <b>${cur_price:.2f}</b>\n"
+                            f"• Realized P&L: <b>{sign}${pnl_dol:.2f}</b> ({sign}{pnl_pct:.1f}%)\n"
+                            f"• Status: Position Closed &amp; Archived"
+                        )
+                        send_telegram(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, msg)
+                        logger.info(f"[scheduler] Paper exit executed for {tk}: {ex}")
+
+            return {"status": "ok", "checked": len(open_trades), "exited": len(exited_trades)}
+        finally:
+            pt.close()
+    except Exception as e:
+        logger.warning(f"[scheduler] Paper exit monitor error: {e}")
+        return {"status": "error", "error": str(e)}
 
 
 # ── Scheduler setup ───────────────────────────────────────────────────────────
@@ -799,6 +896,14 @@ def setup_scheduler():
         id="default50_near_entry_alert",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+
+    scheduler.add_job(
+        paper_exit_monitor_job,
+        CronTrigger(hour="8-15", minute="*/5", day_of_week="mon-fri", timezone=CST),
+        id="paper_exit_monitor",
+        replace_existing=True,
+        misfire_grace_time=120,
     )
 
     scheduler.add_job(
@@ -833,6 +938,6 @@ def setup_scheduler():
 
     logger.info(
         "[scheduler] registered: default50_scan@8:00CST, "
-        "default50_near_entry@8:30CST, pre_earnings@8:30CST, "
-        "momentum@8:45CST, polling 15:00–18:00 CST"
+        "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
+        "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST"
     )

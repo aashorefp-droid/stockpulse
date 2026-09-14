@@ -155,3 +155,15 @@ def trigger_default50_near_entry():
             for item in res.get("items", [])
         ],
     }
+
+
+@router.post("/run-paper-exit-monitor")
+def trigger_paper_exit_monitor(force: bool = False):
+    """Manually trigger the intraday paper trading exit monitor."""
+    from backend.services.scheduler import paper_exit_monitor_job
+    res = paper_exit_monitor_job(force=force)
+    return {
+        "status": "paper_exit_monitor completed",
+        "result": res,
+    }
+

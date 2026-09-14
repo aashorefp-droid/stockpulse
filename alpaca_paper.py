@@ -14,10 +14,28 @@ Usage:
 """
 
 import os
+import sys
 import re
 import sqlite3
 import requests
 from datetime import datetime, date
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+def _safe_print(*args, **kwargs):
+    try:
+        print(*args, **kwargs)
+    except Exception:
+        try:
+            clean_args = [str(a).encode("ascii", "replace").decode("ascii") for a in args]
+            print(*clean_args, **kwargs)
+        except Exception:
+            pass
+
 from config import (
     ALPACA_PAPER_API_KEY,
     ALPACA_PAPER_API_SECRET,
@@ -539,11 +557,11 @@ class PaperTrader:
                     "stop_price": str(round(stop_price, 2)),
                 }
 
-            print(f"\n🔵 [ALPACA ORDER DEBUG] Submitting {direction} order:")
-            print(f"   Ticker: {ticker}, Shares: {shares}, Price: ${limit_price:.2f}")
-            print(f"   Stop: ${stop_price:.2f}, TP: ${tp_price:.2f}" if stop_price and tp_price else "")
-            print(f"   Payload: {payload}")
-            print(f"   URL: {ALPACA_PAPER_BASE_URL}/v2/orders")
+            _safe_print(f"\n🔵 [ALPACA ORDER DEBUG] Submitting {direction} order:")
+            _safe_print(f"   Ticker: {ticker}, Shares: {shares}, Price: ${limit_price:.2f}")
+            _safe_print(f"   Stop: ${stop_price:.2f}, TP: ${tp_price:.2f}" if stop_price and tp_price else "")
+            _safe_print(f"   Payload: {payload}")
+            _safe_print(f"   URL: {ALPACA_PAPER_BASE_URL}/v2/orders")
             
             resp = requests.post(
                 f"{ALPACA_PAPER_BASE_URL}/v2/orders",
@@ -552,18 +570,18 @@ class PaperTrader:
                 timeout=10,
             )
             
-            print(f"   Response Status: {resp.status_code}")
-            print(f"   Response Body: {resp.text[:500]}")
+            _safe_print(f"   Response Status: {resp.status_code}")
+            _safe_print(f"   Response Body: {resp.text[:500]}")
             
             if resp.status_code in (200, 201):
                 order_id = resp.json().get("id")
-                print(f"✅ Order submitted successfully! ID: {order_id}")
+                _safe_print(f"✅ Order submitted successfully! ID: {order_id}")
                 return order_id
             else:
-                print(f"⚠️ Alpaca order failed ({resp.status_code}): {resp.text[:500]}")
+                _safe_print(f"⚠️ Alpaca order failed ({resp.status_code}): {resp.text[:500]}")
                 return None
         except Exception as e:
-            print(f"⚠️ Alpaca order error: {e}")
+            _safe_print(f"⚠️ Alpaca order error: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -586,7 +604,7 @@ class PaperTrader:
                 timeout=10,
             )
         except Exception as e:
-            print(f"⚠️ Alpaca close error: {e}")
+            _safe_print(f"⚠️ Alpaca close error: {e}")
 
     def _cancel_alpaca_order(self, order_id):
         """Cancel an Alpaca order (used to cancel remaining bracket legs)."""
@@ -597,11 +615,11 @@ class PaperTrader:
                 timeout=10,
             )
             if resp.status_code in (200, 204):
-                print(f"✅ Cancelled Alpaca order {order_id}")
+                _safe_print(f"✅ Cancelled Alpaca order {order_id}")
             else:
-                print(f"⚠️ Cancel order failed ({resp.status_code}): {resp.text[:200]}")
+                _safe_print(f"⚠️ Cancel order failed ({resp.status_code}): {resp.text[:200]}")
         except Exception as e:
-            print(f"⚠️ Cancel order error: {e}")
+            _safe_print(f"⚠️ Cancel order error: {e}")
 
     # ── Query methods ──────────────────────────────────────────────────────
 
