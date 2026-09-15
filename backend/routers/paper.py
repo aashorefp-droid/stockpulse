@@ -269,6 +269,35 @@ def close_broker_position(req: CloseBrokerPositionRequest):
     finally:
         pt.close()
 
+class CancelOrderRequest(BaseModel):
+    order_id: str
+    mode: Optional[str] = "paper"
+
+@router.post("/alpaca-orders/cancel")
+def cancel_order(req: CancelOrderRequest):
+    """Cancel a specific pending order on Alpaca."""
+    pt = PaperTrader()
+    try:
+        res = pt.cancel_alpaca_order(req.order_id, mode=req.mode or "paper")
+        if isinstance(res, dict) and "error" in res:
+            raise HTTPException(status_code=400, detail=res["error"])
+        return res
+    finally:
+        pt.close()
+
+@router.post("/alpaca-orders/cancel-all")
+def cancel_all_orders(mode: Optional[str] = "paper"):
+    """Cancel all open/pending orders on Alpaca."""
+    pt = PaperTrader()
+    try:
+        res = pt.cancel_all_alpaca_orders(mode=mode or "paper")
+        if isinstance(res, dict) and "error" in res:
+            raise HTTPException(status_code=400, detail=res["error"])
+        return res
+    finally:
+        pt.close()
+
+
 
 
 

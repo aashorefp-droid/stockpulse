@@ -100,6 +100,8 @@ export default function PaperTradingPage() {
   const [closingSymbol, setClosingSymbol] = useState<string | null>(null);
   const [closeModal, setCloseModal] = useState<CloseModalState | null>(null);
   const [submittingClose, setSubmittingClose] = useState(false);
+  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
+  const [cancelingAllOrders, setCancelingAllOrders] = useState(false);
 
   const loadData = useCallback(async (showSpinner = true) => {
     if (showSpinner) setRefreshing(true);
@@ -314,6 +316,49 @@ export default function PaperTradingPage() {
       alert(`Network error: ${e.message}`);
     } finally {
       setSubmittingClose(false);
+    }
+  };
+
+  const handleCancelOrder = async (orderId: string, symbol: string) => {
+    if (!window.confirm(`Cancel order for ${symbol}?`)) return;
+    setCancelingOrderId(orderId);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper/alpaca-orders/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ order_id: orderId, mode }),
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        await loadData(false);
+      } else {
+        alert(`Failed to cancel order: ${data.detail || data.error || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      alert(`Network error: ${e.message}`);
+    } finally {
+      setCancelingOrderId(null);
+    }
+  };
+
+  const handleCancelAllOrders = async () => {
+    if (!window.confirm(`Are you sure you want to cancel ALL open orders on your Alpaca (${mode}) account?`)) return;
+    setCancelingAllOrders(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper/alpaca-orders/cancel-all?mode=${mode}`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
+        alert("✅ All open orders cancelled successfully.");
+        await loadData(false);
+      } else {
+        alert(`Failed to cancel orders: ${data.detail || data.error || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      alert(`Network error: ${e.message}`);
+    } finally {
+      setCancelingAllOrders(false);
     }
   };
 
@@ -837,7 +882,11 @@ export default function PaperTradingPage() {
                         <th className="px-4 py-3">Side</th>
                         <th className="px-4 py-3">Qty</th>
                         <th className="px-4 py-3">Avg Entry</th>
-                        <th className="px-4 py-3">Current Price</th>
+                        <th className="px-4 py-3">Current</th>
+                        <th className="px-4 py-3">Stop Loss</th>
+                        <th className="px-4 py-3">Target 1</th>
+                        <th className="px-4 py-3">Target 2</th>
+                        <th className="px-4 py-3">Exit Orders</th>
                         <th className="px-4 py-3">Unrealized P&L</th>
                         <th className="px-4 py-3">P&L %</th>
                         <th className="px-4 py-3">Market Value</th>
@@ -847,7 +896,7 @@ export default function PaperTradingPage() {
                     <tbody className="divide-y divide-border">
                       {alpacaPositions.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="text-center py-12 text-muted">
+                          <td colSpan={13} className="text-center py-12 text-muted">
                             No open positions found on the Alpaca broker account.
                           </td>
                         </tr>
@@ -868,6 +917,31 @@ export default function PaperTradingPage() {
                               <td className="px-4 py-3 font-mono text-white">{p.qty}</td>
                               <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.avg_entry_price)}</td>
                               <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.current_price)}</td>
+                              <td className="px-4 py-3 font-mono text-bear font-semibold">
+                                {p.stop_price ? fmtPrice(p.stop_price) : "—"}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-bull font-semibold">
+                                {p.t1_price ? fmtPrice(p.t1_price) : "—"}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-bull">
+                                {p.t2_price ? fmtPrice(p.t2_price) : "—"}
+                              </td>
+                              <td className="px-4 py-3">
+                                {p.has_active_orders ? (
+                                  <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-bull/20 text-bull border border-bull/30 flex items-center gap-1 w-fit" title={`${p.active_exit_orders?.length || 1} exit order(s) active on Alpaca`}>
+                                    <span>🛡️</span> GTC Active
+                                  </span>
+                                ) : (
+                                  <button
+                                    onClick={handleSyncOrders}
+                                    disabled={syncingOrders}
+                                    className="px-2 py-0.5 rounded text-[11px] font-semibold bg-bear/20 text-bear border border-bear/30 hover:bg-bear/30 transition-colors flex items-center gap-1"
+                                    title="Click to re-attach GTC Stop Loss & Take Profit order"
+                                  >
+                                    <span>⚠️</span> Unhedged &middot; Sync
+                                  </button>
+                                )}
+                              </td>
                               <td className={`px-4 py-3 font-mono font-bold ${pl >= 0 ? "text-bull" : "text-bear"}`}>
                                 {pl >= 0 ? "+" : ""}${fmtNum(pl, 2)}
                               </td>
@@ -897,65 +971,145 @@ export default function PaperTradingPage() {
 
           {/* 5. ALPACA BROKER RECENT ORDERS */}
           {activeTab === "broker_orders" && (
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-surface text-muted text-xs uppercase border-b border-border">
-                    <tr>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3">Symbol</th>
-                      <th className="px-4 py-3">Side</th>
-                      <th className="px-4 py-3">Qty</th>
-                      <th className="px-4 py-3">Filled</th>
-                      <th className="px-4 py-3">Type</th>
-                      <th className="px-4 py-3">Status Name</th>
-                      <th className="px-4 py-3">Submitted At</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {alpacaOrders.length === 0 ? (
+            <div className="space-y-4">
+              <div className="bg-surface/50 border border-border/80 rounded-xl p-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-3">
+                  <span className="text-accent text-sm">📜</span>
+                  <span className="text-white font-semibold">
+                    Orders on {mode === "live" ? "Live Alpaca Account" : "Alpaca Paper Account"}
+                  </span>
+                  <span className="text-muted text-[11px]">
+                    ({alpacaOrders.filter((o) => ["new", "accepted", "partially_filled", "held", "pending_new"].includes((o.status || "").toLowerCase())).length} open/pending)
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => loadData(true)}
+                    disabled={refreshing}
+                    className="bg-surface hover:bg-surface/80 border border-border text-white text-xs font-semibold px-2.5 py-1 rounded-md transition-colors"
+                  >
+                    🔄 Refresh Orders
+                  </button>
+                  <button
+                    onClick={handleCancelAllOrders}
+                    disabled={
+                      cancelingAllOrders ||
+                      alpacaOrders.filter((o) =>
+                        ["new", "accepted", "partially_filled", "held", "pending_new"].includes(
+                          (o.status || "").toLowerCase()
+                        )
+                      ).length === 0
+                    }
+                    className="bg-bear/15 hover:bg-bear/25 text-bear border border-bear/40 text-xs font-semibold px-2.5 py-1 rounded-md transition-colors disabled:opacity-40"
+                    title="Cancel all open/pending orders on Alpaca"
+                  >
+                    {cancelingAllOrders ? "Cancelling..." : "🚫 Cancel All Open Orders"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-surface text-muted text-xs uppercase border-b border-border">
                       <tr>
-                        <td colSpan={8} className="text-center py-12 text-muted">
-                          No recent broker orders found.
-                        </td>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Symbol</th>
+                        <th className="px-4 py-3">Side</th>
+                        <th className="px-4 py-3">Qty / Filled</th>
+                        <th className="px-4 py-3">Type</th>
+                        <th className="px-4 py-3">Limit / Target</th>
+                        <th className="px-4 py-3">Stop Loss</th>
+                        <th className="px-4 py-3">TIF</th>
+                        <th className="px-4 py-3">Submitted At</th>
+                        <th className="px-4 py-3 text-right">Action</th>
                       </tr>
-                    ) : (
-                      alpacaOrders.map((o, idx) => {
-                        const st = (o.status || "").toUpperCase();
-                        const isFilled = st === "FILLED";
-                        const isPending = ["NEW", "ACCEPTED", "PARTIALLY_FILLED"].includes(st);
-                        return (
-                          <tr key={idx} className="hover:bg-surface/50">
-                            <td className="px-4 py-3 text-base">
-                              {isFilled ? "✅" : isPending ? "⏳" : "❌"}
-                            </td>
-                            <td className="px-4 py-3 font-mono font-bold text-accent">{o.symbol}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                o.side?.toLowerCase() === "buy" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
-                              }`}>
-                                {o.side?.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 font-mono text-white">{o.qty}</td>
-                            <td className="px-4 py-3 font-mono text-white">{o.filled_qty || 0}</td>
-                            <td className="px-4 py-3 text-xs text-muted uppercase">{o.type}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                                isFilled ? "text-bull bg-bull/10" : isPending ? "text-accent bg-accent/10" : "text-bear bg-bear/10"
-                              }`}>
-                                {st}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 font-mono text-xs text-muted">
-                              {o.submitted_at ? new Date(o.submitted_at).toLocaleString() : "—"}
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {alpacaOrders.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="text-center py-12 text-muted">
+                            No recent broker orders found.
+                          </td>
+                        </tr>
+                      ) : (
+                        alpacaOrders.map((o, idx) => {
+                          const st = (o.status || "").toUpperCase();
+                          const isFilled = st === "FILLED";
+                          const isPending = [
+                            "NEW",
+                            "ACCEPTED",
+                            "PARTIALLY_FILLED",
+                            "HELD",
+                            "PENDING_NEW",
+                            "ACCEPTED_FOR_BIDDING",
+                          ].includes(st);
+                          const isBuy = o.side?.toLowerCase() === "buy";
+                          return (
+                            <tr key={idx} className="hover:bg-surface/50">
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs font-semibold inline-flex items-center gap-1 ${
+                                    isFilled
+                                      ? "text-bull bg-bull/10 border border-bull/20"
+                                      : isPending
+                                      ? "text-accent bg-accent/10 border border-accent/20"
+                                      : "text-bear bg-bear/10 border border-bear/20"
+                                  }`}
+                                >
+                                  <span>{isFilled ? "✅" : isPending ? "⏳" : "❌"}</span>
+                                  <span>{st}</span>
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 font-mono font-bold text-accent">{o.symbol}</td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                    isBuy ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
+                                  }`}
+                                >
+                                  {o.side?.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-white">
+                                {o.filled_qty || 0} / {o.qty}
+                              </td>
+                              <td className="px-4 py-3 text-xs font-mono text-muted uppercase">
+                                {o.type} {o.order_class && o.order_class !== "simple" ? `(${o.order_class})` : ""}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-bull font-semibold">
+                                {o.limit_price ? `$${fmtPrice(o.limit_price)}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-bear font-semibold">
+                                {o.stop_price ? `$${fmtPrice(o.stop_price)}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs text-white uppercase">
+                                {o.time_in_force || "—"}
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs text-muted">
+                                {o.submitted_at ? new Date(o.submitted_at).toLocaleString() : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                {isPending ? (
+                                  <button
+                                    onClick={() => handleCancelOrder(o.id, o.symbol)}
+                                    disabled={cancelingOrderId === o.id}
+                                    className="bg-bear/15 hover:bg-bear/25 text-bear border border-bear/40 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50 inline-flex items-center gap-1"
+                                    title={`Cancel order #${o.id} for ${o.symbol}`}
+                                  >
+                                    {cancelingOrderId === o.id ? "Cancelling..." : "❌ Cancel"}
+                                  </button>
+                                ) : (
+                                  <span className="text-muted text-xs">—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

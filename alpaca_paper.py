@@ -905,8 +905,64 @@ class PaperTrader:
         self.db.execute("DELETE FROM paper_trades")
         self.db.commit()
 
+    def cancel_alpaca_order(self, order_id, mode="paper"):
+        """Cancel a single Alpaca order."""
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = f"https://api.alpaca.markets/v2/orders/{order_id}"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/orders/{order_id}"
+            headers = _alpaca_headers()
+
+        try:
+            resp = requests.delete(url, headers=headers, timeout=10)
+            if resp.status_code in (200, 204):
+                return {"status": "ok", "order_id": order_id, "message": f"Order {order_id} cancelled successfully."}
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cancel_all_alpaca_orders(self, mode="paper"):
+        """Cancel all open Alpaca orders."""
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = "https://api.alpaca.markets/v2/orders"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/orders"
+            headers = _alpaca_headers()
+
+        try:
+            resp = requests.delete(url, headers=headers, timeout=10)
+            if resp.status_code in (200, 204, 207):
+                return {"status": "ok", "message": "All open orders cancelled successfully on Alpaca."}
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+        except Exception as e:
+            return {"error": str(e)}
+
     def get_alpaca_positions(self, mode="paper"):
-        """Fetch open positions from Alpaca paper or live account."""
+        """Fetch open positions from Alpaca paper or live account, enriched with targets and stop prices."""
         if mode == "live":
             if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
                 return {"error": "Live Alpaca API keys not configured"}
@@ -923,13 +979,114 @@ class PaperTrader:
             headers = _alpaca_headers()
         try:
             resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                return resp.json()
+            if resp.status_code != 200:
+                try:
+                    err_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+
+            positions = resp.json()
+            if not isinstance(positions, list):
+                return positions
+
+            # Enrich positions with targets, stop prices, and attached orders
             try:
-                err_msg = resp.json().get("message", resp.text)
-            except Exception:
-                err_msg = resp.text
-            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+                open_trades = {t["ticker"]: t for t in self.get_open_trades()}
+
+                # Fetch open orders to see if active exits are already placed on Alpaca
+                open_orders = self.get_alpaca_orders(status="open", limit=100, mode=mode)
+                orders_by_symbol = {}
+                if isinstance(open_orders, list):
+                    for o in open_orders:
+                        sym = o.get("symbol")
+                        if sym:
+                            orders_by_symbol.setdefault(sym, []).append(o)
+
+                # Check cached plan rows
+                plan_rows = {}
+                try:
+                    from backend.services.plan_service import get_persisted_plan
+                    p_data = get_persisted_plan()
+                    if p_data and isinstance(p_data, dict):
+                        for r in p_data.get("rows", []):
+                            if isinstance(r, dict) and r.get("Ticker"):
+                                plan_rows[r["Ticker"]] = r
+                        locked_830 = p_data.get("locked_830", {})
+                        if isinstance(locked_830, dict):
+                            for r in locked_830.get("rows", []):
+                                if isinstance(r, dict) and r.get("Ticker"):
+                                    plan_rows[r["Ticker"]] = r
+                except Exception:
+                    pass
+
+                for p in positions:
+                    tk = p.get("symbol")
+                    avg_entry = float(p.get("avg_entry_price", 0) or 0)
+                    side = p.get("side", "long").lower()
+
+                    tr = open_trades.get(tk)
+                    pl_row = plan_rows.get(tk)
+                    sym_orders = orders_by_symbol.get(tk, [])
+
+                    t1 = None
+                    t2 = None
+                    stop = None
+
+                    # 1. From database trade
+                    if tr:
+                        stop = tr.get("stop_price")
+                        t1 = tr.get("t1_price")
+                        t2 = tr.get("t2_price")
+                    # 2. From trade plan
+                    elif pl_row:
+                        try:
+                            stop = float(pl_row.get("Stop") or 0) or None
+                            t1 = float(pl_row.get("T1") or 0) or None
+                            t2 = float(pl_row.get("T2") or 0) or None
+                        except Exception:
+                            pass
+
+                    # 3. Check if active orders on Alpaca have limit/stop prices
+                    active_limit_orders = []
+                    active_stop_orders = []
+                    for o in sym_orders:
+                        lp = o.get("limit_price")
+                        sp = o.get("stop_price")
+                        if lp:
+                            active_limit_orders.append(float(lp))
+                        if sp:
+                            active_stop_orders.append(float(sp))
+                        legs = o.get("legs") or []
+                        for leg in legs:
+                            if leg.get("limit_price"):
+                                active_limit_orders.append(float(leg.get("limit_price")))
+                            if leg.get("stop_price"):
+                                active_stop_orders.append(float(leg.get("stop_price")))
+
+                    if active_limit_orders and not t1:
+                        t1 = active_limit_orders[0]
+                    if active_stop_orders and not stop:
+                        stop = active_stop_orders[0]
+
+                    # 4. Fallback calculation if still missing
+                    if avg_entry > 0:
+                        if not stop:
+                            stop = round(avg_entry * (0.98 if side == "long" else 1.02), 2)
+                        if not t1:
+                            t1 = round(avg_entry * (1.04 if side == "long" else 0.96), 2)
+                        if not t2:
+                            t2 = round(avg_entry * (1.08 if side == "long" else 0.92), 2)
+
+                    p["t1_price"] = t1
+                    p["t2_price"] = t2
+                    p["stop_price"] = stop
+                    p["active_exit_orders"] = sym_orders
+                    p["has_active_orders"] = len(sym_orders) > 0
+            except Exception as e:
+                _safe_print(f"Warning enriching positions: {e}")
+
+            return positions
         except Exception as e:
             return {"error": str(e)}
 
