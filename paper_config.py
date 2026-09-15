@@ -126,7 +126,8 @@ MAX_LOSS_PCT = None                  # Force exit if loss exceeds this % (e.g. 3
 # ═══════════════════════════════════════════════════════════════════════════════
 SUBMIT_TO_ALPACA = True              # True = submit to Alpaca in live mode. Automatically overridden to False in replay.
 ORDER_TYPE = "limit"                 # "limit" or "market"
-TIME_IN_FORCE = "day"                # "day", "gtc", "ioc"
+TIME_IN_FORCE = "gtc"                # "gtc" (persists across days) or "day" (expires at 4 PM EST)
+
 
 # -- Bracket orders (native Alpaca stop loss + take profit)
 USE_BRACKET_ORDERS = True            # True = submit bracket order with SL/TP legs. False = simple limit order.

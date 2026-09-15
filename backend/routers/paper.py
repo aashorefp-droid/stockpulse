@@ -219,10 +219,23 @@ def get_paper_config():
             "max_loss_pct": getattr(pc, "MAX_LOSS_PCT", 2.0),
             "submit_to_alpaca": getattr(pc, "SUBMIT_TO_ALPACA", True),
             "order_type": getattr(pc, "ORDER_TYPE", "limit"),
-            "time_in_force": getattr(pc, "TIME_IN_FORCE", "day"),
+            "time_in_force": getattr(pc, "TIME_IN_FORCE", "gtc"),
             "auto_paper_in_replay": getattr(pc, "AUTO_PAPER_IN_REPLAY", True),
             "scenario_entry_rules": getattr(pc, "SCENARIO_ENTRY_RULES", {}),
         }
     except Exception as e:
         return {"status": "error", "detail": str(e)}
+
+@router.post("/sync-orders")
+def sync_alpaca_orders():
+    """Ensure all open positions in Alpaca have active GTC exit orders (re-attaches if expired)."""
+    pt = PaperTrader()
+    try:
+        attached = pt.ensure_active_orders_for_open_positions()
+        return {"status": "ok", "attached": attached, "count": len(attached)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        pt.close()
+
 

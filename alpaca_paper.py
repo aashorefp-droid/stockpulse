@@ -538,14 +538,17 @@ class PaperTrader:
         Returns order_id or None."""
         try:
             side = "buy" if direction == "LONG" else "sell"
+            tif = getattr(pc, "TIME_IN_FORCE", "gtc")
+            order_type = getattr(pc, "ORDER_TYPE", "limit")
             payload = {
                 "symbol": ticker,
                 "qty": shares,
                 "side": side,
-                "type": "limit",
-                "time_in_force": "day",
-                "limit_price": str(round(limit_price, 2)),
+                "type": order_type,
+                "time_in_force": tif,
             }
+            if order_type == "limit":
+                payload["limit_price"] = str(round(limit_price, 2))
 
             # Bracket order: adds native stop loss + take profit legs
             if pc.USE_BRACKET_ORDERS and stop_price and tp_price:
@@ -557,7 +560,7 @@ class PaperTrader:
                     "stop_price": str(round(stop_price, 2)),
                 }
 
-            _safe_print(f"\n🔵 [ALPACA ORDER DEBUG] Submitting {direction} order:")
+            _safe_print(f"\n🔵 [ALPACA ORDER DEBUG] Submitting {direction} order (TIF={tif}):")
             _safe_print(f"   Ticker: {ticker}, Shares: {shares}, Price: ${limit_price:.2f}")
             _safe_print(f"   Stop: ${stop_price:.2f}, TP: ${tp_price:.2f}" if stop_price and tp_price else "")
             _safe_print(f"   Payload: {payload}")
@@ -620,6 +623,90 @@ class PaperTrader:
                 _safe_print(f"⚠️ Cancel order failed ({resp.status_code}): {resp.text[:200]}")
         except Exception as e:
             _safe_print(f"⚠️ Cancel order error: {e}")
+
+    def ensure_active_orders_for_open_positions(self):
+        """
+        Ensures open positions in Alpaca have active GTC exit orders.
+        If yesterday's DAY orders expired at 4 PM EST, this automatically attaches
+        new GTC OCO (Stop Loss + Take Profit) orders so positions stay protected.
+        """
+        if not _alpaca_enabled():
+            return []
+
+        try:
+            # 1. Get open orders from Alpaca
+            active_orders = self.get_alpaca_orders(status="open", limit=100)
+            if isinstance(active_orders, dict) and "error" in active_orders:
+                return []
+            active_symbols = {o.get("symbol") for o in active_orders if isinstance(o, dict) and o.get("symbol")}
+
+            # 2. Get open positions from Alpaca
+            positions = self.get_alpaca_positions()
+            if isinstance(positions, dict) and "error" in positions:
+                return []
+            if not isinstance(positions, list):
+                return []
+
+            attached = []
+            open_trades = {t["ticker"]: t for t in self.get_open_trades()}
+
+            for p in positions:
+                tk = p.get("symbol")
+                if not tk or tk in active_symbols:
+                    continue  # Already has active order on book
+
+                tr = open_trades.get(tk)
+                if not tr:
+                    continue
+
+                qty = abs(int(float(p.get("qty", 0))))
+                if qty <= 0:
+                    continue
+
+                direction = tr.get("direction", "LONG")
+                stop_px = tr.get("stop_price")
+                t1_px = tr.get("t1_price")
+                t2_px = tr.get("t2_price", t1_px)
+                tp_px = t1_px if getattr(pc, "BRACKET_TP_TARGET", "T1") == "T1" else t2_px
+
+                if not (stop_px and tp_px):
+                    continue
+
+                # Submit OCO exit order with GTC
+                side = "sell" if direction == "LONG" else "buy"
+                payload = {
+                    "symbol": tk,
+                    "qty": qty,
+                    "side": side,
+                    "type": "limit",
+                    "time_in_force": "gtc",
+                    "order_class": "oco",
+                    "take_profit": {
+                        "limit_price": str(round(tp_px, 2)),
+                    },
+                    "stop_loss": {
+                        "stop_price": str(round(stop_px, 2)),
+                    },
+                }
+
+                _safe_print(f"🔄 Re-attaching GTC OCO exit order for {tk} ({qty} shares): Stop ${stop_px:.2f}, TP ${tp_px:.2f}")
+                resp = requests.post(
+                    f"{ALPACA_PAPER_BASE_URL}/v2/orders",
+                    headers=_alpaca_headers(),
+                    json=payload,
+                    timeout=10,
+                )
+                if resp.status_code in (200, 201):
+                    order_id = resp.json().get("id")
+                    _safe_print(f"✅ GTC OCO exit attached successfully for {tk}! Order ID: {order_id}")
+                    attached.append({"ticker": tk, "order_id": order_id})
+                else:
+                    _safe_print(f"⚠️ Re-attach OCO failed for {tk} ({resp.status_code}): {resp.text[:200]}")
+
+            return attached
+        except Exception as e:
+            _safe_print(f"⚠️ Error ensuring active orders: {e}")
+            return []
 
     # ── Query methods ──────────────────────────────────────────────────────
 

@@ -849,6 +849,14 @@ def paper_exit_monitor_job(force: bool = False) -> dict:
         from alpaca_paper import PaperTrader
         pt = PaperTrader()
         try:
+            # Re-attach GTC exit orders on Alpaca if previous DAY orders expired
+            try:
+                re_attached = pt.ensure_active_orders_for_open_positions()
+                if re_attached:
+                    logger.info(f"[scheduler] Re-attached GTC exit orders on Alpaca: {re_attached}")
+            except Exception as re_err:
+                logger.warning(f"[scheduler] Error checking active Alpaca orders: {re_err}")
+
             open_trades = pt.get_open_trades()
             if not open_trades:
                 return {"status": "no_open_trades", "count": 0}
