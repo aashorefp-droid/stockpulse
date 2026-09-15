@@ -202,19 +202,25 @@ export default function PaperTradingPage() {
   const handleSyncOrders = async () => {
     setSyncingOrders(true);
     try {
-      const res = await fetch(`${API_BASE}/api/paper/sync-orders`, { method: "POST" });
-      if (res.ok) {
-        const data = await res.json();
+      const res = await fetch(`${API_BASE}/api/paper/sync-orders?mode=${mode}`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok && data.status === "ok") {
         const count = data.count ?? 0;
-        alert(
-          count > 0
-            ? `Successfully re-attached GTC exit orders for ${count} open position(s)!`
-            : "All open positions already have active exit orders attached, or no open positions found."
-        );
+        const already = data.already_protected || [];
+        if (count > 0) {
+          const listStr = data.attached?.map((a: any) => a.ticker).join(", ");
+          alert(`✅ Successfully attached GTC exit orders for ${count} position(s): ${listStr}`);
+        } else if (already.length > 0) {
+          alert(`🛡️ All ${already.length} open position(s) (${already.join(", ")}) already have active exit orders sitting on Alpaca's order book.`);
+        } else if (data.total_positions === 0) {
+          alert(`ℹ️ No open positions found in your Alpaca (${mode}) account.`);
+        } else {
+          alert(data.message || "All open positions are already protected.");
+        }
         await loadData(false);
       } else {
-        const err = await res.json();
-        alert(`Failed to sync orders: ${err.detail || "Unknown error"}`);
+        const errorMsg = data.detail || data.error || "Unknown error";
+        alert(`⚠️ Alpaca Sync Failed:\n${errorMsg}\n\nPlease check your ${mode === "paper" ? "ALPACA_PAPER_API_KEY" : "ALPACA_API_KEY"} in .env.`);
       }
     } catch (e: any) {
       alert(`Error: ${e.message}`);

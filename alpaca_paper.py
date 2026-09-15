@@ -624,60 +624,136 @@ class PaperTrader:
         except Exception as e:
             _safe_print(f"⚠️ Cancel order error: {e}")
 
-    def ensure_active_orders_for_open_positions(self):
+    def ensure_active_orders_for_open_positions(self, mode="paper"):
         """
         Ensures open positions in Alpaca have active GTC exit orders.
         If yesterday's DAY orders expired at 4 PM EST, this automatically attaches
         new GTC OCO (Stop Loss + Take Profit) orders so positions stay protected.
+        Supports both 'paper' and 'live' modes.
         """
-        if not _alpaca_enabled():
-            return []
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"status": "error", "error": "Live Alpaca API keys not configured", "count": 0, "mode": mode}
+            url_orders = "https://api.alpaca.markets/v2/orders"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+                "Content-Type": "application/json",
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"status": "error", "error": "Paper trading keys not configured", "count": 0, "mode": mode}
+            url_orders = f"{ALPACA_PAPER_BASE_URL}/v2/orders"
+            headers = _alpaca_headers()
 
         try:
             # 1. Get open orders from Alpaca
-            active_orders = self.get_alpaca_orders(status="open", limit=100)
+            active_orders = self.get_alpaca_orders(status="open", limit=100, mode=mode)
             if isinstance(active_orders, dict) and "error" in active_orders:
-                return []
+                return {"status": "error", "error": active_orders["error"], "count": 0, "mode": mode}
             active_symbols = {o.get("symbol") for o in active_orders if isinstance(o, dict) and o.get("symbol")}
 
             # 2. Get open positions from Alpaca
-            positions = self.get_alpaca_positions()
+            positions = self.get_alpaca_positions(mode=mode)
             if isinstance(positions, dict) and "error" in positions:
-                return []
+                return {"status": "error", "error": positions["error"], "count": 0, "mode": mode}
             if not isinstance(positions, list):
-                return []
+                return {
+                    "status": "ok",
+                    "attached": [],
+                    "count": 0,
+                    "total_positions": 0,
+                    "already_protected": [],
+                    "mode": mode,
+                    "message": "No open positions found in Alpaca portfolio.",
+                }
+
+            if len(positions) == 0:
+                return {
+                    "status": "ok",
+                    "attached": [],
+                    "count": 0,
+                    "total_positions": 0,
+                    "already_protected": [],
+                    "message": f"No open positions found in your Alpaca ({mode}) account.",
+                    "mode": mode,
+                }
 
             attached = []
+            already_protected = []
             open_trades = {t["ticker"]: t for t in self.get_open_trades()}
+
+            # Try to load cached plan for target/stop reference if not in SQLite
+            cached_plan_rows = {}
+            try:
+                from backend.services.plan_service import get_persisted_plan
+                p_data = get_persisted_plan()
+                if p_data and isinstance(p_data, dict):
+                    for r in p_data.get("rows", []):
+                        if isinstance(r, dict) and r.get("Ticker"):
+                            cached_plan_rows[r["Ticker"]] = r
+                    locked_830 = p_data.get("locked_830", {})
+                    if isinstance(locked_830, dict):
+                        for r in locked_830.get("rows", []):
+                            if isinstance(r, dict) and r.get("Ticker"):
+                                cached_plan_rows[r["Ticker"]] = r
+            except Exception:
+                pass
 
             for p in positions:
                 tk = p.get("symbol")
-                if not tk or tk in active_symbols:
-                    continue  # Already has active order on book
-
-                tr = open_trades.get(tk)
-                if not tr:
+                if not tk:
                     continue
+                if tk in active_symbols:
+                    already_protected.append(tk)
+                    continue  # Already has active order on book
 
                 qty = abs(int(float(p.get("qty", 0))))
                 if qty <= 0:
                     continue
 
-                direction = tr.get("direction", "LONG")
-                stop_px = tr.get("stop_price")
-                t1_px = tr.get("t1_price")
-                t2_px = tr.get("t2_price", t1_px)
-                tp_px = t1_px if getattr(pc, "BRACKET_TP_TARGET", "T1") == "T1" else t2_px
+                avg_entry = float(p.get("avg_entry_price", 0) or 0)
+                side_alpaca = p.get("side", "long").lower()
+                direction = "LONG" if side_alpaca == "long" else "SHORT"
 
-                if not (stop_px and tp_px):
-                    continue
+                tr = open_trades.get(tk)
+                plan_row = cached_plan_rows.get(tk)
+
+                stop_px = None
+                tp_px = None
+
+                if tr:
+                    direction = tr.get("direction", direction)
+                    stop_px = tr.get("stop_price")
+                    t1_px = tr.get("t1_price")
+                    t2_px = tr.get("t2_price", t1_px)
+                    tp_px = t1_px if getattr(pc, "BRACKET_TP_TARGET", "T1") == "T1" else t2_px
+                elif plan_row:
+                    try:
+                        stop_px = float(plan_row.get("Stop") or 0)
+                        t1_px = float(plan_row.get("T1") or 0)
+                        tp_px = t1_px
+                    except Exception:
+                        pass
+
+                # Fallback if no trade record or plan exists: standard 2% stop, 4% target from entry
+                if not (stop_px and tp_px and stop_px > 0 and tp_px > 0):
+                    if avg_entry > 0:
+                        if direction == "LONG":
+                            stop_px = round(avg_entry * 0.98, 2)
+                            tp_px = round(avg_entry * 1.04, 2)
+                        else:
+                            stop_px = round(avg_entry * 1.02, 2)
+                            tp_px = round(avg_entry * 0.96, 2)
+                    else:
+                        continue
 
                 # Submit OCO exit order with GTC
-                side = "sell" if direction == "LONG" else "buy"
+                exit_side = "sell" if direction == "LONG" else "buy"
                 payload = {
                     "symbol": tk,
                     "qty": qty,
-                    "side": side,
+                    "side": exit_side,
                     "type": "limit",
                     "time_in_force": "gtc",
                     "order_class": "oco",
@@ -691,22 +767,38 @@ class PaperTrader:
 
                 _safe_print(f"🔄 Re-attaching GTC OCO exit order for {tk} ({qty} shares): Stop ${stop_px:.2f}, TP ${tp_px:.2f}")
                 resp = requests.post(
-                    f"{ALPACA_PAPER_BASE_URL}/v2/orders",
-                    headers=_alpaca_headers(),
+                    url_orders,
+                    headers=headers,
                     json=payload,
                     timeout=10,
                 )
                 if resp.status_code in (200, 201):
                     order_id = resp.json().get("id")
                     _safe_print(f"✅ GTC OCO exit attached successfully for {tk}! Order ID: {order_id}")
-                    attached.append({"ticker": tk, "order_id": order_id})
+                    attached.append({"ticker": tk, "order_id": order_id, "stop_loss": stop_px, "take_profit": tp_px})
                 else:
                     _safe_print(f"⚠️ Re-attach OCO failed for {tk} ({resp.status_code}): {resp.text[:200]}")
 
-            return attached
+            return {
+                "status": "ok",
+                "mode": mode,
+                "attached": attached,
+                "count": len(attached),
+                "already_protected": already_protected,
+                "total_positions": len(positions),
+                "message": (
+                    f"Successfully attached GTC orders for {len(attached)} position(s)."
+                    if len(attached) > 0
+                    else (
+                        f"All {len(already_protected)} open position(s) already have active exit orders sitting on Alpaca's book."
+                        if len(already_protected) > 0
+                        else f"No open positions found in your Alpaca ({mode}) portfolio."
+                    )
+                ),
+            }
         except Exception as e:
             _safe_print(f"⚠️ Error ensuring active orders: {e}")
-            return []
+            return {"status": "error", "error": str(e), "count": 0, "mode": mode}
 
     # ── Query methods ──────────────────────────────────────────────────────
 

@@ -227,12 +227,16 @@ def get_paper_config():
         return {"status": "error", "detail": str(e)}
 
 @router.post("/sync-orders")
-def sync_alpaca_orders():
+def sync_alpaca_orders(mode: Optional[str] = "paper"):
     """Ensure all open positions in Alpaca have active GTC exit orders (re-attaches if expired)."""
     pt = PaperTrader()
     try:
-        attached = pt.ensure_active_orders_for_open_positions()
-        return {"status": "ok", "attached": attached, "count": len(attached)}
+        res = pt.ensure_active_orders_for_open_positions(mode=mode or "paper")
+        if isinstance(res, dict) and res.get("status") == "error":
+            raise HTTPException(status_code=400, detail=res.get("error", "Alpaca API error"))
+        return res
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     finally:
