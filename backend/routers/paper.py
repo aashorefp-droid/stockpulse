@@ -245,14 +245,15 @@ def sync_alpaca_orders(mode: Optional[str] = "paper"):
 class CloseBrokerPositionRequest(BaseModel):
     symbol: str
     mode: Optional[str] = "paper"
-    order_type: Optional[str] = "market"  # "market" or "limit"
+    order_type: Optional[str] = "market"  # "market", "limit", "stop", or "oco"
     limit_price: Optional[float] = None
+    stop_price: Optional[float] = None
     qty: Optional[int] = None
     time_in_force: Optional[str] = "gtc"
 
 @router.post("/alpaca-positions/close")
 def close_broker_position(req: CloseBrokerPositionRequest):
-    """Liquidate or place a limit exit order directly on Alpaca."""
+    """Liquidate or place an exit order (Market, Limit, Stop Loss, or Bracket OCO) directly on Alpaca."""
     pt = PaperTrader()
     try:
         res = pt.close_alpaca_position(
@@ -260,6 +261,7 @@ def close_broker_position(req: CloseBrokerPositionRequest):
             mode=req.mode or "paper",
             order_type=req.order_type or "market",
             limit_price=req.limit_price,
+            stop_price=req.stop_price,
             qty=req.qty,
             time_in_force=req.time_in_force or "gtc",
         )

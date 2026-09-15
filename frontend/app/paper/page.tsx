@@ -74,11 +74,15 @@ interface CloseModalState {
   avgEntry: number;
   currentPrice: number;
   side: string;
-  orderType: "limit" | "market";
+  orderType: "oco" | "stop" | "limit" | "market";
   limitPrice: string;
+  stopPrice: string;
   qtyToClose: string;
   timeInForce: "gtc" | "day";
   source: "broker" | "trade";
+  initialStop?: number | null;
+  initialT1?: number | null;
+  initialT2?: number | null;
 }
 
 export default function PaperTradingPage() {
@@ -214,23 +218,46 @@ export default function PaperTradingPage() {
 
   const openCloseModalForBroker = (pos: any) => {
     const curPx = parseFloat(pos.current_price || pos.avg_entry_price || 0);
+    const avgEntry = parseFloat(pos.avg_entry_price || 0);
     const sharesCount = Math.abs(parseInt(pos.qty || 0));
+    const isShort = pos.side?.toLowerCase() === "short";
+
+    const initialStop = pos.stop_price ? parseFloat(pos.stop_price) : null;
+    const initialT1 = pos.t1_price ? parseFloat(pos.t1_price) : null;
+    const initialT2 = pos.t2_price ? parseFloat(pos.t2_price) : null;
+
+    const basePx = curPx > 0 ? curPx : avgEntry;
+    let defaultStopPx = initialStop || (isShort ? basePx * 1.02 : basePx * 0.98);
+    let defaultLimitPx = initialT1 || (isShort ? basePx * 0.98 : basePx * 1.02);
+
     setCloseModal({
       isOpen: true,
       symbol: pos.symbol,
       shares: sharesCount,
-      avgEntry: parseFloat(pos.avg_entry_price || 0),
+      avgEntry: avgEntry,
       currentPrice: curPx,
-      side: pos.side?.toLowerCase() === "short" ? "SHORT" : "LONG",
-      orderType: "limit",
-      limitPrice: curPx > 0 ? curPx.toFixed(2) : "",
+      side: isShort ? "SHORT" : "LONG",
+      orderType: "oco",
+      limitPrice: defaultLimitPx > 0 ? defaultLimitPx.toFixed(2) : "",
+      stopPrice: defaultStopPx > 0 ? defaultStopPx.toFixed(2) : "",
       qtyToClose: sharesCount.toString(),
       timeInForce: "gtc",
       source: "broker",
+      initialStop,
+      initialT1,
+      initialT2,
     });
   };
 
   const openCloseModalForTrade = (t: PaperTrade) => {
+    const isShort = t.direction === "SHORT";
+    const initialStop = t.stop_price ? Number(t.stop_price) : null;
+    const initialT1 = t.t1_price ? Number(t.t1_price) : null;
+    const initialT2 = t.t2_price ? Number(t.t2_price) : null;
+
+    let defaultStopPx = initialStop || (isShort ? t.entry_price * 1.02 : t.entry_price * 0.98);
+    let defaultLimitPx = initialT1 || (isShort ? t.entry_price * 0.98 : t.entry_price * 1.02);
+
     setCloseModal({
       isOpen: true,
       symbol: t.ticker,
@@ -239,17 +266,21 @@ export default function PaperTradingPage() {
       avgEntry: t.entry_price,
       currentPrice: t.entry_price,
       side: t.direction,
-      orderType: "limit",
-      limitPrice: t.entry_price.toFixed(2),
+      orderType: "oco",
+      limitPrice: defaultLimitPx > 0 ? defaultLimitPx.toFixed(2) : "",
+      stopPrice: defaultStopPx > 0 ? defaultStopPx.toFixed(2) : "",
       qtyToClose: t.shares.toString(),
       timeInForce: "gtc",
       source: "trade",
+      initialStop,
+      initialT1,
+      initialT2,
     });
   };
 
   const handleSubmitClose = async () => {
     if (!closeModal) return;
-    const { symbol, tradeId, shares, orderType, limitPrice, qtyToClose, timeInForce, source } = closeModal;
+    const { symbol, tradeId, shares, orderType, limitPrice, stopPrice, qtyToClose, timeInForce, source } = closeModal;
     const parsedQty = parseInt(qtyToClose);
     if (isNaN(parsedQty) || parsedQty <= 0) {
       alert("Please enter a valid share quantity to close.");
@@ -261,10 +292,19 @@ export default function PaperTradingPage() {
     }
 
     let parsedLimitPx: number | null = null;
-    if (orderType === "limit") {
+    if (orderType === "limit" || orderType === "oco") {
       parsedLimitPx = parseFloat(limitPrice);
       if (isNaN(parsedLimitPx) || parsedLimitPx <= 0) {
-        alert("Please enter a valid positive limit price.");
+        alert("Please enter a valid positive target/limit price.");
+        return;
+      }
+    }
+
+    let parsedStopPx: number | null = null;
+    if (orderType === "stop" || orderType === "oco") {
+      parsedStopPx = parseFloat(stopPrice);
+      if (isNaN(parsedStopPx) || parsedStopPx <= 0) {
+        alert("Please enter a valid positive stop loss price.");
         return;
       }
     }
@@ -280,6 +320,7 @@ export default function PaperTradingPage() {
             mode,
             order_type: orderType,
             limit_price: parsedLimitPx,
+            stop_price: parsedStopPx,
             qty: parsedQty,
             time_in_force: timeInForce,
           }),
@@ -293,18 +334,32 @@ export default function PaperTradingPage() {
           alert(`⚠️ Failed to submit order: ${data.detail || data.error || "Unknown error"}`);
         }
       } else {
-        const exitPx = parsedLimitPx || closeModal.currentPrice || closeModal.avgEntry;
+        let exitPx = closeModal.currentPrice || closeModal.avgEntry;
+        let reason = "MANUAL_UI_EXIT";
+        if (orderType === "market") {
+          reason = "MANUAL_MARKET_EXIT";
+        } else if (orderType === "limit" && parsedLimitPx) {
+          exitPx = parsedLimitPx;
+          reason = `MANUAL_LIMIT_${parsedLimitPx}`;
+        } else if (orderType === "stop" && parsedStopPx) {
+          exitPx = parsedStopPx;
+          reason = `MANUAL_STOP_${parsedStopPx}`;
+        } else if (orderType === "oco" && parsedLimitPx) {
+          exitPx = parsedLimitPx;
+          reason = `MANUAL_OCO_TARGET_${parsedLimitPx}_STOP_${parsedStopPx}`;
+        }
+
         const res = await fetch(`${API_BASE}/api/paper/close`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             trade_id: tradeId,
             exit_price: exitPx,
-            reason: orderType === "limit" ? `MANUAL_LIMIT_${exitPx}` : "MANUAL_UI_EXIT",
+            reason,
           }),
         });
         if (res.ok) {
-          alert(`✅ Trade #${tradeId} (${symbol}) closed successfully at $${exitPx.toFixed(2)}!`);
+          alert(`✅ Trade #${tradeId} (${symbol}) exit recorded at $${exitPx.toFixed(2)} (${reason})!`);
           setCloseModal(null);
           await loadData(false);
         } else {
@@ -1195,34 +1250,36 @@ export default function PaperTradingPage() {
 
       {/* ── CLOSE POSITION / ORDER MODAL ─────────────────────────────── */}
       {closeModal && closeModal.isOpen && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-card border border-border rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 my-8">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-surface/40">
               <div className="flex items-center gap-3">
-                <div className="text-xl">⚡</div>
+                <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/30 flex items-center justify-center text-lg">
+                  {closeModal.orderType === "oco" ? "🛡️" : closeModal.orderType === "stop" ? "🛑" : closeModal.orderType === "limit" ? "🎯" : "⚡"}
+                </div>
                 <div>
                   <h2 className="text-base font-bold text-white flex items-center gap-2">
-                    Close Position &middot; <span className="text-accent font-mono">{closeModal.symbol}</span>
+                    Exit &amp; Protect &middot; <span className="text-accent font-mono">{closeModal.symbol}</span>
                   </h2>
                   <p className="text-xs text-muted">
-                    {closeModal.source === "broker" ? "Alpaca Broker Position" : "Simulated Paper Trade"} &bull; {mode === "live" ? "Live Broker API" : "Paper API"}
+                    {closeModal.source === "broker" ? "Alpaca Broker Position" : "Simulated Paper Trade"} &bull; {mode === "live" ? "Live Broker" : "Paper Trading"}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setCloseModal(null)}
                 disabled={submittingClose}
-                className="text-muted hover:text-white text-lg font-bold p-1 rounded-lg hover:bg-surface transition-colors"
+                className="text-muted hover:text-white text-lg font-bold p-1.5 rounded-lg hover:bg-surface transition-colors"
               >
                 ✕
               </button>
             </div>
 
             {/* Modal Body */}
-            <div className="p-6 space-y-5">
+            <div className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
               {/* Position Info Pill */}
-              <div className="grid grid-cols-4 gap-2 bg-surface/60 border border-border/80 rounded-xl p-3 text-center">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-surface/60 border border-border/80 rounded-xl p-3 text-center">
                 <div>
                   <div className="text-[10px] text-muted uppercase font-semibold">Side</div>
                   <div className={`text-xs font-bold font-mono mt-0.5 ${closeModal.side === "LONG" ? "text-bull" : "text-bear"}`}>
@@ -1245,129 +1302,289 @@ export default function PaperTradingPage() {
                 </div>
               </div>
 
-              {/* Order Type Selection */}
+              {/* Order Type Selection: 4 distinct choices */}
               <div>
                 <label className="text-xs font-semibold text-muted uppercase tracking-wider block mb-2">
-                  Order Type
+                  Select Exit / Protection Strategy
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {/* 1. Bracket (OCO) */}
                   <button
                     type="button"
-                    onClick={() => setCloseModal({ ...closeModal, orderType: "limit" })}
-                    className={`p-3 rounded-xl border text-left transition-all ${
-                      closeModal.orderType === "limit"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "oco" })}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "oco"
                         ? "border-accent bg-accent/15 text-white ring-1 ring-accent"
                         : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
                     }`}
                   >
-                    <div className="font-bold text-xs flex items-center gap-1.5">
-                      <span>🎯</span> Limit Order
+                    <div className="font-bold text-xs flex items-center gap-1">
+                      <span>🛡️</span> Bracket
                     </div>
-                    <div className="text-[11px] text-muted mt-1">
-                      Set target exit price. Fills at your price or better.
+                    <div className="text-[10px] text-muted mt-1 leading-tight">
+                      Target + Stop Loss (OCO)
                     </div>
                   </button>
 
+                  {/* 2. Stop Loss */}
                   <button
                     type="button"
-                    onClick={() => setCloseModal({ ...closeModal, orderType: "market" })}
-                    className={`p-3 rounded-xl border text-left transition-all ${
-                      closeModal.orderType === "market"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "stop" })}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "stop"
                         ? "border-bear bg-bear/15 text-white ring-1 ring-bear"
                         : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
                     }`}
                   >
-                    <div className="font-bold text-xs flex items-center gap-1.5">
-                      <span>⚡</span> Market Order
+                    <div className="font-bold text-xs flex items-center gap-1 text-bear">
+                      <span>🛑</span> Stop Loss
                     </div>
-                    <div className="text-[11px] text-muted mt-1">
-                      Immediate liquidation at prevailing market price.
+                    <div className="text-[10px] text-muted mt-1 leading-tight">
+                      Downside exit protection
+                    </div>
+                  </button>
+
+                  {/* 3. Take Profit (Limit) */}
+                  <button
+                    type="button"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "limit" })}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "limit"
+                        ? "border-bull bg-bull/15 text-white ring-1 ring-bull"
+                        : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1 text-bull">
+                      <span>🎯</span> Take Profit
+                    </div>
+                    <div className="text-[10px] text-muted mt-1 leading-tight">
+                      Limit exit at target price
+                    </div>
+                  </button>
+
+                  {/* 4. Market Order */}
+                  <button
+                    type="button"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "market" })}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "market"
+                        ? "border-amber-500 bg-amber-500/15 text-white ring-1 ring-amber-500"
+                        : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1 text-amber-400">
+                      <span>⚡</span> Market Close
+                    </div>
+                    <div className="text-[10px] text-muted mt-1 leading-tight">
+                      Immediate liquidation
                     </div>
                   </button>
                 </div>
               </div>
 
-              {/* Limit Price Input & Quick Adjustments */}
-              {closeModal.orderType === "limit" && (
-                <div className="space-y-2 bg-surface/30 border border-border/70 rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-white flex items-center gap-1.5">
-                      <span>🎯 Limit Price ($)</span>
-                    </label>
-                    <span className="text-[11px] text-muted">
-                      Current: ${fmtPrice(closeModal.currentPrice || closeModal.avgEntry)}
-                    </span>
-                  </div>
+              {/* Price Inputs depending on orderType */}
+              {(() => {
+                const isShort = closeModal.side === "SHORT";
+                const basePx = closeModal.currentPrice || closeModal.avgEntry || 100;
 
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted font-mono text-sm">$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      value={closeModal.limitPrice}
-                      onChange={(e) => setCloseModal({ ...closeModal, limitPrice: e.target.value })}
-                      placeholder="0.00"
-                      className="w-full bg-surface border border-border rounded-lg pl-7 pr-4 py-2 text-white font-mono text-base font-bold focus:outline-none focus:border-accent"
-                    />
-                  </div>
-
-                  {/* Quick percentage adjustment pills */}
-                  <div className="flex items-center gap-1.5 pt-1 overflow-x-auto">
-                    <span className="text-[10px] text-muted uppercase font-semibold mr-1">Quick:</span>
-                    {[
-                      { label: "Current", factor: 0 },
-                      { label: "+0.5%", factor: 0.005 },
+                const targetMultipliers = isShort
+                  ? [
+                      { label: "-1%", factor: -0.01 },
+                      { label: "-2%", factor: -0.02 },
+                      { label: "-3%", factor: -0.03 },
+                      { label: "-5%", factor: -0.05 },
+                    ]
+                  : [
                       { label: "+1%", factor: 0.01 },
                       { label: "+2%", factor: 0.02 },
-                      { label: "-0.5%", factor: -0.005 },
-                      { label: "-1%", factor: -0.01 },
-                    ].map((adj) => {
-                      const base = closeModal.currentPrice || closeModal.avgEntry || 100;
-                      const calculated = (base * (1 + adj.factor)).toFixed(2);
-                      return (
-                        <button
-                          key={adj.label}
-                          type="button"
-                          onClick={() => setCloseModal({ ...closeModal, limitPrice: calculated })}
-                          className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-mono px-2 py-0.5 rounded text-muted hover:text-white transition-colors"
-                        >
-                          {adj.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                      { label: "+3%", factor: 0.03 },
+                      { label: "+5%", factor: 0.05 },
+                    ];
 
-                  {/* Time in Force for Limit Order */}
-                  <div className="pt-2 flex items-center justify-between border-t border-border/40 text-xs">
-                    <span className="text-muted">Time In Force:</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setCloseModal({ ...closeModal, timeInForce: "gtc" })}
-                        className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
-                          closeModal.timeInForce === "gtc"
-                            ? "bg-accent text-white border-accent"
-                            : "bg-surface text-muted border-border hover:text-white"
-                        }`}
-                      >
-                        GTC (Good &apos;Til Cancelled)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCloseModal({ ...closeModal, timeInForce: "day" })}
-                        className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
-                          closeModal.timeInForce === "day"
-                            ? "bg-accent text-white border-accent"
-                            : "bg-surface text-muted border-border hover:text-white"
-                        }`}
-                      >
-                        DAY
-                      </button>
-                    </div>
+                const stopMultipliers = isShort
+                  ? [
+                      { label: "+1%", factor: 0.01 },
+                      { label: "+2%", factor: 0.02 },
+                      { label: "+3%", factor: 0.03 },
+                      { label: "+5%", factor: 0.05 },
+                    ]
+                  : [
+                      { label: "-1%", factor: -0.01 },
+                      { label: "-2%", factor: -0.02 },
+                      { label: "-3%", factor: -0.03 },
+                      { label: "-5%", factor: -0.05 },
+                    ];
+
+                return (
+                  <div className="space-y-4">
+                    {/* Take Profit / Limit Input (shown for oco and limit) */}
+                    {(closeModal.orderType === "oco" || closeModal.orderType === "limit") && (
+                      <div className="space-y-2 bg-bull/5 border border-bull/20 rounded-xl p-3.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-bull flex items-center gap-1.5">
+                            <span>🎯 Take Profit / Target Price ($)</span>
+                          </label>
+                          <span className="text-[11px] text-muted">
+                            Entry: ${fmtPrice(closeModal.avgEntry)}
+                          </span>
+                        </div>
+
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted font-mono text-sm">$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            value={closeModal.limitPrice}
+                            onChange={(e) => setCloseModal({ ...closeModal, limitPrice: e.target.value })}
+                            placeholder="0.00"
+                            className="w-full bg-surface border border-bull/30 rounded-lg pl-7 pr-4 py-2 text-white font-mono text-base font-bold focus:outline-none focus:border-bull"
+                          />
+                        </div>
+
+                        {/* Target quick pills */}
+                        <div className="flex items-center gap-1.5 pt-1 overflow-x-auto">
+                          <span className="text-[10px] text-muted uppercase font-semibold mr-0.5">Presets:</span>
+                          {closeModal.initialT1 && (
+                            <button
+                              type="button"
+                              onClick={() => setCloseModal({ ...closeModal, limitPrice: Number(closeModal.initialT1).toFixed(2) })}
+                              className="bg-bull/10 hover:bg-bull/20 border border-bull/30 text-[10px] font-mono px-2 py-0.5 rounded text-bull transition-colors whitespace-nowrap"
+                            >
+                              T1: ${fmtPrice(closeModal.initialT1)}
+                            </button>
+                          )}
+                          {closeModal.initialT2 && (
+                            <button
+                              type="button"
+                              onClick={() => setCloseModal({ ...closeModal, limitPrice: Number(closeModal.initialT2).toFixed(2) })}
+                              className="bg-bull/10 hover:bg-bull/20 border border-bull/30 text-[10px] font-mono px-2 py-0.5 rounded text-bull transition-colors whitespace-nowrap"
+                            >
+                              T2: ${fmtPrice(closeModal.initialT2)}
+                            </button>
+                          )}
+                          {targetMultipliers.map((adj) => {
+                            const calculated = (basePx * (1 + adj.factor)).toFixed(2);
+                            return (
+                              <button
+                                key={adj.label}
+                                type="button"
+                                onClick={() => setCloseModal({ ...closeModal, limitPrice: calculated })}
+                                className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-mono px-2 py-0.5 rounded text-muted hover:text-white transition-colors whitespace-nowrap"
+                              >
+                                {adj.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stop Loss Input (shown for oco and stop) */}
+                    {(closeModal.orderType === "oco" || closeModal.orderType === "stop") && (
+                      <div className="space-y-2 bg-bear/5 border border-bear/20 rounded-xl p-3.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-bear flex items-center gap-1.5">
+                            <span>🛑 Stop Loss Price ($)</span>
+                          </label>
+                          <span className="text-[11px] text-muted">
+                            Protects downside capital
+                          </span>
+                        </div>
+
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted font-mono text-sm">$</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.01"
+                            value={closeModal.stopPrice}
+                            onChange={(e) => setCloseModal({ ...closeModal, stopPrice: e.target.value })}
+                            placeholder="0.00"
+                            className="w-full bg-surface border border-bear/30 rounded-lg pl-7 pr-4 py-2 text-white font-mono text-base font-bold focus:outline-none focus:border-bear"
+                          />
+                        </div>
+
+                        {/* Stop Loss quick pills */}
+                        <div className="flex items-center gap-1.5 pt-1 overflow-x-auto">
+                          <span className="text-[10px] text-muted uppercase font-semibold mr-0.5">Presets:</span>
+                          {closeModal.initialStop && (
+                            <button
+                              type="button"
+                              onClick={() => setCloseModal({ ...closeModal, stopPrice: Number(closeModal.initialStop).toFixed(2) })}
+                              className="bg-bear/10 hover:bg-bear/20 border border-bear/30 text-[10px] font-mono px-2 py-0.5 rounded text-bear transition-colors whitespace-nowrap"
+                            >
+                              Initial Stop: ${fmtPrice(closeModal.initialStop)}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setCloseModal({ ...closeModal, stopPrice: closeModal.avgEntry.toFixed(2) })}
+                            className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-mono px-2 py-0.5 rounded text-accent hover:text-white transition-colors whitespace-nowrap"
+                          >
+                            BE: ${fmtPrice(closeModal.avgEntry)}
+                          </button>
+                          {stopMultipliers.map((adj) => {
+                            const calculated = (basePx * (1 + adj.factor)).toFixed(2);
+                            return (
+                              <button
+                                key={adj.label}
+                                type="button"
+                                onClick={() => setCloseModal({ ...closeModal, stopPrice: calculated })}
+                                className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-mono px-2 py-0.5 rounded text-muted hover:text-white transition-colors whitespace-nowrap"
+                              >
+                                {adj.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Market Order Explainer */}
+                    {closeModal.orderType === "market" && (
+                      <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3.5 text-xs text-amber-200/90 leading-relaxed flex items-start gap-2.5">
+                        <span className="text-base">⚡</span>
+                        <div>
+                          <div className="font-bold text-amber-300">Immediate Liquidation Notice</div>
+                          Submitting this will execute a market sell order directly against current broker bid liquidity at the best available price.
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Time in Force Toggle (shown when not market order) */}
+                    {closeModal.orderType !== "market" && (
+                      <div className="flex items-center justify-between pt-1 text-xs">
+                        <span className="text-muted">Time In Force (TIF):</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setCloseModal({ ...closeModal, timeInForce: "gtc" })}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
+                              closeModal.timeInForce === "gtc"
+                                ? "bg-accent text-white border-accent"
+                                : "bg-surface text-muted border-border hover:text-white"
+                            }`}
+                          >
+                            🛡️ GTC (Good &apos;Til Cancelled)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCloseModal({ ...closeModal, timeInForce: "day" })}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
+                              closeModal.timeInForce === "day"
+                                ? "bg-accent text-white border-accent"
+                                : "bg-surface text-muted border-border hover:text-white"
+                            }`}
+                          >
+                            DAY
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Shares to Close Input */}
               <div className="space-y-1.5">
@@ -1408,30 +1625,91 @@ export default function PaperTradingPage() {
               {/* Estimated Proceeds & P&L Calculation */}
               {(() => {
                 const q = parseInt(closeModal.qtyToClose) || 0;
-                const exitPx =
-                  closeModal.orderType === "limit"
-                    ? parseFloat(closeModal.limitPrice) || 0
-                    : closeModal.currentPrice || closeModal.avgEntry;
-                const proceeds = q * exitPx;
                 const cost = q * closeModal.avgEntry;
-                const estPl = closeModal.side === "LONG" ? proceeds - cost : cost - proceeds;
-                const estPlPct = cost > 0 ? (estPl / cost) * 100 : 0;
-                return (
-                  <div className="bg-surface/40 border border-border/60 rounded-xl p-3 text-xs flex items-center justify-between">
-                    <div>
-                      <div className="text-muted text-[11px]">Estimated Proceeds</div>
-                      <div className="font-mono font-bold text-white text-sm mt-0.5">
-                        ${fmtPrice(proceeds)}
+                const isShort = closeModal.side === "SHORT";
+
+                const calcMetrics = (price: number) => {
+                  const proceeds = q * price;
+                  const pl = isShort ? (closeModal.avgEntry - price) * q : (price - closeModal.avgEntry) * q;
+                  const plPct = cost > 0 ? (pl / cost) * 100 : 0;
+                  return { proceeds, pl, plPct };
+                };
+
+                if (closeModal.orderType === "oco") {
+                  const targetPx = parseFloat(closeModal.limitPrice) || 0;
+                  const stopPx = parseFloat(closeModal.stopPrice) || 0;
+                  const tMetrics = calcMetrics(targetPx);
+                  const sMetrics = calcMetrics(stopPx);
+
+                  return (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="bg-bull/10 border border-bull/30 rounded-xl p-3">
+                        <div className="text-[11px] text-bull font-semibold flex items-center gap-1">
+                          <span>🎯 Target Fill</span>
+                        </div>
+                        <div className="font-mono font-bold text-white text-sm mt-0.5">
+                          ${fmtPrice(tMetrics.proceeds)}
+                        </div>
+                        <div className={`font-mono text-xs mt-0.5 ${tMetrics.pl >= 0 ? "text-bull" : "text-bear"}`}>
+                          {tMetrics.pl >= 0 ? "+" : ""}${fmtNum(tMetrics.pl, 2)} ({tMetrics.pl >= 0 ? "+" : ""}{fmtNum(tMetrics.plPct, 2)}%)
+                        </div>
+                      </div>
+
+                      <div className="bg-bear/10 border border-bear/30 rounded-xl p-3">
+                        <div className="text-[11px] text-bear font-semibold flex items-center gap-1">
+                          <span>🛑 Stop Out</span>
+                        </div>
+                        <div className="font-mono font-bold text-white text-sm mt-0.5">
+                          ${fmtPrice(sMetrics.proceeds)}
+                        </div>
+                        <div className={`font-mono text-xs mt-0.5 ${sMetrics.pl >= 0 ? "text-bull" : "text-bear"}`}>
+                          {sMetrics.pl >= 0 ? "+" : ""}${fmtNum(sMetrics.pl, 2)} ({sMetrics.pl >= 0 ? "+" : ""}{fmtNum(sMetrics.plPct, 2)}%)
+                        </div>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <div className="text-muted text-[11px]">Estimated P&L</div>
-                      <div className={`font-mono font-bold text-sm mt-0.5 ${estPl >= 0 ? "text-bull" : "text-bear"}`}>
-                        {estPl >= 0 ? "+" : ""}${fmtNum(estPl, 2)} ({estPl >= 0 ? "+" : ""}{fmtNum(estPlPct, 2)}%)
+                  );
+                } else if (closeModal.orderType === "stop") {
+                  const stopPx = parseFloat(closeModal.stopPrice) || 0;
+                  const sMetrics = calcMetrics(stopPx);
+                  return (
+                    <div className="bg-bear/10 border border-bear/30 rounded-xl p-3 text-xs flex items-center justify-between">
+                      <div>
+                        <div className="text-muted text-[11px]">Protected Value (at Stop)</div>
+                        <div className="font-mono font-bold text-white text-sm mt-0.5">
+                          ${fmtPrice(sMetrics.proceeds)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-muted text-[11px]">P&amp;L at Stop</div>
+                        <div className={`font-mono font-bold text-sm mt-0.5 ${sMetrics.pl >= 0 ? "text-bull" : "text-bear"}`}>
+                          {sMetrics.pl >= 0 ? "+" : ""}${fmtNum(sMetrics.pl, 2)} ({sMetrics.pl >= 0 ? "+" : ""}{fmtNum(sMetrics.plPct, 2)}%)
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
+                  );
+                } else {
+                  const exitPx =
+                    closeModal.orderType === "limit"
+                      ? parseFloat(closeModal.limitPrice) || 0
+                      : closeModal.currentPrice || closeModal.avgEntry;
+                  const m = calcMetrics(exitPx);
+                  return (
+                    <div className="bg-surface/40 border border-border/60 rounded-xl p-3 text-xs flex items-center justify-between">
+                      <div>
+                        <div className="text-muted text-[11px]">Estimated Proceeds</div>
+                        <div className="font-mono font-bold text-white text-sm mt-0.5">
+                          ${fmtPrice(m.proceeds)}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-muted text-[11px]">Estimated P&amp;L</div>
+                        <div className={`font-mono font-bold text-sm mt-0.5 ${m.pl >= 0 ? "text-bull" : "text-bear"}`}>
+                          {m.pl >= 0 ? "+" : ""}${fmtNum(m.pl, 2)} ({m.pl >= 0 ? "+" : ""}{fmtNum(m.plPct, 2)}%)
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
               })()}
             </div>
 
@@ -1441,7 +1719,7 @@ export default function PaperTradingPage() {
                 type="button"
                 onClick={() => setCloseModal(null)}
                 disabled={submittingClose}
-                className="bg-surface hover:bg-surface/80 border border-border text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+                className="bg-surface hover:bg-surface/80 border border-border text-white text-xs font-semibold px-4 py-2.5 rounded-lg transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -1450,20 +1728,28 @@ export default function PaperTradingPage() {
                 type="button"
                 onClick={handleSubmitClose}
                 disabled={submittingClose}
-                className={`text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 ${
-                  closeModal.orderType === "limit"
-                    ? "bg-accent hover:bg-accent/90 text-white"
-                    : "bg-bear hover:bg-bear/90 text-white"
+                className={`text-xs font-bold px-4 py-2.5 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 ${
+                  closeModal.orderType === "oco"
+                    ? "bg-accent hover:bg-accent/90 text-white shadow-lg shadow-accent/25"
+                    : closeModal.orderType === "stop"
+                    ? "bg-bear hover:bg-bear/90 text-white shadow-lg shadow-bear/25"
+                    : closeModal.orderType === "limit"
+                    ? "bg-bull hover:bg-bull/90 text-white shadow-lg shadow-bull/25"
+                    : "bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-600/25"
                 }`}
               >
                 {submittingClose ? (
                   <>
                     <span className="animate-spin">🔄</span> Submitting...
                   </>
+                ) : closeModal.orderType === "oco" ? (
+                  <>🛡️ Submit Bracket Exit (Target &amp; Stop)</>
+                ) : closeModal.orderType === "stop" ? (
+                  <>🛑 Submit Stop Loss Order</>
                 ) : closeModal.orderType === "limit" ? (
                   <>🎯 Submit Limit Exit Order</>
                 ) : (
-                  <>⚡ Confirm Market Close</>
+                  <>⚡ Confirm Market Liquidation</>
                 )}
               </button>
             </div>

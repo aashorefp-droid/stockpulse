@@ -1123,15 +1123,19 @@ class PaperTrader:
         except Exception as e:
             return {"error": str(e)}
 
-    def close_alpaca_position(self, symbol, mode="paper", order_type="market", limit_price=None, qty=None, time_in_force="gtc"):
+    def close_alpaca_position(self, symbol, mode="paper", order_type="market", limit_price=None, stop_price=None, qty=None, time_in_force="gtc"):
         """
-        Liquidate or place a limit exit order for an open position in Alpaca.
-        order_type: 'market' or 'limit'
-        limit_price: float limit price (required if order_type == 'limit')
+        Liquidate or place an exit order for an open position in Alpaca.
+        order_type: 'market', 'limit', 'stop', or 'oco'
+        limit_price: float limit/target price (required if order_type == 'limit' or 'oco')
+        stop_price: float stop loss price (required if order_type == 'stop' or 'oco')
         qty: optional share count to close (defaults to full position)
         time_in_force: 'gtc' or 'day'
         """
         symbol = symbol.upper().strip()
+        otype = (order_type or "market").lower().strip()
+        tif = time_in_force.lower() if time_in_force in ("gtc", "day") else "gtc"
+
         if mode == "live":
             if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
                 return {"error": "Live Alpaca API keys not configured"}
@@ -1166,7 +1170,7 @@ class PaperTrader:
             if target_qty <= 0:
                 return {"error": f"No open shares available to close for {symbol}."}
 
-            # 2. Cancel existing open orders for this symbol first so exit orders don't double allocate
+            # 2. Cancel existing open orders for this symbol first so new exit orders don't hit insufficient qty
             try:
                 open_orders = self.get_alpaca_orders(status="open", limit=100, mode=mode)
                 if isinstance(open_orders, list):
@@ -1176,8 +1180,8 @@ class PaperTrader:
             except Exception as e:
                 _safe_print(f"⚠️ Warning canceling existing orders for {symbol}: {e}")
 
-            # 3. If Market Order
-            if order_type.lower() == "market":
+            # 3. Market Order (Immediate Liquidation)
+            if otype == "market":
                 del_url = f"{base_url}/v2/positions/{symbol}"
                 params = {}
                 if qty and int(qty) < available_qty:
@@ -1201,13 +1205,12 @@ class PaperTrader:
                     err_msg = resp.text
                 return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
 
-            # 4. If Limit Order
-            elif order_type.lower() == "limit":
+            # 4. Limit Order (Take Profit only)
+            elif otype == "limit":
                 if not limit_price or float(limit_price) <= 0:
                     return {"error": "A valid positive limit price is required for limit orders."}
 
                 limit_px = round(float(limit_price), 2)
-                tif = time_in_force.lower() if time_in_force in ("gtc", "day") else "gtc"
                 order_payload = {
                     "symbol": symbol,
                     "qty": target_qty,
@@ -1223,6 +1226,11 @@ class PaperTrader:
                     order_data = resp.json()
                     order_id = order_data.get("id")
                     _safe_print(f"✅ Limit close order placed for {symbol}: Order ID {order_id}")
+                    try:
+                        self.db.execute("UPDATE paper_trades SET t1_price=? WHERE ticker=? AND status='OPEN'", (limit_px, symbol))
+                        self.db.commit()
+                    except Exception:
+                        pass
                     return {
                         "status": "ok",
                         "symbol": symbol,
@@ -1239,8 +1247,106 @@ class PaperTrader:
                 except Exception:
                     err_msg = resp.text
                 return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+
+            # 5. Stop Loss Order
+            elif otype == "stop":
+                if not stop_price or float(stop_price) <= 0:
+                    return {"error": "A valid positive stop price is required for stop loss orders."}
+
+                stop_px = round(float(stop_price), 2)
+                order_payload = {
+                    "symbol": symbol,
+                    "qty": target_qty,
+                    "side": exit_side,
+                    "type": "stop",
+                    "stop_price": str(stop_px),
+                    "time_in_force": tif,
+                }
+
+                _safe_print(f"🛑 Submitting Stop Loss order for {symbol}: {order_payload}")
+                resp = requests.post(f"{base_url}/v2/orders", headers=headers, json=order_payload, timeout=10)
+                if resp.status_code in (200, 201):
+                    order_data = resp.json()
+                    order_id = order_data.get("id")
+                    _safe_print(f"✅ Stop loss order placed for {symbol}: Order ID {order_id}")
+                    try:
+                        self.db.execute("UPDATE paper_trades SET stop_price=? WHERE ticker=? AND status='OPEN'", (stop_px, symbol))
+                        self.db.commit()
+                    except Exception:
+                        pass
+                    return {
+                        "status": "ok",
+                        "symbol": symbol,
+                        "order_type": "stop",
+                        "stop_price": stop_px,
+                        "qty": target_qty,
+                        "time_in_force": tif,
+                        "order_id": order_id,
+                        "message": f"Stop Loss {exit_side.upper()} order placed for {target_qty} shares of {symbol} at ${stop_px:.2f} ({tif.upper()})",
+                        "data": order_data,
+                    }
+                try:
+                    err_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+
+            # 6. Bracket / OCO Order (Take Profit + Stop Loss)
+            elif otype == "oco":
+                if not limit_price or float(limit_price) <= 0:
+                    return {"error": "A valid positive target/limit price is required for Bracket (OCO) orders."}
+                if not stop_price or float(stop_price) <= 0:
+                    return {"error": "A valid positive stop loss price is required for Bracket (OCO) orders."}
+
+                limit_px = round(float(limit_price), 2)
+                stop_px = round(float(stop_price), 2)
+
+                order_payload = {
+                    "symbol": symbol,
+                    "qty": target_qty,
+                    "side": exit_side,
+                    "type": "limit",
+                    "time_in_force": tif,
+                    "order_class": "oco",
+                    "take_profit": {
+                        "limit_price": str(limit_px),
+                    },
+                    "stop_loss": {
+                        "stop_price": str(stop_px),
+                    },
+                }
+
+                _safe_print(f"🛡️ Submitting Bracket (OCO) exit order for {symbol}: {order_payload}")
+                resp = requests.post(f"{base_url}/v2/orders", headers=headers, json=order_payload, timeout=10)
+                if resp.status_code in (200, 201):
+                    order_data = resp.json()
+                    order_id = order_data.get("id")
+                    _safe_print(f"✅ Bracket (OCO) exit order placed for {symbol}: Order ID {order_id}")
+                    try:
+                        self.db.execute("UPDATE paper_trades SET stop_price=?, t1_price=? WHERE ticker=? AND status='OPEN'", (stop_px, limit_px, symbol))
+                        self.db.commit()
+                    except Exception:
+                        pass
+                    return {
+                        "status": "ok",
+                        "symbol": symbol,
+                        "order_type": "oco",
+                        "limit_price": limit_px,
+                        "stop_price": stop_px,
+                        "qty": target_qty,
+                        "time_in_force": tif,
+                        "order_id": order_id,
+                        "message": f"Bracket (OCO) exit order placed for {target_qty} shares of {symbol}: Target ${limit_px:.2f} | Stop ${stop_px:.2f} ({tif.upper()})",
+                        "data": order_data,
+                    }
+                try:
+                    err_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+
             else:
-                return {"error": f"Unsupported order type: {order_type}. Use 'market' or 'limit'."}
+                return {"error": f"Unsupported order type: {order_type}. Use 'market', 'limit', 'stop', or 'oco'."}
         except Exception as e:
             return {"error": str(e)}
 
