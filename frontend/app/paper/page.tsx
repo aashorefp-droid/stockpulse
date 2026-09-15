@@ -66,6 +66,21 @@ interface DailySummary {
   avg_pnl_pct: number;
 }
 
+interface CloseModalState {
+  isOpen: boolean;
+  symbol: string;
+  tradeId?: number;
+  shares: number;
+  avgEntry: number;
+  currentPrice: number;
+  side: string;
+  orderType: "limit" | "market";
+  limitPrice: string;
+  qtyToClose: string;
+  timeInForce: "gtc" | "day";
+  source: "broker" | "trade";
+}
+
 export default function PaperTradingPage() {
   const [mode, setMode] = useState<"paper" | "live">("paper");
   const [account, setAccount] = useState<AlpacaAccount | null>(null);
@@ -83,6 +98,8 @@ export default function PaperTradingPage() {
   const [activeTab, setActiveTab] = useState<"open" | "all" | "daily" | "broker_positions" | "broker_orders" | "config">("open");
   const [closingId, setClosingId] = useState<number | null>(null);
   const [closingSymbol, setClosingSymbol] = useState<string | null>(null);
+  const [closeModal, setCloseModal] = useState<CloseModalState | null>(null);
+  const [submittingClose, setSubmittingClose] = useState(false);
 
   const loadData = useCallback(async (showSpinner = true) => {
     if (showSpinner) setRefreshing(true);
@@ -149,42 +166,6 @@ export default function PaperTradingPage() {
     loadData();
   }, [loadData]);
 
-  const handleForceClose = async (trade: PaperTrade) => {
-    const exitPxStr = window.prompt(
-      `Force close trade #${trade.id} (${trade.ticker} ${trade.direction})?\nEnter exit price:`,
-      trade.entry_price.toString()
-    );
-    if (!exitPxStr) return;
-    const exitPrice = parseFloat(exitPxStr);
-    if (isNaN(exitPrice)) {
-      alert("Invalid price number");
-      return;
-    }
-
-    setClosingId(trade.id);
-    try {
-      const res = await fetch(`${API_BASE}/api/paper/close`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          trade_id: trade.id,
-          exit_price: exitPrice,
-          reason: "MANUAL_UI_EXIT",
-        }),
-      });
-      if (res.ok) {
-        await loadData(false);
-      } else {
-        const err = await res.json();
-        alert(`Failed to close: ${err.detail || "Unknown error"}`);
-      }
-    } catch (e: any) {
-      alert(`Network error: ${e.message}`);
-    } finally {
-      setClosingId(null);
-    }
-  };
-
   const handleClearAll = async () => {
     if (!window.confirm("Are you sure you want to clear all simulated paper trades? This cannot be undone.")) return;
     try {
@@ -229,32 +210,110 @@ export default function PaperTradingPage() {
     }
   };
 
-  const handleCloseBrokerPosition = async (pos: any) => {
-    const symbol = pos.symbol;
-    if (
-      !window.confirm(
-        `Close ${symbol} position (${pos.qty} shares) on Alpaca at market price?\nThis will also cancel any open stop/target orders for this symbol.`
-      )
-    ) {
+  const openCloseModalForBroker = (pos: any) => {
+    const curPx = parseFloat(pos.current_price || pos.avg_entry_price || 0);
+    const sharesCount = Math.abs(parseInt(pos.qty || 0));
+    setCloseModal({
+      isOpen: true,
+      symbol: pos.symbol,
+      shares: sharesCount,
+      avgEntry: parseFloat(pos.avg_entry_price || 0),
+      currentPrice: curPx,
+      side: pos.side?.toLowerCase() === "short" ? "SHORT" : "LONG",
+      orderType: "limit",
+      limitPrice: curPx > 0 ? curPx.toFixed(2) : "",
+      qtyToClose: sharesCount.toString(),
+      timeInForce: "gtc",
+      source: "broker",
+    });
+  };
+
+  const openCloseModalForTrade = (t: PaperTrade) => {
+    setCloseModal({
+      isOpen: true,
+      symbol: t.ticker,
+      tradeId: t.id,
+      shares: t.shares,
+      avgEntry: t.entry_price,
+      currentPrice: t.entry_price,
+      side: t.direction,
+      orderType: "limit",
+      limitPrice: t.entry_price.toFixed(2),
+      qtyToClose: t.shares.toString(),
+      timeInForce: "gtc",
+      source: "trade",
+    });
+  };
+
+  const handleSubmitClose = async () => {
+    if (!closeModal) return;
+    const { symbol, tradeId, shares, orderType, limitPrice, qtyToClose, timeInForce, source } = closeModal;
+    const parsedQty = parseInt(qtyToClose);
+    if (isNaN(parsedQty) || parsedQty <= 0) {
+      alert("Please enter a valid share quantity to close.");
       return;
     }
-    setClosingSymbol(symbol);
+    if (parsedQty > shares) {
+      alert(`Cannot close more than open position size (${shares} shares).`);
+      return;
+    }
+
+    let parsedLimitPx: number | null = null;
+    if (orderType === "limit") {
+      parsedLimitPx = parseFloat(limitPrice);
+      if (isNaN(parsedLimitPx) || parsedLimitPx <= 0) {
+        alert("Please enter a valid positive limit price.");
+        return;
+      }
+    }
+
+    setSubmittingClose(true);
     try {
-      const res = await fetch(`${API_BASE}/api/paper/alpaca-positions/close`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, mode }),
-      });
-      if (res.ok) {
-        await loadData(false);
+      if (source === "broker") {
+        const res = await fetch(`${API_BASE}/api/paper/alpaca-positions/close`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol,
+            mode,
+            order_type: orderType,
+            limit_price: parsedLimitPx,
+            qty: parsedQty,
+            time_in_force: timeInForce,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.status === "ok") {
+          alert(`✅ ${data.message || "Order submitted successfully!"}`);
+          setCloseModal(null);
+          await loadData(false);
+        } else {
+          alert(`⚠️ Failed to submit order: ${data.detail || data.error || "Unknown error"}`);
+        }
       } else {
-        const err = await res.json();
-        alert(`Failed to close position: ${err.detail || "Unknown error"}`);
+        const exitPx = parsedLimitPx || closeModal.currentPrice || closeModal.avgEntry;
+        const res = await fetch(`${API_BASE}/api/paper/close`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            trade_id: tradeId,
+            exit_price: exitPx,
+            reason: orderType === "limit" ? `MANUAL_LIMIT_${exitPx}` : "MANUAL_UI_EXIT",
+          }),
+        });
+        if (res.ok) {
+          alert(`✅ Trade #${tradeId} (${symbol}) closed successfully at $${exitPx.toFixed(2)}!`);
+          setCloseModal(null);
+          await loadData(false);
+        } else {
+          const err = await res.json();
+          alert(`⚠️ Failed to close trade: ${err.detail || "Unknown error"}`);
+        }
       }
     } catch (e: any) {
-      alert(`Error: ${e.message}`);
+      alert(`Network error: ${e.message}`);
     } finally {
-      setClosingSymbol(null);
+      setSubmittingClose(false);
     }
   };
 
@@ -592,11 +651,11 @@ export default function PaperTradingPage() {
                           <td className="px-4 py-3 text-xs text-muted">{t.scenario || "—"}</td>
                           <td className="px-4 py-3 text-right">
                             <button
-                              onClick={() => handleForceClose(t)}
-                              disabled={closingId === t.id}
-                              className="bg-bear/10 hover:bg-bear/20 text-bear border border-bear/30 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                              onClick={() => openCloseModalForTrade(t)}
+                              className="bg-bear/10 hover:bg-bear/20 text-bear border border-bear/30 text-xs font-semibold px-2.5 py-1 rounded transition-colors inline-flex items-center gap-1"
+                              title={`Close or set limit exit price for #${t.id} (${t.ticker})`}
                             >
-                              {closingId === t.id ? "Closing..." : "⚡ Force Close"}
+                              <span>⚡</span> Close / Exit...
                             </button>
                           </td>
                         </tr>
@@ -818,12 +877,11 @@ export default function PaperTradingPage() {
                               <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.market_value)}</td>
                               <td className="px-4 py-3 text-right">
                                 <button
-                                  onClick={() => handleCloseBrokerPosition(p)}
-                                  disabled={closingSymbol === p.symbol}
-                                  className="bg-bear/10 hover:bg-bear/20 text-bear border border-bear/30 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
-                                  title={`Liquidate ${p.symbol} at market price on Alpaca`}
+                                  onClick={() => openCloseModalForBroker(p)}
+                                  className="bg-bear/10 hover:bg-bear/20 text-bear border border-bear/30 text-xs font-semibold px-2.5 py-1 rounded transition-colors inline-flex items-center gap-1"
+                                  title={`Close or set limit exit price for ${p.symbol}`}
                                 >
-                                  {closingSymbol === p.symbol ? "Closing..." : "⚡ Market Close"}
+                                  <span>⚡</span> Close / Exit...
                                 </button>
                               </td>
                             </tr>
@@ -978,6 +1036,284 @@ export default function PaperTradingPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── CLOSE POSITION / ORDER MODAL ─────────────────────────────── */}
+      {closeModal && closeModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-surface/40">
+              <div className="flex items-center gap-3">
+                <div className="text-xl">⚡</div>
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    Close Position &middot; <span className="text-accent font-mono">{closeModal.symbol}</span>
+                  </h2>
+                  <p className="text-xs text-muted">
+                    {closeModal.source === "broker" ? "Alpaca Broker Position" : "Simulated Paper Trade"} &bull; {mode === "live" ? "Live Broker API" : "Paper API"}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCloseModal(null)}
+                disabled={submittingClose}
+                className="text-muted hover:text-white text-lg font-bold p-1 rounded-lg hover:bg-surface transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-5">
+              {/* Position Info Pill */}
+              <div className="grid grid-cols-4 gap-2 bg-surface/60 border border-border/80 rounded-xl p-3 text-center">
+                <div>
+                  <div className="text-[10px] text-muted uppercase font-semibold">Side</div>
+                  <div className={`text-xs font-bold font-mono mt-0.5 ${closeModal.side === "LONG" ? "text-bull" : "text-bear"}`}>
+                    {closeModal.side}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted uppercase font-semibold">Open Shares</div>
+                  <div className="text-xs font-bold font-mono text-white mt-0.5">{closeModal.shares}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted uppercase font-semibold">Avg Entry</div>
+                  <div className="text-xs font-bold font-mono text-white mt-0.5">${fmtPrice(closeModal.avgEntry)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted uppercase font-semibold">Current Price</div>
+                  <div className="text-xs font-bold font-mono text-accent mt-0.5">
+                    ${fmtPrice(closeModal.currentPrice || closeModal.avgEntry)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Order Type Selection */}
+              <div>
+                <label className="text-xs font-semibold text-muted uppercase tracking-wider block mb-2">
+                  Order Type
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "limit" })}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "limit"
+                        ? "border-accent bg-accent/15 text-white ring-1 ring-accent"
+                        : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1.5">
+                      <span>🎯</span> Limit Order
+                    </div>
+                    <div className="text-[11px] text-muted mt-1">
+                      Set target exit price. Fills at your price or better.
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setCloseModal({ ...closeModal, orderType: "market" })}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      closeModal.orderType === "market"
+                        ? "border-bear bg-bear/15 text-white ring-1 ring-bear"
+                        : "border-border bg-surface/40 text-muted hover:text-white hover:bg-surface"
+                    }`}
+                  >
+                    <div className="font-bold text-xs flex items-center gap-1.5">
+                      <span>⚡</span> Market Order
+                    </div>
+                    <div className="text-[11px] text-muted mt-1">
+                      Immediate liquidation at prevailing market price.
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Limit Price Input & Quick Adjustments */}
+              {closeModal.orderType === "limit" && (
+                <div className="space-y-2 bg-surface/30 border border-border/70 rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <span>🎯 Limit Price ($)</span>
+                    </label>
+                    <span className="text-[11px] text-muted">
+                      Current: ${fmtPrice(closeModal.currentPrice || closeModal.avgEntry)}
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted font-mono text-sm">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={closeModal.limitPrice}
+                      onChange={(e) => setCloseModal({ ...closeModal, limitPrice: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full bg-surface border border-border rounded-lg pl-7 pr-4 py-2 text-white font-mono text-base font-bold focus:outline-none focus:border-accent"
+                    />
+                  </div>
+
+                  {/* Quick percentage adjustment pills */}
+                  <div className="flex items-center gap-1.5 pt-1 overflow-x-auto">
+                    <span className="text-[10px] text-muted uppercase font-semibold mr-1">Quick:</span>
+                    {[
+                      { label: "Current", factor: 0 },
+                      { label: "+0.5%", factor: 0.005 },
+                      { label: "+1%", factor: 0.01 },
+                      { label: "+2%", factor: 0.02 },
+                      { label: "-0.5%", factor: -0.005 },
+                      { label: "-1%", factor: -0.01 },
+                    ].map((adj) => {
+                      const base = closeModal.currentPrice || closeModal.avgEntry || 100;
+                      const calculated = (base * (1 + adj.factor)).toFixed(2);
+                      return (
+                        <button
+                          key={adj.label}
+                          type="button"
+                          onClick={() => setCloseModal({ ...closeModal, limitPrice: calculated })}
+                          className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-mono px-2 py-0.5 rounded text-muted hover:text-white transition-colors"
+                        >
+                          {adj.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Time in Force for Limit Order */}
+                  <div className="pt-2 flex items-center justify-between border-t border-border/40 text-xs">
+                    <span className="text-muted">Time In Force:</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCloseModal({ ...closeModal, timeInForce: "gtc" })}
+                        className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
+                          closeModal.timeInForce === "gtc"
+                            ? "bg-accent text-white border-accent"
+                            : "bg-surface text-muted border-border hover:text-white"
+                        }`}
+                      >
+                        GTC (Good &apos;Til Cancelled)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCloseModal({ ...closeModal, timeInForce: "day" })}
+                        className={`px-2.5 py-1 rounded text-xs font-semibold border transition-colors ${
+                          closeModal.timeInForce === "day"
+                            ? "bg-accent text-white border-accent"
+                            : "bg-surface text-muted border-border hover:text-white"
+                        }`}
+                      >
+                        DAY
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Shares to Close Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-muted uppercase tracking-wider">
+                    Quantity to Close
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: "25%", pct: 0.25 },
+                      { label: "50%", pct: 0.5 },
+                      { label: "100% (All)", pct: 1.0 },
+                    ].map((btn) => (
+                      <button
+                        key={btn.label}
+                        type="button"
+                        onClick={() => {
+                          const q = Math.max(1, Math.round(closeModal.shares * btn.pct));
+                          setCloseModal({ ...closeModal, qtyToClose: q.toString() });
+                        }}
+                        className="bg-surface hover:bg-surface/80 border border-border text-[10px] font-semibold px-2 py-0.5 rounded text-muted hover:text-white transition-colors"
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="number"
+                  min="1"
+                  max={closeModal.shares}
+                  value={closeModal.qtyToClose}
+                  onChange={(e) => setCloseModal({ ...closeModal, qtyToClose: e.target.value })}
+                  className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-accent"
+                />
+              </div>
+
+              {/* Estimated Proceeds & P&L Calculation */}
+              {(() => {
+                const q = parseInt(closeModal.qtyToClose) || 0;
+                const exitPx =
+                  closeModal.orderType === "limit"
+                    ? parseFloat(closeModal.limitPrice) || 0
+                    : closeModal.currentPrice || closeModal.avgEntry;
+                const proceeds = q * exitPx;
+                const cost = q * closeModal.avgEntry;
+                const estPl = closeModal.side === "LONG" ? proceeds - cost : cost - proceeds;
+                const estPlPct = cost > 0 ? (estPl / cost) * 100 : 0;
+                return (
+                  <div className="bg-surface/40 border border-border/60 rounded-xl p-3 text-xs flex items-center justify-between">
+                    <div>
+                      <div className="text-muted text-[11px]">Estimated Proceeds</div>
+                      <div className="font-mono font-bold text-white text-sm mt-0.5">
+                        ${fmtPrice(proceeds)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-muted text-[11px]">Estimated P&L</div>
+                      <div className={`font-mono font-bold text-sm mt-0.5 ${estPl >= 0 ? "text-bull" : "text-bear"}`}>
+                        {estPl >= 0 ? "+" : ""}${fmtNum(estPl, 2)} ({estPl >= 0 ? "+" : ""}{fmtNum(estPlPct, 2)}%)
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-border bg-surface/30 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setCloseModal(null)}
+                disabled={submittingClose}
+                className="bg-surface hover:bg-surface/80 border border-border text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSubmitClose}
+                disabled={submittingClose}
+                className={`text-xs font-bold px-4 py-2 rounded-lg flex items-center gap-2 transition-colors disabled:opacity-50 ${
+                  closeModal.orderType === "limit"
+                    ? "bg-accent hover:bg-accent/90 text-white"
+                    : "bg-bear hover:bg-bear/90 text-white"
+                }`}
+              >
+                {submittingClose ? (
+                  <>
+                    <span className="animate-spin">🔄</span> Submitting...
+                  </>
+                ) : closeModal.orderType === "limit" ? (
+                  <>🎯 Submit Limit Exit Order</>
+                ) : (
+                  <>⚡ Confirm Market Close</>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

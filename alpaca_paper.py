@@ -966,13 +966,19 @@ class PaperTrader:
         except Exception as e:
             return {"error": str(e)}
 
-    def close_alpaca_position(self, symbol, mode="paper"):
-        """Liquidate position in Alpaca (submits market close order & cancels open orders for this symbol)."""
+    def close_alpaca_position(self, symbol, mode="paper", order_type="market", limit_price=None, qty=None, time_in_force="gtc"):
+        """
+        Liquidate or place a limit exit order for an open position in Alpaca.
+        order_type: 'market' or 'limit'
+        limit_price: float limit price (required if order_type == 'limit')
+        qty: optional share count to close (defaults to full position)
+        time_in_force: 'gtc' or 'day'
+        """
         symbol = symbol.upper().strip()
         if mode == "live":
             if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
                 return {"error": "Live Alpaca API keys not configured"}
-            url = f"https://api.alpaca.markets/v2/positions/{symbol}"
+            base_url = "https://api.alpaca.markets"
             headers = {
                 "APCA-API-KEY-ID": ALPACA_API_KEY,
                 "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
@@ -981,53 +987,135 @@ class PaperTrader:
         else:
             if not _alpaca_enabled():
                 return {"error": "Paper trading keys not configured"}
-            url = f"{ALPACA_PAPER_BASE_URL}/v2/positions/{symbol}"
+            base_url = ALPACA_PAPER_BASE_URL
             headers = _alpaca_headers()
 
         try:
-            resp = requests.delete(url, headers=headers, timeout=10)
-            if resp.status_code in (200, 204):
-                # Also mark matching open trade in paper_trades as CLOSED
-                open_tr = self.db.execute(
-                    "SELECT * FROM paper_trades WHERE ticker=? AND status='OPEN' ORDER BY id DESC LIMIT 1",
-                    (symbol,)
-                ).fetchone()
-                if open_tr:
-                    exit_px = open_tr["entry_price"]
-                    try:
-                        pos_resp = resp.json() if resp.status_code == 200 else {}
-                        if "filled_avg_price" in pos_resp and pos_resp["filled_avg_price"]:
-                            exit_px = float(pos_resp["filled_avg_price"])
-                    except Exception:
-                        pass
+            # 1. First get current position to determine side and available shares
+            pos_resp = requests.get(f"{base_url}/v2/positions/{symbol}", headers=headers, timeout=10)
+            if pos_resp.status_code != 200:
+                try:
+                    err_msg = pos_resp.json().get("message", pos_resp.text)
+                except Exception:
+                    err_msg = pos_resp.text
+                return {"error": f"Position not found or Alpaca error: {err_msg}", "status_code": pos_resp.status_code}
 
-                    direction = open_tr["direction"]
-                    entry = open_tr["entry_price"]
-                    shares = open_tr["shares"]
-                    if direction == "LONG":
-                        pnl_dollars = (exit_px - entry) * shares
-                        pnl_pct = (exit_px - entry) / entry * 100
-                    else:
-                        pnl_dollars = (entry - exit_px) * shares
-                        pnl_pct = (entry - exit_px) / entry * 100
-                    outcome = "WIN" if pnl_dollars > 0 else ("LOSS" if pnl_dollars < 0 else "FLAT")
+            pos_info = pos_resp.json()
+            pos_side = pos_info.get("side", "long").lower()
+            available_qty = abs(int(float(pos_info.get("qty", 0))))
+            exit_side = "sell" if pos_side == "long" else "buy"
+            target_qty = min(int(qty), available_qty) if (qty and int(qty) > 0) else available_qty
 
-                    self.db.execute(
-                        """UPDATE paper_trades SET
-                           status='CLOSED', exit_price=?, outcome=?,
-                           pnl_dollars=?, pnl_pct=?, exit_reason=?, exit_time=?
-                           WHERE id=?""",
-                        (exit_px, outcome, round(pnl_dollars, 2), round(pnl_pct, 2),
-                         "MANUAL_BROKER_CLOSE", datetime.now().isoformat(), open_tr["id"]),
-                    )
-                    self.db.commit()
+            if target_qty <= 0:
+                return {"error": f"No open shares available to close for {symbol}."}
 
-                return {"status": "ok", "symbol": symbol, "message": f"Position for {symbol} closed in Alpaca"}
+            # 2. Cancel existing open orders for this symbol first so exit orders don't double allocate
             try:
-                err_msg = resp.json().get("message", resp.text)
-            except Exception:
-                err_msg = resp.text
-            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+                open_orders = self.get_alpaca_orders(status="open", limit=100, mode=mode)
+                if isinstance(open_orders, list):
+                    for o in open_orders:
+                        if isinstance(o, dict) and o.get("symbol") == symbol:
+                            self._cancel_alpaca_order(o.get("id"))
+            except Exception as e:
+                _safe_print(f"⚠️ Warning canceling existing orders for {symbol}: {e}")
+
+            # 3. If Market Order
+            if order_type.lower() == "market":
+                del_url = f"{base_url}/v2/positions/{symbol}"
+                params = {}
+                if qty and int(qty) < available_qty:
+                    params["qty"] = str(target_qty)
+
+                resp = requests.delete(del_url, headers=headers, params=params, timeout=10)
+                if resp.status_code in (200, 204):
+                    exit_px = float(pos_info.get("current_price", pos_info.get("avg_entry_price", 0)))
+                    self._sync_db_on_close(symbol, pos_info, exit_px, "MANUAL_BROKER_MARKET")
+                    return {
+                        "status": "ok",
+                        "symbol": symbol,
+                        "order_type": "market",
+                        "qty": target_qty,
+                        "message": f"Market close order submitted for {target_qty} shares of {symbol} on Alpaca",
+                        "data": resp.json() if resp.status_code == 200 else {},
+                    }
+                try:
+                    err_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+
+            # 4. If Limit Order
+            elif order_type.lower() == "limit":
+                if not limit_price or float(limit_price) <= 0:
+                    return {"error": "A valid positive limit price is required for limit orders."}
+
+                limit_px = round(float(limit_price), 2)
+                tif = time_in_force.lower() if time_in_force in ("gtc", "day") else "gtc"
+                order_payload = {
+                    "symbol": symbol,
+                    "qty": target_qty,
+                    "side": exit_side,
+                    "type": "limit",
+                    "limit_price": str(limit_px),
+                    "time_in_force": tif,
+                }
+
+                _safe_print(f"🎯 Submitting Limit Close order for {symbol}: {order_payload}")
+                resp = requests.post(f"{base_url}/v2/orders", headers=headers, json=order_payload, timeout=10)
+                if resp.status_code in (200, 201):
+                    order_data = resp.json()
+                    order_id = order_data.get("id")
+                    _safe_print(f"✅ Limit close order placed for {symbol}: Order ID {order_id}")
+                    return {
+                        "status": "ok",
+                        "symbol": symbol,
+                        "order_type": "limit",
+                        "limit_price": limit_px,
+                        "qty": target_qty,
+                        "time_in_force": tif,
+                        "order_id": order_id,
+                        "message": f"Limit {exit_side.upper()} order placed for {target_qty} shares of {symbol} at ${limit_px:.2f} ({tif.upper()})",
+                        "data": order_data,
+                    }
+                try:
+                    err_msg = resp.json().get("message", resp.text)
+                except Exception:
+                    err_msg = resp.text
+                return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+            else:
+                return {"error": f"Unsupported order type: {order_type}. Use 'market' or 'limit'."}
         except Exception as e:
             return {"error": str(e)}
+
+    def _sync_db_on_close(self, symbol, pos_info, exit_px, reason):
+        """Synchronize local paper_trades table when position is closed on broker."""
+        try:
+            open_tr = self.db.execute(
+                "SELECT * FROM paper_trades WHERE ticker=? AND status='OPEN' ORDER BY id DESC LIMIT 1",
+                (symbol,)
+            ).fetchone()
+            if open_tr:
+                direction = open_tr["direction"]
+                entry = open_tr["entry_price"]
+                shares = open_tr["shares"]
+                if direction == "LONG":
+                    pnl_dollars = (exit_px - entry) * shares
+                    pnl_pct = (exit_px - entry) / entry * 100
+                else:
+                    pnl_dollars = (entry - exit_px) * shares
+                    pnl_pct = (entry - exit_px) / entry * 100
+                outcome = "WIN" if pnl_dollars > 0 else ("LOSS" if pnl_dollars < 0 else "FLAT")
+
+                self.db.execute(
+                    """UPDATE paper_trades SET
+                       status='CLOSED', exit_price=?, outcome=?,
+                       pnl_dollars=?, pnl_pct=?, exit_reason=?, exit_time=?
+                       WHERE id=?""",
+                    (exit_px, outcome, round(pnl_dollars, 2), round(pnl_pct, 2),
+                     reason, datetime.now().isoformat(), open_tr["id"]),
+                )
+                self.db.commit()
+        except Exception as e:
+            _safe_print(f"Warning syncing DB on close: {e}")
+
 
