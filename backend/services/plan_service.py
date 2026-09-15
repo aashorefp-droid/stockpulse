@@ -52,12 +52,23 @@ def calc_cpr(daily_df: pd.DataFrame) -> Optional[Dict[str, Any]]:
     BC = (PrevHigh + PrevLow) / 2
     TC = 2*P - BC
     """
-    if daily_df is None or len(daily_df) < 2:
+    if daily_df is None or len(daily_df) < 1:
         return None
-    prev = daily_df.iloc[-2]
-    prev_high = float(prev["high"] if "high" in prev else prev["High"])
-    prev_low = float(prev["low"] if "low" in prev else prev["Low"])
-    prev_close = float(prev["close"] if "close" in prev else prev["Close"])
+    prev = daily_df.iloc[-1]
+    try:
+        prev_high = float(prev["high"] if "high" in prev else prev["High"])
+        prev_low = float(prev["low"] if "low" in prev else prev["Low"])
+        prev_close = float(prev["close"] if "close" in prev else prev["Close"])
+        if np.isnan(prev_high) or np.isnan(prev_low) or np.isnan(prev_close):
+            if len(daily_df) >= 2:
+                prev = daily_df.iloc[-2]
+                prev_high = float(prev["high"] if "high" in prev else prev["High"])
+                prev_low = float(prev["low"] if "low" in prev else prev["Low"])
+                prev_close = float(prev["close"] if "close" in prev else prev["Close"])
+            if np.isnan(prev_high) or np.isnan(prev_low) or np.isnan(prev_close):
+                return None
+    except Exception:
+        return None
 
     p = (prev_high + prev_low + prev_close) / 3
     bc = (prev_high + prev_low) / 2
@@ -145,22 +156,26 @@ def get_multiframe_bias(ticker: str, entry_price: float, direction: str) -> Dict
     try:
         tk = yf.Ticker(ticker)
         h = tk.history(period="5d", interval="30m")
-        if h is not None and len(h) >= 10:
-            c = h["Close"].values
-            ema_short = pd.Series(c).ewm(span=9).mean().iloc[-1]
-            ema_long = pd.Series(c).ewm(span=21).mean().iloc[-1]
-            b30 = "BULLISH" if ema_short > ema_long else "BEARISH"
-            res["bias_30m"] = b30
-            res["short_bias"] = b30
+        if h is not None and not h.empty:
+            h = h.dropna(subset=["Close"])
+            if len(h) >= 10:
+                c = h["Close"].values
+                ema_short = pd.Series(c).ewm(span=9).mean().iloc[-1]
+                ema_long = pd.Series(c).ewm(span=21).mean().iloc[-1]
+                b30 = "BULLISH" if ema_short > ema_long else "BEARISH"
+                res["bias_30m"] = b30
+                res["short_bias"] = b30
         
         h_daily = tk.history(period="1mo", interval="1d")
-        if h_daily is not None and len(h_daily) >= 10:
-            c = h_daily["Close"].values
-            ema20 = pd.Series(c).ewm(span=20).mean().iloc[-1]
-            b4h = "BULLISH" if c[-1] > ema20 else "BEARISH"
-            res["bias_4h"] = b4h
-            res["long_bias"] = b4h
-            res["bias_10m"] = b30 if "b30" in locals() else b4h
+        if h_daily is not None and not h_daily.empty:
+            h_daily = h_daily.dropna(subset=["Close"])
+            if len(h_daily) >= 10:
+                c = h_daily["Close"].values
+                ema20 = pd.Series(c).ewm(span=20).mean().iloc[-1]
+                b4h = "BULLISH" if c[-1] > ema20 else "BEARISH"
+                res["bias_4h"] = b4h
+                res["long_bias"] = b4h
+                res["bias_10m"] = b30 if "b30" in locals() else b4h
 
         biases = [res["bias_10m"], res["bias_30m"], res["bias_4h"]]
         valid_b = [b for b in biases if b in ("BULLISH", "BEARISH")]
@@ -379,12 +394,18 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
             p_start = p_date - timedelta(days=400)
             p_end = p_date + timedelta(days=1)
             p_daily = tk.history(start=str(p_start), end=str(p_end), interval="1d")
-            if p_daily is None or p_daily.empty or len(p_daily) < 20:
+            if p_daily is None or p_daily.empty:
+                p_daily = tk.history(period="1y", interval="1d")
+            if p_daily is None or p_daily.empty:
                 continue
 
-            # Standardize columns to lowercase
+            # Standardize columns to lowercase and drop rows with NaNs
             df = p_daily.copy()
             df.columns = [c.lower() for c in df.columns]
+            df.dropna(subset=["open", "high", "low", "close"], inplace=True)
+            df = df[df["close"] > 0]
+            if df.empty or len(df) < 20:
+                continue
 
             # CPR
             cpr_data = calc_cpr(df)
@@ -396,6 +417,10 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
 
             daily_close = float(df["close"].iloc[-1])
             daily_open = float(df["open"].iloc[-1])
+            if np.isnan(daily_close) or daily_close <= 0:
+                continue
+            if np.isnan(daily_open) or daily_open <= 0:
+                daily_open = daily_close
 
             # ATR-14
             tr = np.maximum(
@@ -406,6 +431,10 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
                 )
             )
             atr_14 = float(tr.rolling(14).mean().iloc[-1]) if len(tr) >= 14 else float(df["high"].iloc[-1] - df["low"].iloc[-1])
+            if np.isnan(atr_14) or atr_14 <= 0:
+                atr_14 = max(0.5, float(df["high"].iloc[-1] - df["low"].iloc[-1]))
+                if np.isnan(atr_14) or atr_14 <= 0:
+                    atr_14 = 1.0
             atr_1d = round(atr_14, 2)
             entry = round(daily_close, 2)
 
@@ -523,8 +552,8 @@ def generate_intraday_plan(tickers: List[str], plan_date_str: Optional[str] = No
             best_setup = (best_rr >= 2.0 and cpr_type == "Narrow")
 
             # Options strategy text
-            atm_rnd = round(atm_strike)
-            inc_rnd = round(strike_inc)
+            atm_rnd = round(atm_strike) if (atm_strike and not np.isnan(atm_strike)) else int(entry)
+            inc_rnd = round(strike_inc) if (strike_inc and not np.isnan(strike_inc)) else 1
             if daily_zone == "LOW" and direction == "LONG":
                 opt_strat = f"📈 {ticker} Bull Call Spread — Buy ${atm_rnd - inc_rnd} Call / Sell ${atm_rnd} Call Exp {expiry_0dte} | Alt: Buy ${atm_rnd} Call Exp {expiry_2dte}"
             elif daily_zone == "HIGH" and direction == "SHORT":
@@ -643,12 +672,20 @@ def check_open_prices(plan_rows: List[Dict[str, Any]], check_date_str: Optional[
             if h is None or h.empty:
                 h = tk.history(period="5d", interval="1d")
             
+            if h is not None and not h.empty:
+                h = h.dropna(subset=["Open", "Close"])
+                h = h[h["Close"] > 0]
+
             if h is None or h.empty:
                 failed_tickers.append(ticker)
                 continue
 
             open_price = round(float(h["Open"].iloc[0]), 2)
             current_price = round(float(h["Close"].iloc[-1]), 2)
+            if np.isnan(open_price) or open_price <= 0:
+                open_price = entry
+            if np.isnan(current_price) or current_price <= 0:
+                current_price = open_price
 
             gap_thr = round(entry * 0.005, 2)
             move_raw = round(open_price - entry, 2)
@@ -790,12 +827,15 @@ def refresh_locked_prices(locked_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             tk = yf.Ticker(ticker)
             last_p = getattr(tk.fast_info, "last_price", None)
-            if last_p is None or last_p <= 0:
+            if last_p is None or last_p <= 0 or np.isnan(last_p):
                 h = tk.history(period="1d")
-                if not h.empty:
-                    last_p = float(h["Close"].iloc[-1])
-                else:
-                    last_p = float(r.get("Current", r.get("Open", 0)))
+                if h is not None and not h.empty:
+                    h = h.dropna(subset=["Close"])
+                    if not h.empty:
+                        last_p = float(h["Close"].iloc[-1])
+
+            if last_p is None or np.isnan(last_p) or last_p <= 0:
+                last_p = float(r.get("Current", r.get("Open", 0)))
 
             curr_price = round(float(last_p), 2)
             open_price = float(r.get("Open", curr_price))
