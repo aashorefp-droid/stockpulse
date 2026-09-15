@@ -238,4 +238,21 @@ def sync_alpaca_orders():
     finally:
         pt.close()
 
+class CloseBrokerPositionRequest(BaseModel):
+    symbol: str
+    mode: Optional[str] = "paper"
+
+@router.post("/alpaca-positions/close")
+def close_broker_position(req: CloseBrokerPositionRequest):
+    """Liquidate a position directly on Alpaca at market price."""
+    pt = PaperTrader()
+    try:
+        res = pt.close_alpaca_position(req.symbol, mode=req.mode or "paper")
+        if isinstance(res, dict) and "error" in res:
+            raise HTTPException(status_code=400, detail=res["error"])
+        return res
+    finally:
+        pt.close()
+
+
 

@@ -82,6 +82,7 @@ export default function PaperTradingPage() {
   const [syncingOrders, setSyncingOrders] = useState(false);
   const [activeTab, setActiveTab] = useState<"open" | "all" | "daily" | "broker_positions" | "broker_orders" | "config">("open");
   const [closingId, setClosingId] = useState<number | null>(null);
+  const [closingSymbol, setClosingSymbol] = useState<string | null>(null);
 
   const loadData = useCallback(async (showSpinner = true) => {
     if (showSpinner) setRefreshing(true);
@@ -219,6 +220,35 @@ export default function PaperTradingPage() {
       alert(`Error: ${e.message}`);
     } finally {
       setSyncingOrders(false);
+    }
+  };
+
+  const handleCloseBrokerPosition = async (pos: any) => {
+    const symbol = pos.symbol;
+    if (
+      !window.confirm(
+        `Close ${symbol} position (${pos.qty} shares) on Alpaca at market price?\nThis will also cancel any open stop/target orders for this symbol.`
+      )
+    ) {
+      return;
+    }
+    setClosingSymbol(symbol);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper/alpaca-positions/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, mode }),
+      });
+      if (res.ok) {
+        await loadData(false);
+      } else {
+        const err = await res.json();
+        alert(`Failed to close position: ${err.detail || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      alert(`Error: ${e.message}`);
+    } finally {
+      setClosingSymbol(null);
     }
   };
 
@@ -746,12 +776,13 @@ export default function PaperTradingPage() {
                         <th className="px-4 py-3">Unrealized P&L</th>
                         <th className="px-4 py-3">P&L %</th>
                         <th className="px-4 py-3">Market Value</th>
+                        <th className="px-4 py-3 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
                       {alpacaPositions.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="text-center py-12 text-muted">
+                          <td colSpan={9} className="text-center py-12 text-muted">
                             No open positions found on the Alpaca broker account.
                           </td>
                         </tr>
@@ -779,6 +810,16 @@ export default function PaperTradingPage() {
                                 {plpc >= 0 ? "+" : ""}{fmtNum(plpc, 2)}%
                               </td>
                               <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.market_value)}</td>
+                              <td className="px-4 py-3 text-right">
+                                <button
+                                  onClick={() => handleCloseBrokerPosition(p)}
+                                  disabled={closingSymbol === p.symbol}
+                                  className="bg-bear/10 hover:bg-bear/20 text-bear border border-bear/30 text-xs font-semibold px-2.5 py-1 rounded transition-colors disabled:opacity-50"
+                                  title={`Liquidate ${p.symbol} at market price on Alpaca`}
+                                >
+                                  {closingSymbol === p.symbol ? "Closing..." : "⚡ Market Close"}
+                                </button>
+                              </td>
                             </tr>
                           );
                         })

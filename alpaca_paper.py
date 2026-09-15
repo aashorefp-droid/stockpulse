@@ -873,3 +873,69 @@ class PaperTrader:
             return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
         except Exception as e:
             return {"error": str(e)}
+
+    def close_alpaca_position(self, symbol, mode="paper"):
+        """Liquidate position in Alpaca (submits market close order & cancels open orders for this symbol)."""
+        symbol = symbol.upper().strip()
+        if mode == "live":
+            if not bool(ALPACA_API_KEY and ALPACA_API_SECRET):
+                return {"error": "Live Alpaca API keys not configured"}
+            url = f"https://api.alpaca.markets/v2/positions/{symbol}"
+            headers = {
+                "APCA-API-KEY-ID": ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
+                "Content-Type": "application/json",
+            }
+        else:
+            if not _alpaca_enabled():
+                return {"error": "Paper trading keys not configured"}
+            url = f"{ALPACA_PAPER_BASE_URL}/v2/positions/{symbol}"
+            headers = _alpaca_headers()
+
+        try:
+            resp = requests.delete(url, headers=headers, timeout=10)
+            if resp.status_code in (200, 204):
+                # Also mark matching open trade in paper_trades as CLOSED
+                open_tr = self.db.execute(
+                    "SELECT * FROM paper_trades WHERE ticker=? AND status='OPEN' ORDER BY id DESC LIMIT 1",
+                    (symbol,)
+                ).fetchone()
+                if open_tr:
+                    exit_px = open_tr["entry_price"]
+                    try:
+                        pos_resp = resp.json() if resp.status_code == 200 else {}
+                        if "filled_avg_price" in pos_resp and pos_resp["filled_avg_price"]:
+                            exit_px = float(pos_resp["filled_avg_price"])
+                    except Exception:
+                        pass
+
+                    direction = open_tr["direction"]
+                    entry = open_tr["entry_price"]
+                    shares = open_tr["shares"]
+                    if direction == "LONG":
+                        pnl_dollars = (exit_px - entry) * shares
+                        pnl_pct = (exit_px - entry) / entry * 100
+                    else:
+                        pnl_dollars = (entry - exit_px) * shares
+                        pnl_pct = (entry - exit_px) / entry * 100
+                    outcome = "WIN" if pnl_dollars > 0 else ("LOSS" if pnl_dollars < 0 else "FLAT")
+
+                    self.db.execute(
+                        """UPDATE paper_trades SET
+                           status='CLOSED', exit_price=?, outcome=?,
+                           pnl_dollars=?, pnl_pct=?, exit_reason=?, exit_time=?
+                           WHERE id=?""",
+                        (exit_px, outcome, round(pnl_dollars, 2), round(pnl_pct, 2),
+                         "MANUAL_BROKER_CLOSE", datetime.now().isoformat(), open_tr["id"]),
+                    )
+                    self.db.commit()
+
+                return {"status": "ok", "symbol": symbol, "message": f"Position for {symbol} closed in Alpaca"}
+            try:
+                err_msg = resp.json().get("message", resp.text)
+            except Exception:
+                err_msg = resp.text
+            return {"error": f"HTTP {resp.status_code}: {err_msg}", "status_code": resp.status_code}
+        except Exception as e:
+            return {"error": str(e)}
+
