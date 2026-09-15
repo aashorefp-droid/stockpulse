@@ -79,6 +79,7 @@ export default function PaperTradingPage() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncingOrders, setSyncingOrders] = useState(false);
   const [activeTab, setActiveTab] = useState<"open" | "all" | "daily" | "broker_positions" | "broker_orders" | "config">("open");
   const [closingId, setClosingId] = useState<number | null>(null);
 
@@ -197,6 +198,30 @@ export default function PaperTradingPage() {
     }
   };
 
+  const handleSyncOrders = async () => {
+    setSyncingOrders(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/paper/sync-orders`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        const count = data.count ?? 0;
+        alert(
+          count > 0
+            ? `Successfully re-attached GTC exit orders for ${count} open position(s)!`
+            : "All open positions already have active exit orders attached, or no open positions found."
+        );
+        await loadData(false);
+      } else {
+        const err = await res.json();
+        alert(`Failed to sync orders: ${err.detail || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      alert(`Error: ${e.message}`);
+    } finally {
+      setSyncingOrders(false);
+    }
+  };
+
   return (
     <div className="max-w-screen-2xl mx-auto px-4 py-8 space-y-6">
       {/* ── HEADER ──────────────────────────────────────────────────── */}
@@ -245,6 +270,15 @@ export default function PaperTradingPage() {
             className="bg-surface hover:bg-surface/80 border border-border text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             <span className={refreshing ? "animate-spin" : ""}>🔄</span> Refresh
+          </button>
+
+          <button
+            onClick={handleSyncOrders}
+            disabled={syncingOrders}
+            className="bg-accent/15 hover:bg-accent/25 text-accent border border-accent/40 text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            title="Re-attach Good 'Til Cancelled (GTC) Stop Loss & Take Profit orders to Alpaca open positions whose daily orders expired"
+          >
+            <span className={syncingOrders ? "animate-spin" : ""}>🛡️</span> Re-attach GTC Orders
           </button>
 
           <button
@@ -682,58 +716,76 @@ export default function PaperTradingPage() {
 
           {/* 4. ALPACA BROKER OPEN POSITIONS */}
           {activeTab === "broker_positions" && (
-            <div className="bg-card border border-border rounded-xl overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-surface text-muted text-xs uppercase border-b border-border">
-                    <tr>
-                      <th className="px-4 py-3">Symbol</th>
-                      <th className="px-4 py-3">Side</th>
-                      <th className="px-4 py-3">Qty</th>
-                      <th className="px-4 py-3">Avg Entry</th>
-                      <th className="px-4 py-3">Current Price</th>
-                      <th className="px-4 py-3">Unrealized P&L</th>
-                      <th className="px-4 py-3">P&L %</th>
-                      <th className="px-4 py-3">Market Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {alpacaPositions.length === 0 ? (
+            <div className="space-y-4">
+              <div className="bg-surface/50 border border-border/80 rounded-xl p-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-muted">
+                  <span className="text-accent text-sm">ℹ️</span>
+                  <span>
+                    Open positions use Good &apos;Til Cancelled (<code className="text-accent font-mono">gtc</code>) exit orders to persist across overnight sessions. If prior DAY orders expired at market close, click <strong className="text-white">🛡️ Re-attach GTC Orders</strong>.
+                  </span>
+                </div>
+                <button
+                  onClick={handleSyncOrders}
+                  disabled={syncingOrders}
+                  className="bg-accent/15 hover:bg-accent/25 text-accent border border-accent/40 text-xs font-semibold px-2.5 py-1 rounded-md self-start sm:self-auto transition-colors disabled:opacity-50 whitespace-nowrap"
+                >
+                  {syncingOrders ? "Re-attaching..." : "🛡️ Re-attach GTC Exit Orders"}
+                </button>
+              </div>
+
+              <div className="bg-card border border-border rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-surface text-muted text-xs uppercase border-b border-border">
                       <tr>
-                        <td colSpan={8} className="text-center py-12 text-muted">
-                          No open positions found on the Alpaca broker account.
-                        </td>
+                        <th className="px-4 py-3">Symbol</th>
+                        <th className="px-4 py-3">Side</th>
+                        <th className="px-4 py-3">Qty</th>
+                        <th className="px-4 py-3">Avg Entry</th>
+                        <th className="px-4 py-3">Current Price</th>
+                        <th className="px-4 py-3">Unrealized P&L</th>
+                        <th className="px-4 py-3">P&L %</th>
+                        <th className="px-4 py-3">Market Value</th>
                       </tr>
-                    ) : (
-                      alpacaPositions.map((p, idx) => {
-                        const pl = parseFloat(p.unrealized_pl || 0);
-                        const plpc = parseFloat(p.unrealized_plpc || 0) * 100;
-                        return (
-                          <tr key={idx} className="hover:bg-surface/50">
-                            <td className="px-4 py-3 font-mono font-bold text-accent">{p.symbol}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                p.side?.toLowerCase() === "long" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
-                              }`}>
-                                {p.side?.toUpperCase()}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 font-mono text-white">{p.qty}</td>
-                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.avg_entry_price)}</td>
-                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.current_price)}</td>
-                            <td className={`px-4 py-3 font-mono font-bold ${pl >= 0 ? "text-bull" : "text-bear"}`}>
-                              {pl >= 0 ? "+" : ""}${fmtNum(pl, 2)}
-                            </td>
-                            <td className={`px-4 py-3 font-mono font-bold ${plpc >= 0 ? "text-bull" : "text-bear"}`}>
-                              {plpc >= 0 ? "+" : ""}{fmtNum(plpc, 2)}%
-                            </td>
-                            <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.market_value)}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {alpacaPositions.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="text-center py-12 text-muted">
+                            No open positions found on the Alpaca broker account.
+                          </td>
+                        </tr>
+                      ) : (
+                        alpacaPositions.map((p, idx) => {
+                          const pl = parseFloat(p.unrealized_pl || 0);
+                          const plpc = parseFloat(p.unrealized_plpc || 0) * 100;
+                          return (
+                            <tr key={idx} className="hover:bg-surface/50">
+                              <td className="px-4 py-3 font-mono font-bold text-accent">{p.symbol}</td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                                  p.side?.toLowerCase() === "long" ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
+                                }`}>
+                                  {p.side?.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-white">{p.qty}</td>
+                              <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.avg_entry_price)}</td>
+                              <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.current_price)}</td>
+                              <td className={`px-4 py-3 font-mono font-bold ${pl >= 0 ? "text-bull" : "text-bear"}`}>
+                                {pl >= 0 ? "+" : ""}${fmtNum(pl, 2)}
+                              </td>
+                              <td className={`px-4 py-3 font-mono font-bold ${plpc >= 0 ? "text-bull" : "text-bear"}`}>
+                                {plpc >= 0 ? "+" : ""}{fmtNum(plpc, 2)}%
+                              </td>
+                              <td className="px-4 py-3 font-mono text-white">{fmtPrice(p.market_value)}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}
