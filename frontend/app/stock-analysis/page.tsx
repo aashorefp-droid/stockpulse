@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import DailyTradeChart from "@/components/DailyTradeChart";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
 const FIB_COLUMNS = [
   "E 261.8%", "E 200.0%", "E 161.8%", "E 141.4%", "E 127.2%",

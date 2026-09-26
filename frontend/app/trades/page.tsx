@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
 export default function TradesPage() {
   const [tab, setTab] = useState<"open" | "closed">("open");

@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { downloadCsv } from "@/lib/csv";
 
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API = process.env.NEXT_PUBLIC_API_URL ?? "https://stockpulse-pkpj.onrender.com";
 
 function todayStr() {
   return new Date().toISOString().split("T")[0];

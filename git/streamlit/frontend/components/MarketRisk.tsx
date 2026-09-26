@@ -2,7 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { fmtNum, fmtPrice } from "@/lib/format";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 const REFRESH_MS = 5 * 60 * 1000;
 
 interface MacroItem {

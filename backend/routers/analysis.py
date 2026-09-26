@@ -60,6 +60,7 @@ import time
 
 _ANALYSIS_CACHE = {}
 _WEEKLY_CACHE = {}
+_DAILY_CACHE = {}
 _CACHE_TTL_LIVE = 180       # 3 minutes cache for live data
 _CACHE_TTL_BACKTEST = 3600  # 1 hour cache for historical backtest
 
@@ -232,7 +233,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         except Exception as e:
             backtest_outcome = {"error": str(e)}
 
-    return _clean_nans({
+    res = _clean_nans({
         "ticker":            ticker,
         "is_backtest":       bool(as_of_date),
         "as_of":             as_of.strip() if as_of_date and as_of else None,
@@ -265,6 +266,8 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
             "is_exceptional": is_exceptional,
         },
     })
+    _ANALYSIS_CACHE[cache_key] = {"time": now, "data": res}
+    return res
 
 
 @router.get("/verdict/{ticker}")
@@ -278,6 +281,11 @@ def get_ticker_verdict(ticker: str):
 @router.get("/chart-weekly/{ticker}")
 def get_weekly_chart_data(ticker: str):
     ticker = ticker.upper().strip()
+    now = time.time()
+    if ticker in _WEEKLY_CACHE:
+        entry = _WEEKLY_CACHE[ticker]
+        if now - entry["time"] < _CACHE_TTL_LIVE:
+            return entry["data"]
     try:
         df = yf.Ticker(ticker).history(period="3y", interval="1wk")
         if df.empty:
@@ -348,7 +356,7 @@ def get_weekly_chart_data(ticker: str):
         trailing_stop = round(last_sma * 0.95, 2) if last_sma else None
         swing_low_8w = round(float(df["Low"].tail(8).min()), 2)
 
-        return _clean_nans({
+        res = _clean_nans({
             "ticker": ticker,
             "bars": bars,
             "volume_bars": volume_bars,
@@ -361,11 +369,20 @@ def get_weekly_chart_data(ticker: str):
             "is_curling_up": bool(last_slope > 0),
             "slope": last_slope,
         })
+        _WEEKLY_CACHE[ticker] = {"time": now, "data": res}
+        return res
     except HTTPException:
         raise
 @router.get("/chart-daily/{ticker}")
 def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
     ticker = ticker.upper().strip()
+    cache_key = f"{ticker}:{as_of or 'live'}"
+    now = time.time()
+    if cache_key in _DAILY_CACHE:
+        entry = _DAILY_CACHE[cache_key]
+        ttl = _CACHE_TTL_BACKTEST if as_of else _CACHE_TTL_LIVE
+        if now - entry["time"] < ttl:
+            return entry["data"]
     try:
         from backend.services.trade_backtest import evaluate_trade_outcome
         period = "2y" if as_of else "1y"
@@ -502,7 +519,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "size": 2,
             })
 
-        return _clean_nans({
+        res = _clean_nans({
             "ticker": ticker,
             "current_price": cur_price,
             "live_price": live_price,
@@ -537,6 +554,8 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "support_resistance": sr,
             "markers": markers,
         })
+        _DAILY_CACHE[cache_key] = {"time": now, "data": res}
+        return res
     except HTTPException:
         raise
     except Exception as e:

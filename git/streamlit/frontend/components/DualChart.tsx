@@ -4,7 +4,7 @@ import DailyTradeChart from "./DailyTradeChart";
 
 declare global { interface Window { TradingView: any } }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
 type Timeframe = "W" | "D";
 type Tab = "tradingview_daily" | "tradingview_curl" | "finviz" | "tradingview_embed";
