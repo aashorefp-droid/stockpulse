@@ -2,6 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { downloadCsv } from "@/lib/csv";
+import { computeClientSideBestPicks } from "@/lib/ranking";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
@@ -209,10 +210,18 @@ export default function ScannerPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setBestPicks(data);
+        if (data && (data.best_pick || (data.ranked && data.ranked.length > 0))) {
+          setBestPicks(data);
+          return;
+        }
       }
+      // If backend responded with empty or error, use instant client-side evaluator
+      const fallbackData = computeClientSideBestPicks(list);
+      setBestPicks(fallbackData);
     } catch (err) {
-      console.error("Failed to rank scan results:", err);
+      console.warn("Backend ranking failed, falling back to client-side ranking:", err);
+      const fallbackData = computeClientSideBestPicks(list);
+      setBestPicks(fallbackData);
     } finally {
       setRankingLoading(false);
     }

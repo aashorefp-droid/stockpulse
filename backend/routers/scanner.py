@@ -108,6 +108,20 @@ async def stream_scan(
     )
 
 
+import math
+
+def _clean_nans(obj):
+    if isinstance(obj, dict):
+        return {k: _clean_nans(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_clean_nans(v) for v in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    return obj
+
+
 @router.post("/rank")
 def rank_scan_results(payload: Dict[str, Any] = Body(...)):
     """
@@ -116,22 +130,38 @@ def rank_scan_results(payload: Dict[str, Any] = Body(...)):
       - "items": list of scan result dictionaries, OR
       - "csv_text": raw CSV string
     """
-    if "csv_text" in payload and payload["csv_text"]:
-        return analyze_and_rank_stocks(payload["csv_text"])
+    try:
+        if "csv_text" in payload and payload["csv_text"]:
+            return _clean_nans(analyze_and_rank_stocks(payload["csv_text"]))
 
-    items = payload.get("items") or payload.get("rows") or []
-    if not items:
+        items = payload.get("items") or payload.get("rows") or []
+        if not items:
+            return {
+                "best_pick": None,
+                "best_picks": {"strength": None, "emerging": None, "weakness": None},
+                "ranked": [],
+                "total_scanned": 0,
+                "strict_passed_count": 0,
+                "is_strict": False,
+            }
+
+        # Filter out items that are only errors without ticker or price
+        valid_items = [it for it in items if not it.get("error") and it.get("ticker")]
+        if not valid_items:
+            valid_items = items
+
+        df = pd.DataFrame(valid_items)
+        return _clean_nans(analyze_and_rank_stocks(df))
+    except Exception as e:
         return {
+            "error": str(e),
             "best_pick": None,
             "best_picks": {"strength": None, "emerging": None, "weakness": None},
             "ranked": [],
-            "total_scanned": 0,
+            "total_scanned": len(payload.get("items", [])),
             "strict_passed_count": 0,
             "is_strict": False,
         }
-
-    df = pd.DataFrame(items)
-    return analyze_and_rank_stocks(df)
 
 
 @router.post("/rank-csv")
@@ -140,7 +170,18 @@ async def rank_uploaded_csv(file: UploadFile = File(...)):
     Accepts an uploaded CSV file, runs the swing trade ranking algorithm,
     and returns the best pick + ranked table.
     """
-    content = await file.read()
-    csv_text = content.decode("utf-8", errors="replace")
-    return analyze_and_rank_stocks(csv_text)
+    try:
+        content = await file.read()
+        csv_text = content.decode("utf-8", errors="replace")
+        return _clean_nans(analyze_and_rank_stocks(csv_text))
+    except Exception as e:
+        return {
+            "error": str(e),
+            "best_pick": None,
+            "best_picks": {"strength": None, "emerging": None, "weakness": None},
+            "ranked": [],
+            "total_scanned": 0,
+            "strict_passed_count": 0,
+            "is_strict": False,
+        }
 
