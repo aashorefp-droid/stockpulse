@@ -56,9 +56,25 @@ def _clean_nans(obj):
     return obj
 
 
+import time
+
+_ANALYSIS_CACHE = {}
+_WEEKLY_CACHE = {}
+_CACHE_TTL_LIVE = 180       # 3 minutes cache for live data
+_CACHE_TTL_BACKTEST = 3600  # 1 hour cache for historical backtest
+
+
 @router.get("/{ticker}")
 async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
     ticker = ticker.upper().strip()
+    cache_key = f"{ticker}:{as_of or 'live'}"
+    now = time.time()
+    if cache_key in _ANALYSIS_CACHE:
+        entry = _ANALYSIS_CACHE[cache_key]
+        ttl = _CACHE_TTL_BACKTEST if as_of else _CACHE_TTL_LIVE
+        if now - entry["time"] < ttl:
+            return entry["data"]
+
     from datetime import datetime
 
     as_of_date = None
