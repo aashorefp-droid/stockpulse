@@ -5,11 +5,13 @@ Final message: {"done": true, "total": N}
 """
 import json
 import asyncio
-from typing import Optional
-from fastapi import APIRouter, Query
+from typing import Optional, Dict, Any, List
+import pandas as pd
+from fastapi import APIRouter, Query, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 
 from backend.services.scanner import WATCHLISTS, scan_single, get_short_squeeze_tickers
+from backend.services.best_pick import analyze_and_rank_stocks
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 
@@ -104,3 +106,41 @@ async def stream_scan(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/rank")
+def rank_scan_results(payload: Dict[str, Any] = Body(...)):
+    """
+    Ranks stocks based on the user's swing trade algorithm.
+    Payload can contain:
+      - "items": list of scan result dictionaries, OR
+      - "csv_text": raw CSV string
+    """
+    if "csv_text" in payload and payload["csv_text"]:
+        return analyze_and_rank_stocks(payload["csv_text"])
+
+    items = payload.get("items") or payload.get("rows") or []
+    if not items:
+        return {
+            "best_pick": None,
+            "best_picks": {"strength": None, "emerging": None, "weakness": None},
+            "ranked": [],
+            "total_scanned": 0,
+            "strict_passed_count": 0,
+            "is_strict": False,
+        }
+
+    df = pd.DataFrame(items)
+    return analyze_and_rank_stocks(df)
+
+
+@router.post("/rank-csv")
+async def rank_uploaded_csv(file: UploadFile = File(...)):
+    """
+    Accepts an uploaded CSV file, runs the swing trade ranking algorithm,
+    and returns the best pick + ranked table.
+    """
+    content = await file.read()
+    csv_text = content.decode("utf-8", errors="replace")
+    return analyze_and_rank_stocks(csv_text)
+
