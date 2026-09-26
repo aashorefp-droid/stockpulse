@@ -30,6 +30,7 @@ interface OptLeg {
 
 interface ScanResult {
   ticker:        string;
+  sector?:       string;
   price?:        number;
   verdict?:      string;
   confidence?:   string;
@@ -37,6 +38,7 @@ interface ScanResult {
   direction?:    string;
   entry_grade?:  string;
   entry_label?:  string;
+  entry_status?: string;
   grade_color?:  string;
   expected_wr?:  number;
   mtf_rank?:     number;
@@ -64,6 +66,10 @@ interface ScanResult {
   rr_t1?:        number;
   atr?:          number;
   short_pct?:    number | null;
+  profit_margin?: number | null;
+  pe_ratio?:     number | null;
+  earnings_growth?: number | null;
+  target_upside?: number | null;
   opt_strategy?:  string | null;
   opt_summary?:   string | null;
   opt_debit?:     number | null;
@@ -78,6 +84,7 @@ interface ScanResult {
   error?:         string | null;
   done?:         boolean;
   total?:        number;
+  [key: string]: any;
 }
 
 export interface RankedItem {
