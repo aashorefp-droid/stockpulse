@@ -67,15 +67,62 @@ export interface StockAnalysis {
     rsi_4h:     number | string;
   };
   fundamentals:  Fundamentals;
+  stock_verdict?: StockVerdict | null;
 }
 
-export async function fetchAnalysis(ticker: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/api/analysis/${ticker}`, {
-    next: { revalidate: 60 },
-  });
+export interface StockVerdict {
+  ticker: string;
+  error?: string;
+  verdict: "GROWTH" | "VALUE" | "AVOID" | "PEAK" | null;
+  signal: string | null;
+  levels: {
+    Heavy?: string;
+    Buy?: string;
+    Fair?: string;
+    Exit?: string;
+  };
+  meters: {
+    VALUE?: number;
+    GROWTH?: number;
+    QUALITY?: number;
+    TECHNICAL?: number;
+  };
+  trust_score: number | null;
+  trust_label: string | null;
+  pros: string[];
+  cons: string[];
+  earnings_quality: string[];
+  tech_summary?: string;
+  peers?: Array<{
+    ticker: string;
+    verdict?: string;
+    score?: string;
+  }>;
+  source_url?: string;
+  fetched_at?: string;
+}
+
+export async function fetchAnalysis(ticker: string, asOf?: string): Promise<any> {
+  const url = asOf
+    ? `${API_BASE}/api/analysis/${ticker}?as_of=${encodeURIComponent(asOf.trim())}`
+    : `${API_BASE}/api/analysis/${ticker}`;
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `Failed to fetch ${ticker}`);
   }
   return res.json();
 }
+
+export async function fetchStockVerdict(ticker: string): Promise<StockVerdict | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/analysis/verdict/${ticker}`, {
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
