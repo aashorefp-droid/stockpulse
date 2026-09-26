@@ -24,6 +24,9 @@ export default function DailyTradeChart({
   initialAsOfDate = "",
 }: DailyTradeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const sma20ValRef = useRef<HTMLSpanElement>(null);
+  const sma50ValRef = useRef<HTMLSpanElement>(null);
+  const sma200ValRef = useRef<HTMLSpanElement>(null);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [viewMode, setViewMode] = useState<"levels" | "embed" | "finviz">("levels");
@@ -129,9 +132,13 @@ export default function DailyTradeChart({
       candleSeries.setData(data.bars);
 
       // 3. SMA Overlays (20, 50, 200)
+      let sma20Series: any = null;
+      let sma50Series: any = null;
+      let sma200Series: any = null;
+
       if (showSma) {
         if (data.sma20 && data.sma20.length > 0) {
-          const sma20Series = chart.addLineSeries({
+          sma20Series = chart.addLineSeries({
             color: "#60a5fa",
             lineWidth: 1,
             title: "20 SMA",
@@ -141,7 +148,7 @@ export default function DailyTradeChart({
           sma20Series.setData(data.sma20);
         }
         if (data.sma50 && data.sma50.length > 0) {
-          const sma50Series = chart.addLineSeries({
+          sma50Series = chart.addLineSeries({
             color: "#f59e0b",
             lineWidth: 1.5,
             title: "50 SMA",
@@ -151,7 +158,7 @@ export default function DailyTradeChart({
           sma50Series.setData(data.sma50);
         }
         if (data.sma200 && data.sma200.length > 0) {
-          const sma200Series = chart.addLineSeries({
+          sma200Series = chart.addLineSeries({
             color: "#a855f7",
             lineWidth: 2,
             title: "200 SMA",
@@ -230,6 +237,34 @@ export default function DailyTradeChart({
       if (data.markers && data.markers.length > 0) {
         candleSeries.setMarkers(data.markers);
       }
+
+      // Update real-time SMA values in legend on crosshair hover
+      const lastSma20 = data.sma20 && data.sma20.length > 0 ? data.sma20[data.sma20.length - 1]?.value : null;
+      const lastSma50 = data.sma50 && data.sma50.length > 0 ? data.sma50[data.sma50.length - 1]?.value : null;
+      const lastSma200 = data.sma200 && data.sma200.length > 0 ? data.sma200[data.sma200.length - 1]?.value : null;
+
+      chart.subscribeCrosshairMove((param: any) => {
+        if (!param || !param.time || !param.seriesData) {
+          if (sma20ValRef.current) sma20ValRef.current.textContent = lastSma20 != null ? `$${lastSma20.toFixed(2)}` : "—";
+          if (sma50ValRef.current) sma50ValRef.current.textContent = lastSma50 != null ? `$${lastSma50.toFixed(2)}` : "—";
+          if (sma200ValRef.current) sma200ValRef.current.textContent = lastSma200 != null ? `$${lastSma200.toFixed(2)}` : "—";
+          return;
+        }
+
+        const v20 = sma20Series ? (param.seriesData.get(sma20Series) as any)?.value : undefined;
+        const v50 = sma50Series ? (param.seriesData.get(sma50Series) as any)?.value : undefined;
+        const v200 = sma200Series ? (param.seriesData.get(sma200Series) as any)?.value : undefined;
+
+        if (sma20ValRef.current) {
+          sma20ValRef.current.textContent = v20 != null ? `$${v20.toFixed(2)}` : (lastSma20 != null ? `$${lastSma20.toFixed(2)}` : "—");
+        }
+        if (sma50ValRef.current) {
+          sma50ValRef.current.textContent = v50 != null ? `$${v50.toFixed(2)}` : (lastSma50 != null ? `$${lastSma50.toFixed(2)}` : "—");
+        }
+        if (sma200ValRef.current) {
+          sma200ValRef.current.textContent = v200 != null ? `$${v200.toFixed(2)}` : (lastSma200 != null ? `$${lastSma200.toFixed(2)}` : "—");
+        }
+      });
 
       chart.timeScale().fitContent();
 
@@ -322,6 +357,10 @@ export default function DailyTradeChart({
   const levels = data?.levels || {};
   const isBull = data?.direction === "LONG";
   const bt = data?.backtest;
+
+  const latestSma20 = data?.sma20 && data.sma20.length > 0 ? data.sma20[data.sma20.length - 1]?.value : null;
+  const latestSma50 = data?.sma50 && data.sma50.length > 0 ? data.sma50[data.sma50.length - 1]?.value : null;
+  const latestSma200 = data?.sma200 && data.sma200.length > 0 ? data.sma200[data.sma200.length - 1]?.value : null;
 
   return (
     <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl overflow-hidden shadow-lg mb-8">
@@ -642,9 +681,18 @@ export default function DailyTradeChart({
               {showSma && (
                 <>
                   <span className="text-[#6b7099]">·</span>
-                  <span className="text-[#60a5fa]">20 SMA</span>
-                  <span className="text-[#f59e0b]">50 SMA</span>
-                  <span className="text-[#a855f7]">200 SMA</span>
+                  <span className="flex items-center gap-1.5 text-[#60a5fa]">
+                    <span className="w-2.5 h-0.5 bg-[#60a5fa] rounded"></span>
+                    <span>20 SMA: <span ref={sma20ValRef}>{latestSma20 != null ? `$${latestSma20.toFixed(2)}` : "—"}</span></span>
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[#f59e0b]">
+                    <span className="w-2.5 h-0.5 bg-[#f59e0b] rounded"></span>
+                    <span>50 SMA: <span ref={sma50ValRef}>{latestSma50 != null ? `$${latestSma50.toFixed(2)}` : "—"}</span></span>
+                  </span>
+                  <span className="flex items-center gap-1.5 text-[#a855f7]">
+                    <span className="w-2.5 h-0.5 bg-[#a855f7] rounded"></span>
+                    <span>200 SMA: <span ref={sma200ValRef}>{latestSma200 != null ? `$${latestSma200.toFixed(2)}` : "—"}</span></span>
+                  </span>
                 </>
               )}
             </div>
