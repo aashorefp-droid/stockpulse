@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 
 from backend.services.scanner import WATCHLISTS, scan_single, get_short_squeeze_tickers
-from backend.services.best_pick import analyze_and_rank_stocks
+from backend.services.best_pick import analyze_and_rank_stocks, dispatch_triad_telegram_alert
 from backend.services.gmail_watchlist import (
     poll_and_store, fetch_today_watchlist, get_watchlist_status
 )
@@ -227,3 +227,37 @@ async def rank_uploaded_csv(file: UploadFile = File(...)):
             "strict_passed_count": 0,
             "is_strict": False,
         }
+
+
+@router.post("/triad-alert")
+def send_triad_alert(
+    payload: Dict[str, Any] = Body(default={}),
+    watchlist: str = Query("tos_email"),
+    subjects: str = Query(""),
+    days: int = Query(1),
+    send_telegram: bool = Query(True),
+):
+    """
+    Evaluates scan results and dispatches the 3-Category Swing Best Picks Alert (Strength, Emerging, Weakness)
+    to Telegram.
+    Can be invoked with:
+      - Empty body: automatically scans watchlist (TOS email alerts or default)
+      - Body with `items`: evaluates already scanned items without re-fetching
+    """
+    try:
+        items = payload.get("items") or payload.get("rows")
+        wl = payload.get("watchlist") or watchlist
+        subs = payload.get("subjects") if payload.get("subjects") is not None else subjects
+        d = payload.get("days") if payload.get("days") is not None else days
+        send_msg = payload.get("send_telegram") if payload.get("send_telegram") is not None else send_telegram
+
+        res = dispatch_triad_telegram_alert(
+            items_or_df=items,
+            watchlist=wl,
+            subjects=subs,
+            days=d,
+            send_msg=send_msg,
+        )
+        return _clean_nans(res)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "sent": False}

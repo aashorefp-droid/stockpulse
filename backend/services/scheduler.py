@@ -925,6 +925,23 @@ def tos_email_poll_job() -> int:
         return 0
 
 
+def triad_best_picks_alert_job() -> dict:
+    """
+    7:30 PM CST (Mon-Fri) — Dispatch the 3-Category Swing Best Picks Alert to Telegram.
+    Scans today's ThinkOrSwim scan alerts (from the 7:15 PM poll) or Default 50.
+    Evaluates 52W ATH momentum (Strength), tight VCP coils (Emerging), and dip support (Weakness).
+    """
+    try:
+        from backend.services.best_pick import dispatch_triad_telegram_alert
+        logger.info("[scheduler] 7:30 PM CST Triad Best Picks Alert Job started")
+        res = dispatch_triad_telegram_alert(watchlist="tos_email", days=1, send_msg=True)
+        logger.info(f"[scheduler] Triad Best Picks Alert Job completed: sent={res.get('sent')} scanned={res.get('total_scanned')}")
+        return res
+    except Exception as e:
+        logger.error(f"[scheduler] Triad Best Picks Alert Job error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -997,9 +1014,17 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    scheduler.add_job(
+        triad_best_picks_alert_job,
+        CronTrigger(hour=19, minute=30, day_of_week="mon-fri", timezone=CST),
+        id="triad_best_picks_alert",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info(
         "[scheduler] registered: default50_scan@8:00CST, "
         "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
         "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST, "
-        "tos_email_poll@19:15CST"
+        "tos_email_poll@19:15CST, triad_best_picks@19:30CST"
     )

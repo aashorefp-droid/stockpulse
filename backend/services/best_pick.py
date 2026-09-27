@@ -5,8 +5,14 @@ Ranks all scanned tickers or uploaded CSVs to find the BEST swing trade pick of 
 """
 from typing import Union, List, Dict, Any, Optional
 import io
+import os
+import logging
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def clean_percentage(val: Any) -> float:
@@ -612,4 +618,283 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
         "total_scanned": total_scanned,
         "strict_passed_count": strict_count,
         "is_strict": True if strict_count > 0 else False,
+    }
+
+
+def _derive_options_contract(price: Optional[float], direction: str = "LONG") -> str:
+    """Calculates ATM strike and nearest Friday expiration for swing trades."""
+    if not price or price <= 0:
+        return "N/A"
+
+    if price >= 200:
+        step = 5.0
+    elif price >= 50:
+        step = 2.5
+    elif price >= 20:
+        step = 1.0
+    else:
+        step = 0.5
+    atm_strike = round(round(price / step) * step, 2)
+    atm_str = f"${atm_strike:.0f}" if atm_strike.is_integer() else f"${atm_strike:.2f}"
+
+    try:
+        now_cst = datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:
+        now_cst = datetime.now()
+    days_to_fri = (4 - now_cst.weekday()) % 7
+    if days_to_fri == 0 and now_cst.hour >= 15:
+        days_to_fri = 7
+    exp_fri = (now_cst + timedelta(days=days_to_fri)).strftime("%b %d")
+
+    return f"Buy {atm_str} Call (Exp {exp_fri})" if direction != "SHORT" else f"Buy {atm_str} Put (Exp {exp_fri})"
+
+
+def format_triad_telegram_message(
+    best_picks: Dict[str, Any],
+    total_scanned: int = 0,
+    source_label: str = "TOS Scan",
+) -> str:
+    """
+    Formats a clean, high-impact HTML alert message for Telegram featuring
+    one top pick for each of the 3 swing trading categories:
+      ⚡ BUY THE STRENGTH
+      🚀 BUY THE EMERGING
+      🛡️ BUY THE WEAKNESS
+    """
+    try:
+        now_cst = datetime.now(ZoneInfo("America/Chicago"))
+    except Exception:
+        now_cst = datetime.now()
+    date_str = now_cst.strftime("%b %d, %Y")
+    time_str = now_cst.strftime("%I:%M %p CT")
+
+    lines = [
+        "🎯 <b>STOCKPULSE SWING TRADING TRIAD</b>",
+        f"📅 <i>{date_str} · {time_str} · {source_label} ({total_scanned} scanned)</i>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    # 1. ⚡ BUY THE STRENGTH
+    str_pick = best_picks.get("strength")
+    if str_pick:
+        tk = str_pick["ticker"]
+        price = str_pick.get("price") or 0.0
+        score = str_pick.get("score") or 0.0
+        verdict = str_pick.get("verdict") or "BULLISH"
+        slope = str_pick.get("sma30_slope") or 0.0
+        dh = str_pick.get("dist_from_high") or 0.0
+        entry = str_pick.get("swing_entry") or price
+        stop = str_pick.get("swing_stop") or (entry * 0.95)
+        t1 = str_pick.get("swing_t1") or (entry * 1.10)
+        risk = str_pick.get("swing_risk_pct") or 5.0
+        reward = str_pick.get("swing_reward_pct") or 10.0
+        rr = str_pick.get("swing_rr") or 2.0
+        opt_contract = _derive_options_contract(price, "LONG")
+
+        lines.extend([
+            f"⚡ <b>#1 BUY THE STRENGTH: {tk}</b> · <b>${price:.2f}</b>",
+            f"<i>52W High Momentum Leader · Score: {score}/100</i>",
+            f"• <b>Verdict</b>: {verdict} | 30W Slope: +{slope:.1f}% | ATH: -{dh:.1f}%",
+            f"• <b>Entry</b>: ${entry:.2f} | <b>Stop</b>: ${stop:.2f} (-{risk:.1f}%)",
+            f"• <b>Target 1</b>: ${t1:.2f} (+{reward:.1f}%) | <b>R:R</b>: {rr:.1f}×",
+            f"• 💡 <b>Options</b>: <code>{opt_contract}</code>",
+            "",
+        ])
+    else:
+        lines.extend([
+            "⚡ <b>#1 BUY THE STRENGTH</b>",
+            "<i>No qualifying 52W High momentum leader found in this scan.</i>",
+            "",
+        ])
+
+    # 2. 🚀 BUY THE EMERGING
+    emg_pick = best_picks.get("emerging")
+    if emg_pick:
+        tk = emg_pick["ticker"]
+        price = emg_pick.get("price") or 0.0
+        score = emg_pick.get("score") or 0.0
+        verdict = emg_pick.get("verdict") or "BULLISH"
+        tightness = emg_pick.get("tightness_rating") or "Tight Base"
+        status = emg_pick.get("setup_status") or "Emerging"
+        entry = emg_pick.get("swing_entry") or price
+        stop = emg_pick.get("swing_stop") or (entry * 0.95)
+        t1 = emg_pick.get("swing_t1") or (entry * 1.10)
+        risk = emg_pick.get("swing_risk_pct") or 5.0
+        reward = emg_pick.get("swing_reward_pct") or 10.0
+        rr = emg_pick.get("swing_rr") or 2.0
+        opt_contract = _derive_options_contract(price, "LONG")
+
+        lines.extend([
+            f"🚀 <b>#1 BUY THE EMERGING: {tk}</b> · <b>${price:.2f}</b>",
+            f"<i>Coiled Breakout from Tight Base · Score: {score}/100</i>",
+            f"• <b>Verdict</b>: {verdict} | Rating: {tightness}",
+            f"• <b>Status</b>: {status} (Risk: {risk:.1f}%)",
+            f"• <b>Entry</b>: ${entry:.2f} | <b>Stop</b>: ${stop:.2f} (-{risk:.1f}%)",
+            f"• <b>Target 1</b>: ${t1:.2f} (+{reward:.1f}%) | <b>R:R</b>: {rr:.1f}×",
+            f"• 💡 <b>Options</b>: <code>{opt_contract}</code>",
+            "",
+        ])
+    else:
+        lines.extend([
+            "🚀 <b>#1 BUY THE EMERGING</b>",
+            "<i>No qualifying tight coil VCP breakout found in this scan.</i>",
+            "",
+        ])
+
+    # 3. 🛡️ BUY THE WEAKNESS
+    wk_pick = best_picks.get("weakness")
+    if wk_pick:
+        tk = wk_pick["ticker"]
+        price = wk_pick.get("price") or 0.0
+        score = wk_pick.get("score") or 0.0
+        verdict = wk_pick.get("verdict") or "LEAN BULLISH"
+        zone = wk_pick.get("btd_zone") or "Support Zone"
+        upside = wk_pick.get("valuation_upside") or 0.0
+        dh = wk_pick.get("dist_from_high") or 0.0
+        entry = wk_pick.get("swing_entry") or price
+        stop = wk_pick.get("swing_stop") or (entry * 0.95)
+        t1 = wk_pick.get("swing_t1") or (entry * 1.10)
+        risk = wk_pick.get("swing_risk_pct") or 5.0
+        reward = wk_pick.get("swing_reward_pct") or 10.0
+        rr = wk_pick.get("swing_rr") or 2.0
+        opt_contract = _derive_options_contract(price, "LONG")
+
+        lines.extend([
+            f"🛡️ <b>#1 BUY THE WEAKNESS: {tk}</b> · <b>${price:.2f}</b>",
+            f"<i>High R/R Dip at Key Support · Score: {score}/100</i>",
+            f"• <b>Verdict</b>: {verdict} | Support: {zone}",
+            f"• <b>Valuation Upside</b>: +{upside:.1f}% | Pullback: -{dh:.1f}% from High",
+            f"• <b>Entry</b>: ${entry:.2f} | <b>Stop</b>: ${stop:.2f} (-{risk:.1f}%)",
+            f"• <b>Target 1</b>: ${t1:.2f} (+{reward:.1f}%) | <b>R:R</b>: {rr:.1f}×",
+            f"• 💡 <b>Options</b>: <code>{opt_contract}</code>",
+            "",
+        ])
+    else:
+        lines.extend([
+            "🛡️ <b>#1 BUY THE WEAKNESS</b>",
+            "<i>No qualifying dip support setup found in this scan.</i>",
+            "",
+        ])
+
+    lines.extend([
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🔒 <i>Trade with disciplined risk management. Set hard stops before entry.</i>",
+    ])
+
+    return "\n".join(lines)
+
+
+def dispatch_triad_telegram_alert(
+    items_or_df: Optional[Union[pd.DataFrame, List[Dict[str, Any]]]] = None,
+    watchlist: str = "tos_email",
+    subjects: str = "",
+    days: int = 1,
+    send_msg: bool = True,
+    bot_token: Optional[str] = None,
+    chat_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Ranks the 3 swing trading categories and sends the Triad Telegram alert.
+    If items_or_df is not provided, scans the specified watchlist.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from backend.services.telegram_svc import send_telegram
+
+    # Resolve Telegram credentials
+    try:
+        from backend.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+        token = (bot_token or TELEGRAM_BOT_TOKEN or "").strip()
+        cid = (chat_id or TELEGRAM_CHAT_ID or "").strip()
+    except Exception:
+        token = (bot_token or os.getenv("TELEGRAM_BOT_TOKEN", "")).strip()
+        cid = (chat_id or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+
+    source_label = "TOS Scan"
+    total_scanned = 0
+
+    if items_or_df is not None:
+        if isinstance(items_or_df, pd.DataFrame):
+            df = items_or_df.copy()
+            total_scanned = len(df)
+        else:
+            items = [
+                it for it in items_or_df
+                if isinstance(it, dict) and not it.get("error") and (
+                    it.get("ticker") or it.get("Ticker") or it.get("Symbol") or it.get("symbol")
+                )
+            ]
+            df = pd.DataFrame(items)
+            total_scanned = len(df)
+        source_label = "Scanner Setup"
+    else:
+        # Fetch tickers
+        if watchlist in ("tos_email", "tos", "gmail"):
+            source_label = "TOS Email Watchlist"
+            try:
+                from backend.services.gmail_watchlist import fetch_today_watchlist
+                ticker_list = fetch_today_watchlist(subjects=subjects, days=days)
+            except Exception as e:
+                logger.warning(f"Failed fetching TOS watchlist for triad alert: {e}")
+                ticker_list = []
+            if not ticker_list:
+                from backend.services.scanner import WATCHLISTS
+                ticker_list = WATCHLISTS.get("default", [])
+                source_label = "Default 50 (TOS Fallback)"
+        else:
+            from backend.services.scanner import WATCHLISTS
+            ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS.get("default", []))
+            source_label = f"{watchlist.capitalize()} Watchlist"
+
+        # Concurrently scan tickers
+        from backend.services.scanner import scan_single
+        scanned_items = []
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(scan_single, t): t for t in ticker_list}
+            for fut in as_completed(futures):
+                try:
+                    res = fut.result()
+                    if res and not res.get("error") and res.get("price", 0) > 0:
+                        scanned_items.append(res)
+                except Exception as e:
+                    logger.warning(f"Error scanning ticker for triad alert: {e}")
+
+        total_scanned = len(ticker_list)
+        df = pd.DataFrame(scanned_items)
+
+    # Run ranking analysis
+    ranking_res = analyze_and_rank_stocks(df) if not df.empty else {
+        "best_picks": {"strength": None, "emerging": None, "weakness": None},
+        "best_pick": None,
+        "ranked": [],
+        "total_scanned": total_scanned,
+        "strict_passed_count": 0,
+        "is_strict": False,
+    }
+
+    best_picks = ranking_res.get("best_picks", {})
+    message_text = format_triad_telegram_message(best_picks, total_scanned=total_scanned, source_label=source_label)
+
+    sent = False
+    send_err = None
+    if send_msg and token and cid:
+        try:
+            sent = send_telegram(token, cid, message_text)
+            if sent:
+                logger.info(f"Triad Telegram alert successfully sent ({total_scanned} tickers scanned)")
+            else:
+                send_err = "Telegram API rejected message"
+        except Exception as e:
+            send_err = str(e)
+            logger.error(f"Error sending Triad Telegram alert: {e}")
+    elif send_msg and (not token or not cid):
+        send_err = "Telegram credentials not configured"
+
+    return {
+        "ok": True,
+        "sent": sent,
+        "error": send_err,
+        "total_scanned": total_scanned,
+        "source_label": source_label,
+        "best_picks": best_picks,
+        "message": message_text,
     }

@@ -188,8 +188,41 @@ export default function ScannerPage() {
   const [tosDays, setTosDays] = useState<number>(1);
   const [tosRefreshing, setTosRefreshing] = useState(false);
   const [tosMsg, setTosMsg] = useState<string | null>(null);
+  const [telegramSending, setTelegramSending] = useState(false);
+  const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  async function sendTriadTelegram() {
+    setTelegramSending(true);
+    setTelegramSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scanner/triad-alert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: results.length > 0 ? results : undefined,
+          watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
+          subjects: tosSubjectFilter,
+          days: tosDays,
+          send_telegram: true,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.sent) {
+        setTelegramSentMsg("✅ Sent to Telegram!");
+      } else if (data && data.error) {
+        setTelegramSentMsg(`⚠️ ${data.error}`);
+      } else {
+        setTelegramSentMsg("⚠️ Alert generated (check Telegram config)");
+      }
+    } catch (err: any) {
+      setTelegramSentMsg(`⚠️ ${err.message || "Failed to send alert"}`);
+    } finally {
+      setTelegramSending(false);
+      setTimeout(() => setTelegramSentMsg(null), 5000);
+    }
+  }
 
   useEffect(() => {
     if (watchlist === "tos_email") {
@@ -784,6 +817,15 @@ export default function ScannerPage() {
                       className="px-3 py-1 text-xs rounded-lg border border-yellow/40 bg-yellow/10 text-yellow hover:bg-yellow/20 transition-colors font-semibold"
                     >
                       ⬇ Export Best Picks CSV
+                    </button>
+                    <button
+                      onClick={sendTriadTelegram}
+                      disabled={telegramSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Dispatch the 3-Category Best Picks Triad Alert to Telegram"
+                    >
+                      <span>{telegramSending ? "⏳" : "✈️"}</span>
+                      <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
                     </button>
                   </div>
                 </div>
