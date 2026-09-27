@@ -5,9 +5,9 @@ and persist the tickers locally. Durable source of truth for the 7 PM TOS scan l
     ThinkOrSwim scan  →  Gmail  →  (this module reads IMAP)  →  local store
 
   - poll_and_store()        — IMAP-fetch recent TOS scan email(s), parse tickers,
-                              append to a local JSON store (dedup by Message-ID).
-  - fetch_today_watchlist() — today's tickers (→ yesterday → most-recent fallback).
-  - get_watchlist_status()  — metadata, counts, and recent tickers.
+                              categorize by scan name, append to local JSON store.
+  - fetch_today_watchlist() — tickers matching optional comma-separated subjects/scans.
+  - get_watchlist_status()  — metadata, available scan categories, counts, and active tickers.
 """
 import os
 import re
@@ -31,7 +31,7 @@ from backend.config import (
 _SKIP_WORDS = {
     "THE", "FOR", "AND", "BUY", "SELL", "GET", "ADD", "PUT", "CALL",
     "ALL", "BIG", "TOP", "NEW", "SET", "RUN", "USE", "NOT", "BUT",
-    "HAS", "HAD", "WAS", "ARE", "HIS", "HER", "OUR", "CAN", "MAY",
+    "HAS", "HAD", "WAS", "WERE", "ARE", "HIS", "HER", "OUR", "CAN", "MAY",
     "NOW", "DAY", "SEE", "SAY", "WAY", "WHO", "OIL", "DID", "GOT",
     "LET", "SAW", "OLD", "END", "FAR", "RAN", "TRY", "ASK", "MEN",
     "LOW", "OWN", "TOO", "ANY", "BAD", "FEW", "LONG", "SHORT",
@@ -40,10 +40,11 @@ _SKIP_WORDS = {
     "BEEN", "SOME", "WHAT", "WHEN", "MAKE", "LIKE", "TIME", "JUST",
     "KNOW", "TAKE", "COME", "GOOD", "WELL", "ALSO", "BACK", "ONLY",
     "KEEP", "OPEN", "CLOSE", "HIGH", "ENTRY", "EXIT", "PLAN",
+    "FOLLOWING", "LIST", "OF", "DAILY", "WEEKLY", "MONTHLY",
 }
 
 _TOS_STOP = {
-    "ALERT", "ALERTS", "NEW", "SYMBOL", "SYMBOLS", "WAS", "ADDED", "TO",
+    "ALERT", "ALERTS", "NEW", "SYMBOL", "SYMBOLS", "WAS", "WERE", "ADDED", "TO",
     "WATCHLIST", "SCAN", "STUDY", "QUERY", "TOS", "TD", "INC", "LLC", "LP",
     "NA", "SEC", "FINRA", "SIPC", "USA", "ET", "AM", "PM", "ID", "FAQ",
     "PDF", "RE", "FW", "FWD",
@@ -51,10 +52,6 @@ _TOS_STOP = {
 
 _STOP = _SKIP_WORDS | _TOS_STOP
 
-# ── TOS "Alert: New symbol" parser ──────────────────────────────────────────
-# ThinkOrSwim scan alerts are one email per symbol; the ticker is in the
-# subject ("Alert: New symbol: AAPL ..."). The body is mostly a legal
-# disclaimer full of ALL-CAPS words — we trim it and prefer the subject.
 _TICKER = re.compile(r"\b([A-Z]{1,5}(?:\.[A-Z])?)\b")
 _DISCLAIMER_RE = re.compile(
     r"(TD Ameritrade|Charles Schwab|Member SIPC|Member FINRA|"
@@ -62,35 +59,67 @@ _DISCLAIMER_RE = re.compile(
     r"Past performance|All rights reserved|thinkorswim is|©)", re.I)
 
 
-def _tos_extract(subject: str, body: str) -> list[str]:
+def _tos_extract(subject: str, body: str) -> tuple[str, list[str]]:
+    """
+    Extract scan name and clean tickers from ThinkOrSwim subject & body.
+    Handles:
+      - 'Alert: Following list of symbols were added to FIB-STRONGBUY: CNH, CRDO, ...'
+      - 'Alert: New symbols: AFL, ALLT, AMCR ... were added to options-mispriced.'
+      - 'Alert: New symbol: HYMB was added to options-mispriced.'
+    """
+    subj = (subject or "").strip().replace("\r\n", " ").replace("\n", " ")
     out: list[str] = []
     seen: set = set()
 
-    def _add(s: str):
-        for tok in _TICKER.findall((s or "").upper()):
+    # 1. Identify scan / watchlist name (e.g. 'added to <SCAN>')
+    scan_name = ""
+    m_scan = re.search(r"added to\s+([A-Za-z0-9_\-]+)", subj, re.I)
+    if m_scan:
+        scan_name = m_scan.group(1).strip()
+
+    # 2. Pattern 1: 'symbols ... added to <SCAN>: T1, T2, ...'
+    m1 = re.search(r"symbols?\s+(?:were|was)?\s*added\s+to\s+[^:]+:\s*(.+)", subj, re.I)
+    if m1:
+        tail = m1.group(1)
+        for tok in _TICKER.findall(tail.upper()):
             if tok not in _STOP and tok not in seen:
                 seen.add(tok)
                 out.append(tok)
 
-    subj = subject or ""
-    m = re.search(r"new\s+symbol(?:\(s\)|s)?\s*[:\-]?\s*(.+)", subj, re.I)
-    if m:
-        # drop trailing "... was added to <watchlist/scan>"
-        tail = re.split(r"\b(?:was\s+added|added\s+to)\b",
-                        m.group(1), maxsplit=1, flags=re.I)[0]
-        _add(tail)
-    if not out:                                  # generic "Alert: …: SYM"
-        m2 = re.search(r":\s*([A-Za-z.\s,]+)\s*$", subj)
+    # 3. Pattern 2: 'New symbol(s): T1, T2, ... were/was added to ...'
+    if not out:
+        m2 = re.search(r"new\s+symbols?\s*[:\-]?\s*(.+)", subj, re.I)
         if m2:
-            _add(m2.group(1))
-    if not out:                                  # body fallback (trim legal)
+            tail = re.split(r"\b(?:were\s+added|was\s+added|added\s+to)\b",
+                            m2.group(1), maxsplit=1, flags=re.I)[0]
+            for tok in _TICKER.findall(tail.upper()):
+                if tok not in _STOP and tok not in seen:
+                    seen.add(tok)
+                    out.append(tok)
+
+    # 4. Pattern 3: Generic 'Alert: ... : SYM'
+    if not out:
+        m3 = re.search(r":\s*([A-Za-z.\s,]+)\s*$", subj)
+        if m3:
+            for tok in _TICKER.findall(m3.group(1).upper()):
+                if tok not in _STOP and tok not in seen:
+                    seen.add(tok)
+                    out.append(tok)
+
+    # 5. Pattern 4: Body fallback (trim legal disclaimer first)
+    if not out:
         b = body or ""
         cut = _DISCLAIMER_RE.search(b)
         if cut:
             b = b[:cut.start()]
-        mb = re.search(r"symbol[s]?\s*[:=]\s*(.+)", b, re.I)
-        _add(mb.group(1).splitlines()[0] if mb else b)
-    return out
+        mb = re.search(r"symbols?\s*[:=]\s*(.+)", b, re.I)
+        target = mb.group(1).splitlines()[0] if mb else b
+        for tok in _TICKER.findall(target.upper()):
+            if tok not in _STOP and tok not in seen:
+                seen.add(tok)
+                out.append(tok)
+
+    return (scan_name or "GENERAL", out)
 
 
 _BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
@@ -193,7 +222,7 @@ def _body_text(msg: email.message.Message) -> str:
 def poll_and_store() -> int:
     """Fetch recent TOS scan email(s) from Gmail, parse tickers, persist."""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
-        print("⚠️ Gmail watchlist: GMAIL_USER / GMAIL_APP_PASSWORD not set")
+        print("[!] Gmail watchlist: GMAIL_USER / GMAIL_APP_PASSWORD not set")
         return 0
     if not _POLL_LOCK.acquire(blocking=False):
         return 0
@@ -208,7 +237,7 @@ def _poll_inner() -> int:
         M = imaplib.IMAP4_SSL(GMAIL_IMAP_HOST)
         M.login(GMAIL_USER, GMAIL_APP_PASSWORD)
     except Exception as e:
-        print(f"⚠️ Gmail IMAP login failed: {e}")
+        print(f"[!] Gmail IMAP login failed: {e}")
         return 0
 
     try:
@@ -218,12 +247,16 @@ def _poll_inner() -> int:
         criteria = ["SINCE", since_str]
         if TOS_EMAIL_FROM:
             criteria += ["FROM", f'"{TOS_EMAIL_FROM}"']
-        if TOS_EMAIL_SUBJECT:
+        
+        # Match alerts by default; if custom subject set in env, use it
+        if TOS_EMAIL_SUBJECT and TOS_EMAIL_SUBJECT.lower() != "alert:":
             criteria += ["SUBJECT", f'"{TOS_EMAIL_SUBJECT}"']
+        else:
+            criteria += ["SUBJECT", '"Alert:"']
 
         typ, data = M.search(None, *criteria)
         if typ != "OK" or not data or not data[0]:
-            print(f"ℹ️ Gmail watchlist: no TOS emails since {since_str} "
+            print(f"[INFO] Gmail watchlist: no TOS emails since {since_str} "
                   f"(FROM~{TOS_EMAIL_FROM!r} SUBJECT~{TOS_EMAIL_SUBJECT!r})")
             return 0
 
@@ -232,8 +265,8 @@ def _poll_inner() -> int:
         seen_ids = {m.get("msg_id") for m in store}
         new_count = 0
 
-        # newest first; keep it bounded to 50
-        for num in reversed(ids[-50:]):
+        # newest first; fetch up to 150 recent alerts
+        for num in reversed(ids[-150:]):
             typ, msg_data = M.fetch(num, "(RFC822)")
             if typ != "OK" or not msg_data or not msg_data[0]:
                 continue
@@ -249,7 +282,7 @@ def _poll_inner() -> int:
                 continue
 
             body = _body_text(msg)
-            tickers = _tos_extract(subject, body)
+            scan_name, tickers = _tos_extract(subject, body)
             if not tickers:
                 continue
 
@@ -260,12 +293,13 @@ def _poll_inner() -> int:
                 dt_cst = datetime.now(_CST)
 
             store.append({
-                "msg_id":  msg_id,
-                "date":    dt_cst.date().isoformat(),
-                "time":    dt_cst.strftime("%H:%M:%S"),
-                "subject": subject[:120],
-                "from":    sender[:120],
-                "tickers": tickers,
+                "msg_id":    msg_id,
+                "date":      dt_cst.date().isoformat(),
+                "time":      dt_cst.strftime("%H:%M:%S"),
+                "subject":   subject[:160],
+                "scan_name": scan_name,
+                "from":      sender[:120],
+                "tickers":   tickers,
             })
             seen_ids.add(msg_id)
             new_count += 1
@@ -273,7 +307,7 @@ def _poll_inner() -> int:
         store = _cleanup_old(store)
         _save_store(store)
         if new_count:
-            print(f"📧 Gmail watchlist: saved {new_count} new TOS scan email(s)")
+            print(f"[OK] Gmail watchlist: saved {new_count} new TOS scan email(s)")
         return new_count
     finally:
         try:
@@ -282,8 +316,23 @@ def _poll_inner() -> int:
             pass
 
 
-def fetch_today_watchlist(force: bool = False) -> list[str]:
-    """today's tickers → yesterday's → most-recent message with tickers."""
+def _matches_filter(m: dict, tokens: list[str]) -> bool:
+    if not tokens:
+        return True
+    subj = (m.get("subject") or "").upper()
+    scan = (m.get("scan_name") or "").upper()
+    for tok in tokens:
+        t = tok.strip().upper()
+        if t and (t in subj or t in scan):
+            return True
+    return False
+
+
+def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 3, force: bool = False) -> list[str]:
+    """
+    Return tickers filtered by comma-separated subjects or scan names.
+    E.g. subjects="FIB-STRONGBUY, IFC-BULLISH"
+    """
     if force:
         poll_and_store()
 
@@ -291,33 +340,65 @@ def fetch_today_watchlist(force: bool = False) -> list[str]:
     if not store:
         return []
 
-    now_cst = datetime.now(_CST)
-    today_str = now_cst.date().isoformat()
-    yest_str  = (now_cst.date() - timedelta(days=1)).isoformat()
+    tokens = []
+    if isinstance(subjects, str) and subjects.strip():
+        tokens = [t.strip() for t in subjects.split(",") if t.strip() and t.strip().upper() != "ALL"]
+    elif isinstance(subjects, (list, set, tuple)):
+        tokens = [str(t).strip() for t in subjects if str(t).strip() and str(t).strip().upper() != "ALL"]
 
-    def _collect(d: str) -> list[str]:
-        out, seen = [], set()
-        for m in store:
-            if m.get("date") == d:
+    now_cst = datetime.now(_CST)
+    cutoff = (now_cst.date() - timedelta(days=max(1, days))).toordinal()
+
+    matched_tickers: list[str] = []
+    seen: set = set()
+
+    # Search messages in reverse chronological order (newest first)
+    for m in reversed(store):
+        try:
+            m_date = date.fromisoformat(m["date"])
+            if m_date.toordinal() < cutoff:
+                continue
+        except Exception:
+            pass
+
+        if not _matches_filter(m, tokens):
+            continue
+
+        for t in m.get("tickers", []):
+            if t not in seen:
+                seen.add(t)
+                matched_tickers.append(t)
+
+    # Fallback: if no tickers found in the lookback window, search all store messages
+    if not matched_tickers and tokens:
+        for m in reversed(store):
+            if _matches_filter(m, tokens):
                 for t in m.get("tickers", []):
                     if t not in seen:
                         seen.add(t)
-                        out.append(t)
-        return out
+                        matched_tickers.append(t)
 
-    return (
-        _collect(today_str)
-        or _collect(yest_str)
-        or next((list(m["tickers"]) for m in reversed(store) if m.get("tickers")), [])
-    )
+    return matched_tickers
 
 
-def get_watchlist_status() -> dict:
-    """Return status metadata for the API and frontend."""
+def get_watchlist_status(subjects: str | None = None) -> dict:
+    """Return status metadata, available scan categories, and filtered tickers."""
     store = _load_store()
-    tickers = fetch_today_watchlist()
+    tickers = fetch_today_watchlist(subjects=subjects)
     configured = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
     latest = store[-1] if store else None
+
+    # Aggregate available scan categories and count tickers per scan
+    scan_counts: dict[str, int] = {}
+    for m in store:
+        sn = m.get("scan_name") or "GENERAL"
+        if sn and sn != "GENERAL":
+            scan_counts[sn] = scan_counts.get(sn, 0) + len(m.get("tickers", []))
+
+    sorted_scans = [
+        {"name": k, "count": v}
+        for k, v in sorted(scan_counts.items(), key=lambda x: -x[1])
+    ]
 
     return {
         "status": "configured" if configured else "credentials_missing",
@@ -325,6 +406,8 @@ def get_watchlist_status() -> dict:
         "gmail_user": GMAIL_USER if GMAIL_USER else None,
         "count": len(tickers),
         "tickers": tickers,
+        "filter": subjects or "",
+        "available_scans": sorted_scans,
         "total_messages": len(store),
         "latest_date": latest.get("date") if latest else None,
         "latest_time": latest.get("time") if latest else None,
