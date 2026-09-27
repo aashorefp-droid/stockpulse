@@ -185,6 +185,7 @@ export default function ScannerPage() {
   const [showRankedTable, setShowRankedTable] = useState(true);
   const [tosStatus, setTosStatus] = useState<{ count: number; tickers: string[]; status?: string; latest_time?: string; latest_date?: string; available_scans?: { name: string; count: number }[] } | null>(null);
   const [tosSubjectFilter, setTosSubjectFilter] = useState("FIB-STRONGBUY, IFC-BULLISH");
+  const [tosDays, setTosDays] = useState<number>(1);
   const [tosRefreshing, setTosRefreshing] = useState(false);
   const [tosMsg, setTosMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -192,8 +193,10 @@ export default function ScannerPage() {
 
   useEffect(() => {
     if (watchlist === "tos_email") {
-      const q = tosSubjectFilter ? `?subjects=${encodeURIComponent(tosSubjectFilter)}` : "";
-      fetch(`${API_BASE}/api/scanner/tos-email/status${q}`)
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      fetch(`${API_BASE}/api/scanner/tos-email/status?${params.toString()}`)
         .then(res => res.json())
         .then(data => {
           if (data && typeof data.count === "number") {
@@ -202,18 +205,20 @@ export default function ScannerPage() {
         })
         .catch(err => console.warn("Failed fetching TOS status:", err));
     }
-  }, [watchlist, tosSubjectFilter]);
+  }, [watchlist, tosSubjectFilter, tosDays]);
 
   async function refreshTosEmail() {
     setTosRefreshing(true);
     setTosMsg("Connecting to Gmail IMAP and pulling TOS alerts...");
     try {
-      const q = tosSubjectFilter ? `?subjects=${encodeURIComponent(tosSubjectFilter)}` : "";
-      const res = await fetch(`${API_BASE}/api/scanner/tos-email/refresh${q}`, { method: "POST" });
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      const res = await fetch(`${API_BASE}/api/scanner/tos-email/refresh?${params.toString()}`, { method: "POST" });
       const data = await res.json();
       if (data && data.status === "ok") {
         setTosStatus(data);
-        setTosMsg(`✅ Fetched ${data.new_emails ?? 0} new alert(s) — ${data.count} tickers matching filter.`);
+        setTosMsg(`✅ Fetched ${data.new_emails ?? 0} new alert(s) — ${data.count} tickers ready (${tosDays === 1 ? "same day" : `last ${tosDays} days`}).`);
       } else {
         setTosMsg(`⚠️ ${data?.error || "No new alerts found in Gmail."}`);
       }
@@ -305,8 +310,10 @@ export default function ScannerPage() {
       url = `${API_BASE}/api/scanner/stream?tickers=${encodeURIComponent(tickers.join(","))}`;
     } else if (watchlist === "tos_email") {
       total = tosStatus?.count || 25;
-      const q = tosSubjectFilter ? `&subjects=${encodeURIComponent(tosSubjectFilter)}` : "";
-      url = `${API_BASE}/api/scanner/stream?watchlist=tos_email${q}`;
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      url = `${API_BASE}/api/scanner/stream?watchlist=tos_email&${params.toString()}`;
     } else {
       total = WATCHLISTS.find(w => w.key === watchlist)?.count ?? 50;
       url = `${API_BASE}/api/scanner/stream?watchlist=${watchlist}`;
@@ -558,6 +565,35 @@ export default function ScannerPage() {
                   );
                 })}
               </div>
+            </div>
+
+            {/* ── Lookback Window (Default: Same Day) ── */}
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40">
+              <span className="text-xs font-semibold text-white/80 whitespace-nowrap">Lookback Days:</span>
+              <div className="flex rounded-lg border border-border overflow-hidden bg-surface">
+                {[
+                  { label: "Today (Same Day)", val: 1 },
+                  { label: "Last 2 Days", val: 2 },
+                  { label: "Last 3 Days", val: 3 },
+                  { label: "Last 7 Days", val: 7 },
+                ].map(opt => (
+                  <button
+                    key={opt.val}
+                    type="button"
+                    onClick={() => setTosDays(opt.val)}
+                    className={`px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      tosDays === opt.val
+                        ? "bg-accent text-black font-bold"
+                        : "text-muted hover:text-white border-l border-border first:border-l-0"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-muted ml-1">
+                {tosDays === 1 ? "(Default: strictly today's alert emails)" : `(Emails from the last ${tosDays} days)`}
+              </span>
             </div>
 
             {tosMsg && (

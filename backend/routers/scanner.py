@@ -22,36 +22,37 @@ router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 
 
 @router.get("/watchlists")
-def get_watchlists(subjects: str = Query("")):
+def get_watchlists(subjects: str = Query(""), days: int = Query(1)):
     res = {k: len(v) for k, v in WATCHLISTS.items()}
     try:
-        res["tos_email"] = len(fetch_today_watchlist(subjects=subjects))
+        res["tos_email"] = len(fetch_today_watchlist(subjects=subjects, days=days))
     except Exception:
         res["tos_email"] = 0
     return res
 
 
 @router.get("/tos-email/status")
-def tos_email_status(subjects: str = Query("")):
+def tos_email_status(subjects: str = Query(""), days: int = Query(1)):
     """Return status, scan categories, and cached tickers from ThinkOrSwim Gmail alerts."""
     try:
-        return get_watchlist_status(subjects=subjects)
+        return get_watchlist_status(subjects=subjects, days=days)
     except Exception as e:
         return {"status": "error", "error": str(e), "count": 0, "tickers": []}
 
 
 @router.post("/tos-email/refresh")
-def tos_email_refresh(subjects: str = Query("")):
+def tos_email_refresh(subjects: str = Query(""), days: int = Query(1)):
     """Force poll Gmail IMAP for new TOS scan emails and return updated tickers."""
     try:
         new_count = poll_and_store()
-        tickers = fetch_today_watchlist(subjects=subjects)
-        status = get_watchlist_status(subjects=subjects)
+        tickers = fetch_today_watchlist(subjects=subjects, days=days)
+        status = get_watchlist_status(subjects=subjects, days=days)
         return {
             "status": "ok",
             "new_emails": new_count,
             "count": len(tickers),
             "tickers": tickers,
+            "days": days,
             "filter": subjects,
             "available_scans": status.get("available_scans", []),
         }
@@ -65,12 +66,13 @@ def get_stage2_curl_stocks(
     tickers: str = Query(""),
     fresh_only: bool = Query(False),
     subjects: str = Query(""),
+    days: int = Query(1),
 ):
     """Return stocks meeting 30W MA curl up and volume surge."""
     if tickers:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     elif watchlist in ("tos_email", "tos", "gmail", "telegram"):
-        ticker_list = fetch_today_watchlist(subjects=subjects)
+        ticker_list = fetch_today_watchlist(subjects=subjects, days=days)
     else:
         ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS["default"])
 
@@ -108,12 +110,13 @@ async def stream_scan(
     tickers:   str = Query(""),          # comma-separated custom list
     as_of:     Optional[str] = Query(None),  # backtest date YYYY-MM-DD
     subjects:  str = Query(""),          # comma-separated TOS scan/subject filter
+    days:      int = Query(1),           # number of days back (default: 1 = same day)
 ):
     loop = asyncio.get_event_loop()
     if tickers:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     elif watchlist in ("tos_email", "tos", "gmail", "telegram"):
-        ticker_list = await loop.run_in_executor(None, fetch_today_watchlist, subjects)
+        ticker_list = await loop.run_in_executor(None, fetch_today_watchlist, subjects, days)
     elif watchlist == "short_squeeze":
         ticker_list = await loop.run_in_executor(None, get_short_squeeze_tickers)
     else:

@@ -328,10 +328,11 @@ def _matches_filter(m: dict, tokens: list[str]) -> bool:
     return False
 
 
-def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 3, force: bool = False) -> list[str]:
+def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 1, force: bool = False) -> list[str]:
     """
-    Return tickers filtered by comma-separated subjects or scan names.
-    E.g. subjects="FIB-STRONGBUY, IFC-BULLISH"
+    Return tickers filtered by:
+      - days: number of days back (default: 1 = same day / today only; 2 = today + yesterday, etc.)
+      - subjects: comma-separated subjects or scan names (e.g. 'FIB-STRONGBUY, IFC-BULLISH')
     """
     if force:
         poll_and_store()
@@ -347,7 +348,8 @@ def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 3
         tokens = [str(t).strip() for t in subjects if str(t).strip() and str(t).strip().upper() != "ALL"]
 
     now_cst = datetime.now(_CST)
-    cutoff = (now_cst.date() - timedelta(days=max(1, days))).toordinal()
+    today_date = now_cst.date()
+    cutoff_ordinal = (today_date - timedelta(days=max(0, days - 1))).toordinal()
 
     matched_tickers: list[str] = []
     seen: set = set()
@@ -355,11 +357,11 @@ def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 3
     # Search messages in reverse chronological order (newest first)
     for m in reversed(store):
         try:
-            m_date = date.fromisoformat(m["date"])
-            if m_date.toordinal() < cutoff:
+            m_date = date.fromisoformat(m["date"]).toordinal()
+            if m_date < cutoff_ordinal:
                 continue
         except Exception:
-            pass
+            continue
 
         if not _matches_filter(m, tokens):
             continue
@@ -369,28 +371,29 @@ def fetch_today_watchlist(subjects: str | list[str] | None = None, days: int = 3
                 seen.add(t)
                 matched_tickers.append(t)
 
-    # Fallback: if no tickers found in the lookback window, search all store messages
-    if not matched_tickers and tokens:
-        for m in reversed(store):
-            if _matches_filter(m, tokens):
-                for t in m.get("tickers", []):
-                    if t not in seen:
-                        seen.add(t)
-                        matched_tickers.append(t)
-
     return matched_tickers
 
 
-def get_watchlist_status(subjects: str | None = None) -> dict:
+def get_watchlist_status(subjects: str | None = None, days: int = 1) -> dict:
     """Return status metadata, available scan categories, and filtered tickers."""
     store = _load_store()
-    tickers = fetch_today_watchlist(subjects=subjects)
+    tickers = fetch_today_watchlist(subjects=subjects, days=days)
     configured = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
     latest = store[-1] if store else None
 
-    # Aggregate available scan categories and count tickers per scan
+    # Aggregate available scan categories within the requested days window
+    now_cst = datetime.now(_CST)
+    cutoff_ordinal = (now_cst.date() - timedelta(days=max(0, days - 1))).toordinal()
+
     scan_counts: dict[str, int] = {}
     for m in store:
+        try:
+            m_date = date.fromisoformat(m["date"]).toordinal()
+            if m_date < cutoff_ordinal:
+                continue
+        except Exception:
+            pass
+
         sn = m.get("scan_name") or "GENERAL"
         if sn and sn != "GENERAL":
             scan_counts[sn] = scan_counts.get(sn, 0) + len(m.get("tickers", []))
@@ -406,6 +409,7 @@ def get_watchlist_status(subjects: str | None = None) -> dict:
         "gmail_user": GMAIL_USER if GMAIL_USER else None,
         "count": len(tickers),
         "tickers": tickers,
+        "days": days,
         "filter": subjects or "",
         "available_scans": sorted_scans,
         "total_messages": len(store),
