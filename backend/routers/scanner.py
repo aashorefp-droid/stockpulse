@@ -5,22 +5,55 @@ Final message: {"done": true, "total": N}
 """
 import json
 import asyncio
+import math
 from typing import Optional, Dict, Any, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 from fastapi import APIRouter, Query, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 
 from backend.services.scanner import WATCHLISTS, scan_single, get_short_squeeze_tickers
 from backend.services.best_pick import analyze_and_rank_stocks
+from backend.services.gmail_watchlist import (
+    poll_and_store, fetch_today_watchlist, get_watchlist_status
+)
 
 router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 @router.get("/watchlists")
 def get_watchlists():
-    return {k: len(v) for k, v in WATCHLISTS.items()}
+    res = {k: len(v) for k, v in WATCHLISTS.items()}
+    try:
+        res["tos_email"] = len(fetch_today_watchlist())
+    except Exception:
+        res["tos_email"] = 0
+    return res
+
+
+@router.get("/tos-email/status")
+def tos_email_status():
+    """Return status and cached tickers from ThinkOrSwim Gmail alerts."""
+    try:
+        return get_watchlist_status()
+    except Exception as e:
+        return {"status": "error", "error": str(e), "count": 0, "tickers": []}
+
+
+@router.post("/tos-email/refresh")
+def tos_email_refresh():
+    """Force poll Gmail IMAP for new TOS scan emails and return updated tickers."""
+    try:
+        new_count = poll_and_store()
+        tickers = fetch_today_watchlist()
+        return {
+            "status": "ok",
+            "new_emails": new_count,
+            "count": len(tickers),
+            "tickers": tickers,
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e), "count": 0, "tickers": []}
 
 
 @router.get("/stage2-curl")
@@ -32,6 +65,8 @@ def get_stage2_curl_stocks(
     """Return stocks meeting 30W MA curl up and volume surge."""
     if tickers:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    elif watchlist in ("tos_email", "tos", "gmail", "telegram"):
+        ticker_list = fetch_today_watchlist()
     else:
         ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS["default"])
 
@@ -69,10 +104,12 @@ async def stream_scan(
     tickers:  str  = Query(""),          # comma-separated custom list
     as_of:    Optional[str] = Query(None),  # backtest date YYYY-MM-DD
 ):
+    loop = asyncio.get_event_loop()
     if tickers:
         ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    elif watchlist in ("tos_email", "tos", "gmail", "telegram"):
+        ticker_list = await loop.run_in_executor(None, fetch_today_watchlist)
     elif watchlist == "short_squeeze":
-        loop = asyncio.get_event_loop()
         ticker_list = await loop.run_in_executor(None, get_short_squeeze_tickers)
     else:
         ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS["default"])
@@ -107,8 +144,6 @@ async def stream_scan(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
-
-import math
 
 def _clean_nans(obj):
     if isinstance(obj, dict):
@@ -184,4 +219,3 @@ async def rank_uploaded_csv(file: UploadFile = File(...)):
             "strict_passed_count": 0,
             "is_strict": False,
         }
-

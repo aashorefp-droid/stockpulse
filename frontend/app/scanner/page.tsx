@@ -12,6 +12,7 @@ const WATCHLISTS = [
   { key: "mega_cap",      label: "Mega Cap 20",      count: 20 },
   { key: "momentum",      label: "Momentum 20",      count: 20 },
   { key: "etfs",          label: "ETFs 20",          count: 20 },
+  { key: "tos_email",     label: "📧 TOS Scan",      count: 25 },
   { key: "short_squeeze", label: "🔥 Short Squeeze", count: 40 },
   { key: "custom",        label: "Custom",           count: 0  },
 ];
@@ -182,8 +183,44 @@ export default function ScannerPage() {
   const [activePickMode, setActivePickMode] = useState<"strength" | "emerging" | "weakness">("emerging");
   const [rankingLoading, setRankingLoading] = useState(false);
   const [showRankedTable, setShowRankedTable] = useState(true);
+  const [tosStatus, setTosStatus] = useState<{ count: number; tickers: string[]; status?: string; latest_time?: string; latest_date?: string } | null>(null);
+  const [tosRefreshing, setTosRefreshing] = useState(false);
+  const [tosMsg, setTosMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    if (watchlist === "tos_email") {
+      fetch(`${API_BASE}/api/scanner/tos-email/status`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && typeof data.count === "number") {
+            setTosStatus(data);
+          }
+        })
+        .catch(err => console.warn("Failed fetching TOS status:", err));
+    }
+  }, [watchlist]);
+
+  async function refreshTosEmail() {
+    setTosRefreshing(true);
+    setTosMsg("Connecting to Gmail IMAP and pulling TOS alerts...");
+    try {
+      const res = await fetch(`${API_BASE}/api/scanner/tos-email/refresh`, { method: "POST" });
+      const data = await res.json();
+      if (data && data.status === "ok") {
+        setTosStatus({ count: data.count, tickers: data.tickers });
+        setTosMsg(`✅ Fetched ${data.new_emails ?? 0} new alert(s) — ${data.count} tickers ready.`);
+      } else {
+        setTosMsg(`⚠️ ${data?.error || "No new alerts found in Gmail."}`);
+      }
+    } catch (e: any) {
+      setTosMsg(`⚠️ Failed to poll Gmail: ${e.message}`);
+    } finally {
+      setTosRefreshing(false);
+      setTimeout(() => setTosMsg(null), 6000);
+    }
+  }
 
   useEffect(() => {
     if (!optModal) return;
@@ -263,6 +300,9 @@ export default function ScannerPage() {
       if (!tickers.length) return;
       total = tickers.length;
       url = `${API_BASE}/api/scanner/stream?tickers=${encodeURIComponent(tickers.join(","))}`;
+    } else if (watchlist === "tos_email") {
+      total = tosStatus?.count || 25;
+      url = `${API_BASE}/api/scanner/stream?watchlist=tos_email`;
     } else {
       total = WATCHLISTS.find(w => w.key === watchlist)?.count ?? 50;
       url = `${API_BASE}/api/scanner/stream?watchlist=${watchlist}`;
@@ -408,6 +448,56 @@ export default function ScannerPage() {
               <span className="text-xs text-muted">
                 {customInput.split(",").filter(t => t.trim()).length} ticker{customInput.split(",").filter(t => t.trim()).length !== 1 ? "s" : ""}
               </span>
+            )}
+          </div>
+        )}
+
+        {watchlist === "tos_email" && (
+          <div className="p-3 bg-surface/50 border border-border/80 rounded-xl space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-base">📧</span>
+                <div>
+                  <div className="text-xs font-semibold text-white flex items-center gap-2">
+                    ThinkOrSwim Scan Email Pipeline
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20 font-mono">
+                      {tosStatus ? `${tosStatus.count} tickers available` : "TOS Email Watchlist"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted">
+                    Auto-polled daily at 7:15 PM CST from thinkorswim scan alerts via Gmail IMAP.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={refreshTosEmail}
+                  disabled={tosRefreshing || scanning}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 ${
+                    tosRefreshing
+                      ? "bg-accent/20 text-accent border-accent/30 cursor-wait"
+                      : "bg-surface text-white border-border hover:border-accent hover:text-accent"
+                  }`}
+                >
+                  <span className={`inline-block ${tosRefreshing ? "animate-spin" : ""}`}>↻</span>
+                  {tosRefreshing ? "Pulling Gmail..." : "Hard pull"}
+                </button>
+              </div>
+            </div>
+
+            {tosMsg && (
+              <div className="text-xs text-accent bg-accent/5 border border-accent/20 px-3 py-1.5 rounded-lg animate-fade-in font-mono">
+                {tosMsg}
+              </div>
+            )}
+
+            {tosStatus && tosStatus.tickers && tosStatus.tickers.length > 0 && (
+              <div className="text-[11px] text-muted truncate">
+                <span className="text-white/60 font-medium">Tickers: </span>
+                <span className="font-mono text-white/80">{tosStatus.tickers.slice(0, 15).join(", ")}{tosStatus.tickers.length > 15 ? ` +${tosStatus.tickers.length - 15} more` : ""}</span>
+              </div>
             )}
           </div>
         )}

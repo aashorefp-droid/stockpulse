@@ -903,6 +903,28 @@ def paper_exit_monitor_job(force: bool = False) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+# ── ThinkOrSwim (TOS) Scan Email Watchlist Job ────────────────────────────────
+
+def tos_email_poll_job() -> int:
+    """7:15 PM CST — poll Gmail IMAP for ThinkOrSwim scan alert emails."""
+    try:
+        from backend.services.gmail_watchlist import poll_and_store, fetch_today_watchlist
+        new_count = poll_and_store()
+        tickers = fetch_today_watchlist()
+        logger.info(f"[scheduler] 7:15 PM TOS scan email poll finished: {new_count} new messages, {len(tickers)} today's tickers")
+        if tickers and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            send_telegram(
+                TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+                f"📧 <b>ThinkOrSwim Scan Watchlist ({today_str()})</b>\n"
+                f"Fetched <b>{len(tickers)}</b> tickers from TOS email alerts:\n"
+                f"<code>{', '.join(tickers)}</code>"
+            )
+        return new_count
+    except Exception as e:
+        logger.warning(f"[scheduler] TOS scan email poll failed: {e}")
+        return 0
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -967,8 +989,17 @@ def setup_scheduler():
         replace_existing=True,
     )
 
+    scheduler.add_job(
+        tos_email_poll_job,
+        CronTrigger(hour=19, minute=15, timezone=CST),
+        id="tos_email_poll",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info(
         "[scheduler] registered: default50_scan@8:00CST, "
         "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
-        "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST"
+        "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST, "
+        "tos_email_poll@19:15CST"
     )
