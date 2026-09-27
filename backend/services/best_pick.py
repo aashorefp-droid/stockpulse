@@ -53,15 +53,36 @@ def clean_currency(val: Any) -> float:
 
 def clean_rr(val: Any) -> float:
     """Parses risk/reward strings like '2.4x' or '3.5' into floats."""
-    if pd.isna(val):
+    if val is None or pd.isna(val):
         return 1.0
     if isinstance(val, (int, float)):
-        return float(val)
+        return float(val) if not np.isnan(val) else 1.0
     val_str = str(val).replace("x", "").replace("X", "").strip()
     try:
-        return float(val_str)
+        f = float(val_str)
+        return f if not np.isnan(f) else 1.0
     except ValueError:
         return 1.0
+
+
+def _safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
+    """Safely converts any input (str, int, float, None, NaN) to float or returns default."""
+    if val is None:
+        return default
+    try:
+        if pd.isna(val):
+            return default
+    except Exception:
+        pass
+    if isinstance(val, (int, float)):
+        return float(val) if not np.isnan(val) else default
+    s = str(val).replace("%", "").replace("$", "").replace(",", "").replace("x", "").replace("X", "").strip()
+    try:
+        f = float(s)
+        return f if not np.isnan(f) else default
+    except (ValueError, TypeError):
+        return default
+
 
 
 def normalize_scanner_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -193,7 +214,8 @@ def normalize_scanner_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             grade = str(row.get("entry_grade", "")).upper()
             status = str(row.get("entry_status", "")).upper()
             stage = str(row.get("stage2_status", "")).upper()
-            dist_sma = float(row.get("dist_from_sma30") or row.get("Long Term % From Entry") or 0.0)
+            dist_sma_raw = row.get("dist_from_sma30") if row.get("dist_from_sma30") is not None else row.get("Long Term % From Entry")
+            dist_sma = _safe_float(dist_sma_raw, 0.0)
 
             if grade in ("S", "A") or status == "ENTER":
                 btd_list.append("TRIGGER")
@@ -219,9 +241,9 @@ def normalize_scanner_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "Fundamental" not in df.columns or df["Fundamental"].isna().all():
         funda_list = []
         for _, row in df.iterrows():
-            pm = row.get("profit_margin")
-            pe = row.get("pe_ratio")
-            eg = row.get("earnings_growth")
+            pm = _safe_float(row.get("profit_margin"))
+            pe = _safe_float(row.get("pe_ratio"))
+            eg = _safe_float(row.get("earnings_growth"))
             if (pm is not None and pm < 0) or (pe is not None and pe < 0):
                 funda_list.append("Unprofitable")
             elif eg is not None and eg < 0:
@@ -234,8 +256,8 @@ def normalize_scanner_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if "Next Day Summary" not in df.columns or df["Next Day Summary"].isna().all():
         summary_list = []
         for _, row in df.iterrows():
-            bs = row.get("breakout_score", 0) or 0
-            vs = row.get("vol_surge", False)
+            bs = _safe_float(row.get("breakout_score"), 0.0)
+            vs = bool(row.get("vol_surge", False))
             db = str(row.get("daily_bias", "")).upper()
             if bs >= 7 or vs:
                 summary_list.append("Strong Bullish Close (90%+ Range)")
@@ -279,20 +301,20 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     df = normalize_scanner_dataframe(raw_df)
 
     # 1. Clean Key Numerical Columns
-    df["Price"] = df["Price"].apply(clean_currency)
-    df["30wk MA Slope%"] = df["30wk MA Slope%"].apply(clean_percentage)
-    df["Valuation Upside%"] = df["Valuation Upside%"].apply(clean_percentage)
-    df["Swing Reward%"] = df["Swing Reward%"].apply(clean_percentage)
-    df["Swing Risk%"] = df["Swing Risk%"].apply(clean_percentage)
-    df["Swing R/R"] = df["Swing R/R"].apply(clean_rr)
-    df["Long Term % From Entry"] = df["Long Term % From Entry"].apply(clean_percentage)
-    df["Dist From High%"] = df["Dist From High%"].apply(clean_percentage).fillna(10.0)
+    df["Price"] = pd.to_numeric(df["Price"].apply(clean_currency), errors="coerce").fillna(0.0)
+    df["30wk MA Slope%"] = pd.to_numeric(df["30wk MA Slope%"].apply(clean_percentage), errors="coerce").fillna(0.0)
+    df["Valuation Upside%"] = pd.to_numeric(df["Valuation Upside%"].apply(clean_percentage), errors="coerce").fillna(0.0)
+    df["Swing Reward%"] = pd.to_numeric(df["Swing Reward%"].apply(clean_percentage), errors="coerce").fillna(0.0)
+    df["Swing Risk%"] = pd.to_numeric(df["Swing Risk%"].apply(clean_percentage), errors="coerce").fillna(5.0)
+    df["Swing R/R"] = pd.to_numeric(df["Swing R/R"].apply(clean_rr), errors="coerce").fillna(1.0)
+    df["Long Term % From Entry"] = pd.to_numeric(df["Long Term % From Entry"].apply(clean_percentage), errors="coerce").fillna(0.0)
+    df["Dist From High%"] = pd.to_numeric(df["Dist From High%"].apply(clean_percentage), errors="coerce").fillna(10.0)
     df["Breakout Score"] = pd.to_numeric(df["Breakout Score"], errors="coerce").fillna(0.0)
     df["Vol Ratio"] = pd.to_numeric(df["Vol Ratio"], errors="coerce").fillna(1.0)
     df["MTF Rank"] = pd.to_numeric(df["MTF Rank"], errors="coerce").fillna(3)
-    df["Swing Entry"] = df["Swing Entry"].apply(clean_currency)
-    df["Swing Stop"] = df["Swing Stop"].apply(clean_currency)
-    df["Swing T1"] = df["Swing T1"].apply(clean_currency)
+    df["Swing Entry"] = pd.to_numeric(df["Swing Entry"].apply(clean_currency), errors="coerce").fillna(df["Price"])
+    df["Swing Stop"] = pd.to_numeric(df["Swing Stop"].apply(clean_currency), errors="coerce").fillna(df["Swing Entry"] * 0.95)
+    df["Swing T1"] = pd.to_numeric(df["Swing T1"].apply(clean_currency), errors="coerce").fillna(df["Swing Entry"] * 1.10)
 
     # 2. Scoring Engines for the 3 Distinct Paradigms
 
@@ -300,7 +322,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     def calc_strength_score(row: pd.Series) -> float:
         score = 25.0
         # Proximity to 52W High (up to +35 pts)
-        dh = float(row.get("Dist From High%")) if pd.notna(row.get("Dist From High%")) else 10.0
+        dh = _safe_float(row.get("Dist From High%"), 10.0)
         if dh <= 2.0:
             score += 35.0
         elif dh <= 5.0:
@@ -312,7 +334,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
 
         # Institutional Volume Surge (up to +25 pts)
         vol_surge = bool(row.get("Vol Surge", False))
-        vol_ratio = float(row.get("Vol Ratio", 1.0)) if pd.notna(row.get("Vol Ratio")) else 1.0
+        vol_ratio = _safe_float(row.get("Vol Ratio"), 1.0)
         vol_trend = str(row.get("Vol Trend", "")).upper()
         if vol_surge or vol_ratio >= 1.5:
             score += 25.0
@@ -320,7 +342,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
             score += 15.0
 
         # Trend Velocity / 30W Slope (up to +20 pts)
-        slope = float(row.get("30wk MA Slope%")) if pd.notna(row.get("30wk MA Slope%")) else 0.0
+        slope = _safe_float(row.get("30wk MA Slope%"), 0.0)
         if slope >= 5.0:
             score += 20.0
         elif slope >= 2.5:
@@ -330,7 +352,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
 
         # Breakout Score & Closing Strength (up to +20 pts)
         summary = str(row.get("Next Day Summary", "")).lower()
-        bs = float(row.get("Breakout Score", 0)) if pd.notna(row.get("Breakout Score")) else 0.0
+        bs = _safe_float(row.get("Breakout Score"), 0.0)
         if "strong" in summary or "9" in summary or bs >= 7:
             score += 20.0
         elif "bullish" in summary:
@@ -342,7 +364,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     def calc_emerging_score(row: pd.Series) -> float:
         score = 25.0
         # Base Tightness / Low Risk Invalidation (up to +25 pts)
-        risk = float(row.get("Swing Risk%")) if pd.notna(row.get("Swing Risk%")) else 5.0
+        risk = _safe_float(row.get("Swing Risk%"), 5.0)
         if risk <= 3.5:
             score += 25.0  # Extreme VCP coil
         elif risk <= 5.5:
@@ -360,7 +382,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
             score += 12.0  # Tightly coiled at pivot
 
         # Proximity to 52W High (up to +20 pts)
-        dh = float(row.get("Dist From High%")) if pd.notna(row.get("Dist From High%")) else 10.0
+        dh = _safe_float(row.get("Dist From High%"), 10.0)
         if dh <= 3.0:
             score += 20.0
         elif dh <= 7.0:
@@ -370,14 +392,14 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
 
         # Volume Expansion on Trigger (up to +15 pts)
         vol_surge = bool(row.get("Vol Surge", False))
-        vol_ratio = float(row.get("Vol Ratio", 1.0)) if pd.notna(row.get("Vol Ratio")) else 1.0
+        vol_ratio = _safe_float(row.get("Vol Ratio"), 1.0)
         if vol_surge or vol_ratio >= 1.4:
             score += 15.0
         elif vol_ratio >= 1.15:
             score += 8.0
 
         # Trend Velocity (up to +15 pts)
-        slope = float(row.get("30wk MA Slope%")) if pd.notna(row.get("30wk MA Slope%")) else 0.0
+        slope = _safe_float(row.get("30wk MA Slope%"), 0.0)
         if slope >= 3.0:
             score += 15.0
         elif slope > 0.0:
@@ -388,7 +410,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     # C. Buy the Weakness (High R/R Dip at Support / Oversold Mean Reversion)
     def calc_weakness_score(row: pd.Series) -> float:
         score = 25.0
-        dh = float(row.get("Dist From High%")) if pd.notna(row.get("Dist From High%")) else 10.0
+        dh = _safe_float(row.get("Dist From High%"), 10.0)
         # If right at ATH, strongly penalize because it is not a dip/weakness buy
         if dh <= 2.5:
             score -= 30.0
@@ -398,7 +420,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
             score += 12.0
 
         # Asymmetric Risk/Reward Ratio (up to +30 pts)
-        rr = float(row.get("Swing R/R", 1.0)) if pd.notna(row.get("Swing R/R")) else 1.0
+        rr = _safe_float(row.get("Swing R/R"), 1.0)
         if rr >= 3.0:
             score += 30.0
         elif rr >= 2.2:
@@ -407,7 +429,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
             score += 12.0
 
         # Valuation Upside / Fair Value Discount (up to +25 pts)
-        upside = float(row.get("Valuation Upside%")) if pd.notna(row.get("Valuation Upside%")) else 0.0
+        upside = _safe_float(row.get("Valuation Upside%"), 0.0)
         if upside >= 25.0:
             score += 25.0
         elif upside >= 15.0:
@@ -424,7 +446,7 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
             score += 15.0
 
         # Swing Reward Potential (up to +15 pts)
-        reward = float(row.get("Swing Reward%")) if pd.notna(row.get("Swing Reward%")) else 0.0
+        reward = _safe_float(row.get("Swing Reward%"), 0.0)
         if reward >= 12.0:
             score += 15.0
         elif reward >= 7.0:
@@ -482,26 +504,26 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
         return {
             "ticker": str(row["Ticker"]),
             "sector": str(row["Sector"]) if pd.notna(row["Sector"]) else "N/A",
-            "price": round(float(row["Price"]), 2) if pd.notna(row["Price"]) else None,
+            "price": _safe_float(row["Price"]),
             "verdict": str(row["Verdict"]),
             "btd": str(row["BTD"]),
             "btd_zone": str(row["BTD Zone"]) if pd.notna(row["BTD Zone"]) else "—",
-            "dist_from_high": round(float(row["Dist From High%"]), 1) if pd.notna(row["Dist From High%"]) else 0.0,
-            "sma30_slope": round(float(row["30wk MA Slope%"]), 2) if pd.notna(row["30wk MA Slope%"]) else 0.0,
-            "valuation_upside": round(float(row["Valuation Upside%"]), 1) if pd.notna(row["Valuation Upside%"]) else 0.0,
-            "swing_entry": round(float(row["Swing Entry"]), 2) if pd.notna(row["Swing Entry"]) else None,
-            "swing_stop": round(float(row["Swing Stop"]), 2) if pd.notna(row["Swing Stop"]) else None,
-            "swing_t1": round(float(row["Swing T1"]), 2) if pd.notna(row["Swing T1"]) else None,
-            "swing_reward_pct": round(float(row["Swing Reward%"]), 1) if pd.notna(row["Swing Reward%"]) else 0.0,
+            "dist_from_high": round(_safe_float(row["Dist From High%"], 0.0), 1),
+            "sma30_slope": round(_safe_float(row["30wk MA Slope%"], 0.0), 2),
+            "valuation_upside": round(_safe_float(row["Valuation Upside%"], 0.0), 1),
+            "swing_entry": _safe_float(row["Swing Entry"]),
+            "swing_stop": _safe_float(row["Swing Stop"]),
+            "swing_t1": _safe_float(row["Swing T1"]),
+            "swing_reward_pct": round(_safe_float(row["Swing Reward%"], 0.0), 1),
             "swing_risk_pct": risk_val,
-            "swing_rr": round(float(row["Swing R/R"]), 2) if pd.notna(row["Swing R/R"]) else 1.0,
+            "swing_rr": round(_safe_float(row["Swing R/R"], 1.0), 2),
             "tightness_rating": tightness_rating,
             "setup_status": setup_status,
             "category": cat_upper,
             "category_badge": cat_badge,
             "category_title": cat_title,
             "category_tagline": cat_tagline,
-            "score": round(float(score_val), 1),
+            "score": round(_safe_float(score_val, 0.0), 1),
         }
 
     # 4. Filter Candidate Pools for each of the 3 Paradigms
@@ -575,11 +597,11 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     # 5. Composite Ranking of All Candidates with Category Tagging
     # Determine best category for each ticker:
     def classify_row_category(row: pd.Series) -> str:
-        s_score = row["Score_Strength"]
-        e_score = row["Score_Emerging"]
-        w_score = row["Score_Weakness"]
+        s_score = _safe_float(row.get("Score_Strength"), 0.0)
+        e_score = _safe_float(row.get("Score_Emerging"), 0.0)
+        w_score = _safe_float(row.get("Score_Weakness"), 0.0)
         btd = str(row.get("BTD", "")).upper()
-        dh = float(row.get("Dist From High%", 10.0))
+        dh = _safe_float(row.get("Dist From High%"), 10.0)
 
         # Direct domain criteria
         if btd == "ARMED-DEEP" or (dh >= 6.0 and w_score >= 65.0 and btd in ("ARMED", "ARMED-DEEP")):
@@ -621,20 +643,21 @@ def analyze_and_rank_stocks(csv_path_or_df: Union[str, pd.DataFrame]) -> Dict[st
     }
 
 
-def _derive_options_contract(price: Optional[float], direction: str = "LONG") -> str:
+def _derive_options_contract(price: Any, direction: str = "LONG") -> str:
     """Calculates ATM strike and nearest Friday expiration for swing trades."""
-    if not price or price <= 0:
+    p = _safe_float(price, 0.0)
+    if not p or p <= 0:
         return "N/A"
 
-    if price >= 200:
+    if p >= 200:
         step = 5.0
-    elif price >= 50:
+    elif p >= 50:
         step = 2.5
-    elif price >= 20:
+    elif p >= 20:
         step = 1.0
     else:
         step = 0.5
-    atm_strike = round(round(price / step) * step, 2)
+    atm_strike = round(round(p / step) * step, 2)
     atm_str = f"${atm_strike:.0f}" if atm_strike.is_integer() else f"${atm_strike:.2f}"
 
     try:
@@ -646,7 +669,7 @@ def _derive_options_contract(price: Optional[float], direction: str = "LONG") ->
         days_to_fri = 7
     exp_fri = (now_cst + timedelta(days=days_to_fri)).strftime("%b %d")
 
-    return f"Buy {atm_str} Call (Exp {exp_fri})" if direction != "SHORT" else f"Buy {atm_str} Put (Exp {exp_fri})"
+    return f"Buy {atm_str} Call (Exp {exp_fri})" if str(direction).upper() != "SHORT" else f"Buy {atm_str} Put (Exp {exp_fri})"
 
 
 def format_triad_telegram_message(
@@ -678,17 +701,17 @@ def format_triad_telegram_message(
     str_pick = best_picks.get("strength")
     if str_pick:
         tk = str_pick["ticker"]
-        price = str_pick.get("price") or 0.0
-        score = str_pick.get("score") or 0.0
+        price = _safe_float(str_pick.get("price"), 0.0)
+        score = _safe_float(str_pick.get("score"), 0.0)
         verdict = str_pick.get("verdict") or "BULLISH"
-        slope = str_pick.get("sma30_slope") or 0.0
-        dh = str_pick.get("dist_from_high") or 0.0
-        entry = str_pick.get("swing_entry") or price
-        stop = str_pick.get("swing_stop") or (entry * 0.95)
-        t1 = str_pick.get("swing_t1") or (entry * 1.10)
-        risk = str_pick.get("swing_risk_pct") or 5.0
-        reward = str_pick.get("swing_reward_pct") or 10.0
-        rr = str_pick.get("swing_rr") or 2.0
+        slope = _safe_float(str_pick.get("sma30_slope"), 0.0)
+        dh = _safe_float(str_pick.get("dist_from_high"), 0.0)
+        entry = _safe_float(str_pick.get("swing_entry"), price)
+        stop = _safe_float(str_pick.get("swing_stop"), entry * 0.95)
+        t1 = _safe_float(str_pick.get("swing_t1"), entry * 1.10)
+        risk = _safe_float(str_pick.get("swing_risk_pct"), 5.0)
+        reward = _safe_float(str_pick.get("swing_reward_pct"), 10.0)
+        rr = _safe_float(str_pick.get("swing_rr"), 2.0)
         opt_contract = _derive_options_contract(price, "LONG")
 
         lines.extend([
@@ -711,17 +734,17 @@ def format_triad_telegram_message(
     emg_pick = best_picks.get("emerging")
     if emg_pick:
         tk = emg_pick["ticker"]
-        price = emg_pick.get("price") or 0.0
-        score = emg_pick.get("score") or 0.0
+        price = _safe_float(emg_pick.get("price"), 0.0)
+        score = _safe_float(emg_pick.get("score"), 0.0)
         verdict = emg_pick.get("verdict") or "BULLISH"
         tightness = emg_pick.get("tightness_rating") or "Tight Base"
         status = emg_pick.get("setup_status") or "Emerging"
-        entry = emg_pick.get("swing_entry") or price
-        stop = emg_pick.get("swing_stop") or (entry * 0.95)
-        t1 = emg_pick.get("swing_t1") or (entry * 1.10)
-        risk = emg_pick.get("swing_risk_pct") or 5.0
-        reward = emg_pick.get("swing_reward_pct") or 10.0
-        rr = emg_pick.get("swing_rr") or 2.0
+        entry = _safe_float(emg_pick.get("swing_entry"), price)
+        stop = _safe_float(emg_pick.get("swing_stop"), entry * 0.95)
+        t1 = _safe_float(emg_pick.get("swing_t1"), entry * 1.10)
+        risk = _safe_float(emg_pick.get("swing_risk_pct"), 5.0)
+        reward = _safe_float(emg_pick.get("swing_reward_pct"), 10.0)
+        rr = _safe_float(emg_pick.get("swing_rr"), 2.0)
         opt_contract = _derive_options_contract(price, "LONG")
 
         lines.extend([
@@ -745,18 +768,18 @@ def format_triad_telegram_message(
     wk_pick = best_picks.get("weakness")
     if wk_pick:
         tk = wk_pick["ticker"]
-        price = wk_pick.get("price") or 0.0
-        score = wk_pick.get("score") or 0.0
+        price = _safe_float(wk_pick.get("price"), 0.0)
+        score = _safe_float(wk_pick.get("score"), 0.0)
         verdict = wk_pick.get("verdict") or "LEAN BULLISH"
         zone = wk_pick.get("btd_zone") or "Support Zone"
-        upside = wk_pick.get("valuation_upside") or 0.0
-        dh = wk_pick.get("dist_from_high") or 0.0
-        entry = wk_pick.get("swing_entry") or price
-        stop = wk_pick.get("swing_stop") or (entry * 0.95)
-        t1 = wk_pick.get("swing_t1") or (entry * 1.10)
-        risk = wk_pick.get("swing_risk_pct") or 5.0
-        reward = wk_pick.get("swing_reward_pct") or 10.0
-        rr = wk_pick.get("swing_rr") or 2.0
+        upside = _safe_float(wk_pick.get("valuation_upside"), 0.0)
+        dh = _safe_float(wk_pick.get("dist_from_high"), 0.0)
+        entry = _safe_float(wk_pick.get("swing_entry"), price)
+        stop = _safe_float(wk_pick.get("swing_stop"), entry * 0.95)
+        t1 = _safe_float(wk_pick.get("swing_t1"), entry * 1.10)
+        risk = _safe_float(wk_pick.get("swing_risk_pct"), 5.0)
+        reward = _safe_float(wk_pick.get("swing_reward_pct"), 10.0)
+        rr = _safe_float(wk_pick.get("swing_rr"), 2.0)
         opt_contract = _derive_options_contract(price, "LONG")
 
         lines.extend([
@@ -853,7 +876,7 @@ def dispatch_triad_telegram_alert(
             for fut in as_completed(futures):
                 try:
                     res = fut.result()
-                    if res and not res.get("error") and res.get("price", 0) > 0:
+                    if res and not res.get("error") and _safe_float(res.get("price"), 0.0) > 0:
                         scanned_items.append(res)
                 except Exception as e:
                     logger.warning(f"Error scanning ticker for triad alert: {e}")
