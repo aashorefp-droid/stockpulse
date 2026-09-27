@@ -152,30 +152,52 @@ def normalize_scanner_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         df["Ticker"] = "UNKNOWN"
     if "Price" not in df.columns:
         df["Price"] = 0.0
+    else:
+        df["Price"] = pd.to_numeric(df["Price"].apply(clean_currency), errors="coerce").fillna(0.0)
+
     if "Sector" not in df.columns:
         df["Sector"] = "N/A"
     if "Verdict" not in df.columns:
         df["Verdict"] = "NEUTRAL"
     if "Dist From High%" not in df.columns:
         df["Dist From High%"] = 5.0
+    else:
+        df["Dist From High%"] = pd.to_numeric(df["Dist From High%"].apply(clean_percentage), errors="coerce").fillna(5.0)
+
     if "Breakout Score" not in df.columns:
         df["Breakout Score"] = 0.0
+    else:
+        df["Breakout Score"] = pd.to_numeric(df["Breakout Score"], errors="coerce").fillna(0.0)
+
     if "Vol Surge" not in df.columns:
         df["Vol Surge"] = False
     if "Vol Ratio" not in df.columns:
         df["Vol Ratio"] = 1.0
+    else:
+        df["Vol Ratio"] = pd.to_numeric(df["Vol Ratio"], errors="coerce").fillna(1.0)
+
     if "Vol Trend" not in df.columns:
         df["Vol Trend"] = "FLAT"
     if "MTF Rank" not in df.columns:
         df["MTF Rank"] = 3
+    else:
+        df["MTF Rank"] = pd.to_numeric(df["MTF Rank"], errors="coerce").fillna(3)
 
     # Derive Swing Entry / Stop / T1 if missing
     if "Swing Entry" not in df.columns or df["Swing Entry"].isna().all():
         df["Swing Entry"] = df["Price"]
+    else:
+        df["Swing Entry"] = pd.to_numeric(df["Swing Entry"].apply(clean_currency), errors="coerce").fillna(df["Price"])
+
     if "Swing Stop" not in df.columns or df["Swing Stop"].isna().all():
-        df["Swing Stop"] = df["Price"] * 0.95
+        df["Swing Stop"] = df["Swing Entry"] * 0.95
+    else:
+        df["Swing Stop"] = pd.to_numeric(df["Swing Stop"].apply(clean_currency), errors="coerce").fillna(df["Swing Entry"] * 0.95)
+
     if "Swing T1" not in df.columns or df["Swing T1"].isna().all():
-        df["Swing T1"] = df["Price"] * 1.10
+        df["Swing T1"] = df["Swing Entry"] * 1.10
+    else:
+        df["Swing T1"] = pd.to_numeric(df["Swing T1"].apply(clean_currency), errors="coerce").fillna(df["Swing Entry"] * 1.10)
 
     # Auto-derive Swing Reward% & Risk% if not provided
     if "Swing Reward%" not in df.columns or df["Swing Reward%"].isna().all():
