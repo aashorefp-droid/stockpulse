@@ -12,6 +12,7 @@ const WATCHLISTS = [
   { key: "mega_cap",      label: "Mega Cap 20",      count: 20 },
   { key: "momentum",      label: "Momentum 20",      count: 20 },
   { key: "etfs",          label: "ETFs 20",          count: 20 },
+  { key: "tos_email",     label: "📧 TOS Scan",      count: 25 },
   { key: "short_squeeze", label: "🔥 Short Squeeze", count: 40 },
   { key: "custom",        label: "Custom",           count: 0  },
 ];
@@ -182,8 +183,85 @@ export default function ScannerPage() {
   const [activePickMode, setActivePickMode] = useState<"strength" | "emerging" | "weakness">("emerging");
   const [rankingLoading, setRankingLoading] = useState(false);
   const [showRankedTable, setShowRankedTable] = useState(true);
+  const [tosStatus, setTosStatus] = useState<{ count: number; tickers: string[]; status?: string; latest_time?: string; latest_date?: string; available_scans?: { name: string; count: number }[] } | null>(null);
+  const [tosSubjectFilter, setTosSubjectFilter] = useState("FIB-STRONGBUY, IFC-BULLISH");
+  const [tosDays, setTosDays] = useState<number>(1);
+  const [tosRefreshing, setTosRefreshing] = useState(false);
+  const [tosMsg, setTosMsg] = useState<string | null>(null);
+  const [telegramSending, setTelegramSending] = useState(false);
+  const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  async function sendTriadTelegram() {
+    setTelegramSending(true);
+    setTelegramSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scanner/triad-alert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: results.length > 0 ? results : undefined,
+          watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
+          subjects: tosSubjectFilter,
+          days: tosDays,
+          send_telegram: true,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.sent) {
+        setTelegramSentMsg("✅ Sent to Telegram!");
+      } else if (data && data.error) {
+        setTelegramSentMsg(`⚠️ ${data.error}`);
+      } else {
+        setTelegramSentMsg("⚠️ Alert generated (check Telegram config)");
+      }
+    } catch (err: any) {
+      setTelegramSentMsg(`⚠️ ${err.message || "Failed to send alert"}`);
+    } finally {
+      setTelegramSending(false);
+      setTimeout(() => setTelegramSentMsg(null), 5000);
+    }
+  }
+
+  useEffect(() => {
+    if (watchlist === "tos_email") {
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      fetch(`${API_BASE}/api/scanner/tos-email/status?${params.toString()}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && typeof data.count === "number") {
+            setTosStatus(data);
+          }
+        })
+        .catch(err => console.warn("Failed fetching TOS status:", err));
+    }
+  }, [watchlist, tosSubjectFilter, tosDays]);
+
+  async function refreshTosEmail() {
+    setTosRefreshing(true);
+    setTosMsg("Connecting to Gmail IMAP and pulling TOS alerts...");
+    try {
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      const res = await fetch(`${API_BASE}/api/scanner/tos-email/refresh?${params.toString()}`, { method: "POST" });
+      const data = await res.json();
+      if (data && data.status === "ok") {
+        setTosStatus(data);
+        setTosMsg(`✅ Fetched ${data.new_emails ?? 0} new alert(s) — ${data.count} tickers ready (${tosDays === 1 ? "same day" : `last ${tosDays} days`}).`);
+      } else {
+        setTosMsg(`⚠️ ${data?.error || "No new alerts found in Gmail."}`);
+      }
+    } catch (e: any) {
+      setTosMsg(`⚠️ Failed to poll Gmail: ${e.message}`);
+    } finally {
+      setTosRefreshing(false);
+      setTimeout(() => setTosMsg(null), 6000);
+    }
+  }
 
   useEffect(() => {
     if (!optModal) return;
@@ -263,6 +341,12 @@ export default function ScannerPage() {
       if (!tickers.length) return;
       total = tickers.length;
       url = `${API_BASE}/api/scanner/stream?tickers=${encodeURIComponent(tickers.join(","))}`;
+    } else if (watchlist === "tos_email") {
+      total = tosStatus?.count || 25;
+      const params = new URLSearchParams();
+      if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+      params.set("days", String(tosDays));
+      url = `${API_BASE}/api/scanner/stream?watchlist=tos_email&${params.toString()}`;
     } else {
       total = WATCHLISTS.find(w => w.key === watchlist)?.count ?? 50;
       url = `${API_BASE}/api/scanner/stream?watchlist=${watchlist}`;
@@ -408,6 +492,154 @@ export default function ScannerPage() {
               <span className="text-xs text-muted">
                 {customInput.split(",").filter(t => t.trim()).length} ticker{customInput.split(",").filter(t => t.trim()).length !== 1 ? "s" : ""}
               </span>
+            )}
+          </div>
+        )}
+
+        {watchlist === "tos_email" && (
+          <div className="p-3 bg-surface/50 border border-border/80 rounded-xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-base">📧</span>
+                <div>
+                  <div className="text-xs font-semibold text-white flex items-center gap-2">
+                    ThinkOrSwim Scan Email Pipeline
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20 font-mono">
+                      {tosStatus ? `${tosStatus.count} tickers ready` : "TOS Email Watchlist"}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted">
+                    Auto-polled daily at 7:15 PM CST from thinkorswim scan alerts via Gmail IMAP.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={refreshTosEmail}
+                  disabled={tosRefreshing || scanning}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 ${
+                    tosRefreshing
+                      ? "bg-accent/20 text-accent border-accent/30 cursor-wait"
+                      : "bg-surface text-white border-border hover:border-accent hover:text-accent"
+                  }`}
+                >
+                  <span className={`inline-block ${tosRefreshing ? "animate-spin" : ""}`}>↻</span>
+                  {tosRefreshing ? "Pulling Gmail..." : "Hard pull"}
+                </button>
+              </div>
+            </div>
+
+            {/* ── Comma-separated Subject / Scan Filter ── */}
+            <div className="space-y-1.5 pt-1 border-t border-border/40">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-white/80 whitespace-nowrap">Filter by Subject / Scan:</span>
+                <input
+                  type="text"
+                  value={tosSubjectFilter}
+                  onChange={e => setTosSubjectFilter(e.target.value)}
+                  placeholder="e.g. FIB-STRONGBUY, IFC-BULLISH (or blank for all)"
+                  className="flex-1 min-w-[240px] max-w-lg bg-surface border border-border rounded-lg px-2.5 py-1 text-xs text-white placeholder-muted focus:outline-none focus:border-accent font-mono"
+                />
+                {tosSubjectFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setTosSubjectFilter("")}
+                    className="text-[11px] text-muted hover:text-accent px-1.5 py-0.5 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                <span className="text-[10px] text-muted uppercase tracking-wider font-semibold mr-1">Presets:</span>
+                {[
+                  "All",
+                  "FIB-STRONGBUY",
+                  "IFC-BULLISH",
+                  "FVG-SHORT",
+                  "ALLBREAKOUT",
+                  "CALL-BUY",
+                  "ElliotWave-Bullish",
+                  "options-mispriced"
+                ].map(preset => {
+                  const isActive = preset === "All"
+                    ? !tosSubjectFilter.trim()
+                    : tosSubjectFilter.toUpperCase().includes(preset.toUpperCase());
+                  return (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        if (preset === "All") {
+                          setTosSubjectFilter("");
+                        } else if (!tosSubjectFilter.trim()) {
+                          setTosSubjectFilter(preset);
+                        } else {
+                          const parts = tosSubjectFilter.split(",").map(p => p.trim()).filter(Boolean);
+                          const exists = parts.some(p => p.toUpperCase() === preset.toUpperCase());
+                          if (exists) {
+                            setTosSubjectFilter(parts.filter(p => p.toUpperCase() !== preset.toUpperCase()).join(", "));
+                          } else {
+                            setTosSubjectFilter([...parts, preset].join(", "));
+                          }
+                        }
+                      }}
+                      className={`px-2 py-0.5 text-[10px] rounded-md border font-mono transition-all ${
+                        isActive
+                          ? "bg-accent/20 text-accent border-accent/40 font-semibold"
+                          : "bg-surface/60 text-muted border-border hover:text-white hover:border-white/30"
+                      }`}
+                    >
+                      {preset}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ── Lookback Window (Default: Same Day) ── */}
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40">
+              <span className="text-xs font-semibold text-white/80 whitespace-nowrap">Lookback Days:</span>
+              <div className="flex rounded-lg border border-border overflow-hidden bg-surface">
+                {[
+                  { label: "Today (Same Day)", val: 1 },
+                  { label: "Last 2 Days", val: 2 },
+                  { label: "Last 3 Days", val: 3 },
+                  { label: "Last 7 Days", val: 7 },
+                ].map(opt => (
+                  <button
+                    key={opt.val}
+                    type="button"
+                    onClick={() => setTosDays(opt.val)}
+                    className={`px-2.5 py-1 text-xs font-semibold transition-colors ${
+                      tosDays === opt.val
+                        ? "bg-accent text-black font-bold"
+                        : "text-muted hover:text-white border-l border-border first:border-l-0"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-muted ml-1">
+                {tosDays === 1 ? "(Default: strictly today's alert emails)" : `(Emails from the last ${tosDays} days)`}
+              </span>
+            </div>
+
+            {tosMsg && (
+              <div className="text-xs text-accent bg-accent/5 border border-accent/20 px-3 py-1.5 rounded-lg animate-fade-in font-mono">
+                {tosMsg}
+              </div>
+            )}
+
+            {tosStatus && tosStatus.tickers && tosStatus.tickers.length > 0 && (
+              <div className="text-[11px] text-muted truncate">
+                <span className="text-white/60 font-medium">Tickers ({tosStatus.tickers.length}): </span>
+                <span className="font-mono text-white/80">{tosStatus.tickers.slice(0, 20).join(", ")}{tosStatus.tickers.length > 20 ? ` +${tosStatus.tickers.length - 20} more` : ""}</span>
+              </div>
             )}
           </div>
         )}
@@ -585,6 +817,15 @@ export default function ScannerPage() {
                       className="px-3 py-1 text-xs rounded-lg border border-yellow/40 bg-yellow/10 text-yellow hover:bg-yellow/20 transition-colors font-semibold"
                     >
                       ⬇ Export Best Picks CSV
+                    </button>
+                    <button
+                      onClick={sendTriadTelegram}
+                      disabled={telegramSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Dispatch the 3-Category Best Picks Triad Alert to Telegram"
+                    >
+                      <span>{telegramSending ? "⏳" : "✈️"}</span>
+                      <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
                     </button>
                   </div>
                 </div>
