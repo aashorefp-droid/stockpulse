@@ -1,4 +1,19 @@
 import os
+from pathlib import Path
+
+# Automatically load local .env if present
+try:
+    from dotenv import load_dotenv
+    _root_env = Path(__file__).resolve().parent.parent / ".env"
+    _backend_env = Path(__file__).resolve().parent / ".env"
+    if _root_env.exists():
+        load_dotenv(_root_env)
+    elif _backend_env.exists():
+        load_dotenv(_backend_env)
+    else:
+        load_dotenv()
+except ImportError:
+    pass
 
 ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY",    "AKBTFWNEQOAQ6YTHVSEBZHSERS")
 ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "9r3XFuhPUcaouy4Vin38D3zeT8ksYxM8tmvj6PwhQzDF")
