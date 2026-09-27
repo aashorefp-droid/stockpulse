@@ -143,7 +143,7 @@ async def stream_scan(
             if result is None:
                 break
             count += 1
-            yield f"data: {json.dumps(result)}\n\n"
+            yield f"data: {json.dumps(_clean_nans(result))}\n\n"
 
         yield f"data: {json.dumps({'done': True, 'total': count})}\n\n"
 

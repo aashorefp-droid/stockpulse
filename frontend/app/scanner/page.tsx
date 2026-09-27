@@ -192,6 +192,12 @@ export default function ScannerPage() {
   const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
   const [curlSending, setCurlSending] = useState(false);
   const [curlSentMsg, setCurlSentMsg] = useState<string | null>(null);
+  const [curlMatches, setCurlMatches] = useState<any[]>([]);
+  const [curlLoading, setCurlLoading] = useState(false);
+  const [curlFilter, setCurlFilter] = useState<"all" | "fresh" | "surge" | "base">("all");
+  const [showCurlSection, setShowCurlSection] = useState(false);
+  const [curlTotalScanned, setCurlTotalScanned] = useState(0);
+  const [curlSourceLabel, setCurlSourceLabel] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -226,33 +232,62 @@ export default function ScannerPage() {
     }
   }
 
-  async function send30wCurlTelegram() {
-    setCurlSending(true);
-    setCurlSentMsg(null);
+  async function load30wCurls(dispatchTelegram: boolean = false) {
+    setCurlLoading(true);
+    setShowCurlSection(true);
+    if (dispatchTelegram) {
+      setCurlSending(true);
+      setCurlSentMsg(null);
+    }
     try {
-      const res = await fetch(`${API_BASE}/api/scanner/30w-curl/alert`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
-          subjects: tosSubjectFilter,
-          days: tosDays,
-          send_telegram: true,
-        }),
-      });
-      const data = await res.json();
-      if (data && data.sent) {
-        setCurlSentMsg(`✅ Sent ${data.count || 0} Curls!`);
-      } else if (data && data.error) {
-        setCurlSentMsg(`⚠️ ${data.error}`);
+      if (dispatchTelegram) {
+        const res = await fetch(`${API_BASE}/api/scanner/30w-curl/alert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
+            subjects: tosSubjectFilter,
+            days: tosDays,
+            send_telegram: true,
+          }),
+        });
+        const data = await res.json();
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+        }
+        if (data && data.sent) {
+          setCurlSentMsg(`✅ Sent ${data.count || data.matches?.length || 0} Curls!`);
+        } else if (data && data.error) {
+          setCurlSentMsg(`⚠️ ${data.error}`);
+        } else {
+          setCurlSentMsg(`✅ Loaded ${data.count || 0} Curls`);
+        }
       } else {
-        setCurlSentMsg(`⚠️ Found ${data.count || 0} Curls`);
+        const params = new URLSearchParams();
+        params.set("watchlist", watchlist === "tos_email" ? "tos_email" : watchlist);
+        params.set("days", String(tosDays));
+        if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+
+        const res = await fetch(`${API_BASE}/api/scanner/30w-curl?${params.toString()}`);
+        const data = await res.json();
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+        }
       }
     } catch (err: any) {
-      setCurlSentMsg(`⚠️ ${err.message || "Failed to send 30W curl alert"}`);
+      if (dispatchTelegram) {
+        setCurlSentMsg(`⚠️ ${err.message || "Failed to load 30W curls"}`);
+      }
     } finally {
+      setCurlLoading(false);
       setCurlSending(false);
-      setTimeout(() => setCurlSentMsg(null), 5000);
+      if (dispatchTelegram) {
+        setTimeout(() => setCurlSentMsg(null), 5000);
+      }
     }
   }
 
@@ -270,6 +305,22 @@ export default function ScannerPage() {
         })
         .catch(err => console.warn("Failed fetching TOS status:", err));
     }
+
+    // Pre-fetch 30W Curls count in background
+    const curlParams = new URLSearchParams();
+    curlParams.set("watchlist", watchlist === "tos_email" ? "tos_email" : watchlist);
+    curlParams.set("days", String(tosDays));
+    if (tosSubjectFilter) curlParams.set("subjects", tosSubjectFilter);
+    fetch(`${API_BASE}/api/scanner/30w-curl?${curlParams.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+        }
+      })
+      .catch(err => console.warn("Background 30W curl fetch:", err));
   }, [watchlist, tosSubjectFilter, tosDays]);
 
   async function refreshTosEmail() {
@@ -454,7 +505,7 @@ export default function ScannerPage() {
         return (rr >= 1.8 && dist >= 3.0);
       }
       if (filter === "fresh_curl")  return Boolean(r.is_fresh_stage2 || r.stage2_status === "FRESH");
-      if (filter === "curl_vol")    return Boolean(r.is_30w_curl);
+      if (filter === "curl_vol")    return Boolean(r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0));
       if (filter === "rank1")       return r.mtf_rank === 1;
       if (filter === "good_rr")     return (r.rr_t1 ?? 0) >= 1.5;
       if (filter === "high_short")  return (r.short_pct ?? 0) >= 10;
@@ -756,13 +807,29 @@ export default function ScannerPage() {
           </label>
 
           <button
-            onClick={send30wCurlTelegram}
-            disabled={curlSending}
-            className="px-3 py-2 rounded-lg font-semibold text-xs border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 transition-colors flex items-center gap-1.5 shadow-sm"
-            title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and dispatch Telegram alert"
+            onClick={() => {
+              if (showCurlSection && curlMatches.length > 0) {
+                setShowCurlSection(!showCurlSection);
+              } else {
+                load30wCurls(false);
+              }
+            }}
+            disabled={curlLoading}
+            className={`px-3 py-2 rounded-lg font-semibold text-xs border transition-colors flex items-center gap-1.5 shadow-sm ${
+              showCurlSection
+                ? "bg-purple-600/25 border-purple-400 text-purple-200 ring-1 ring-purple-400/50"
+                : "border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20"
+            }`}
+            title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and display tickers on screen"
           >
-            <span>{curlSending ? "⏳" : "🌀"}</span>
-            <span>{curlSending ? "Scanning Curls..." : curlSentMsg || "30W Curl Alert"}</span>
+            <span>{curlLoading ? "⏳" : "🌀"}</span>
+            <span>
+              {curlLoading
+                ? "Scanning 30W Curls..."
+                : curlMatches.length > 0
+                ? `30W Curls (${curlMatches.length})`
+                : "30W Curl Scan"}
+            </span>
           </button>
 
           {(scanning || results.length > 0) && (
@@ -798,6 +865,201 @@ export default function ScannerPage() {
           </div>
         );
       })()}
+
+      {/* ── 🌀 30W MA Curl Up Dedicated Showcase Panel ── */}
+      {showCurlSection && (
+        <div className="card border border-purple-500/40 bg-gradient-to-br from-[#130d22] via-[#0d101a] to-[#0d1222] p-5 shadow-[0_0_35px_rgba(168,85,247,0.15)] animate-fade-in relative rounded-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-purple-500/20 pb-3">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🌀</span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-white tracking-wide">
+                    30-Week MA Curl Up (TradingView Arrows)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    {curlMatches.length} Setups Found
+                  </span>
+                </div>
+                <p className="text-xs text-muted mt-0.5">
+                  Weekly 30W SMA turning positive from flat/declining with volume expansion ({curlSourceLabel || watchlist})
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => load30wCurls(true)}
+                disabled={curlSending || curlLoading}
+                className="px-3 py-1.5 text-xs rounded-lg border border-purple-500/50 bg-purple-500/20 text-purple-200 hover:bg-purple-500/30 transition-colors font-semibold flex items-center gap-1.5 shadow-sm"
+                title="Dispatch these 30W Curl setups to Telegram"
+              >
+                <span>{curlSending ? "⏳" : "✈️"}</span>
+                <span>{curlSending ? "Sending..." : curlSentMsg || "Send to Telegram"}</span>
+              </button>
+              <button
+                onClick={() => load30wCurls(false)}
+                disabled={curlLoading}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:text-white transition-colors"
+                title="Refresh 30W Curl Scan"
+              >
+                🔄 Refresh
+              </button>
+              <button
+                onClick={() => setShowCurlSection(false)}
+                className="px-2.5 py-1.5 text-xs text-muted hover:text-white transition-colors border border-transparent hover:border-border rounded-lg"
+                title="Close 30W Curl Showcase"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Subcategory Filter Tabs inside 30W Curl Showcase */}
+          {curlMatches.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[
+                { key: "all", label: `All Curls (${curlMatches.length})` },
+                { key: "fresh", label: `✨ Fresh Curls (0-3w) (${curlMatches.filter(m => m.category === "FRESH").length})` },
+                { key: "surge", label: `🔥 Volume Surges (${curlMatches.filter(m => m.is_vol_surge).length})` },
+                { key: "base", label: `🏗️ Bases (${curlMatches.filter(m => ["BASE", "ADVANCING"].includes(m.category)).length})` },
+              ].map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setCurlFilter(tab.key as any)}
+                  className={`px-3 py-1 text-xs rounded-lg font-semibold transition-colors ${
+                    curlFilter === tab.key
+                      ? "bg-purple-500 text-white shadow-sm"
+                      : "bg-[#0d101a] border border-border/60 text-muted hover:text-white"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Content: Cards Grid */}
+          {curlLoading ? (
+            <div className="py-12 text-center text-sm text-muted animate-pulse">
+              <span className="text-xl">🌀</span>
+              <p className="mt-2">Scanning weekly bars for TradingView 30W Curl Arrows and volume inflection...</p>
+            </div>
+          ) : curlMatches.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted">
+              <span>No 30W Curl setups currently qualify in this watchlist lookback.</span>
+              <div className="mt-3">
+                <button
+                  onClick={() => load30wCurls(false)}
+                  className="px-4 py-1.5 rounded-lg text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 font-semibold"
+                >
+                  Scan All Watchlists
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {curlMatches
+                .filter(m => {
+                  if (curlFilter === "fresh") return m.category === "FRESH";
+                  if (curlFilter === "surge") return m.is_vol_surge;
+                  if (curlFilter === "base") return ["BASE", "ADVANCING"].includes(m.category);
+                  return true;
+                })
+                .map((item) => (
+                  <div
+                    key={item.ticker}
+                    className="p-3.5 rounded-xl border border-purple-500/30 bg-[#0d111d]/90 hover:border-purple-400 transition-all flex flex-col justify-between group shadow-sm"
+                  >
+                    <div>
+                      {/* Top Row: Ticker, Price, Badge */}
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/stock/${item.ticker}`}
+                            className="text-lg font-black font-mono text-white group-hover:text-purple-300 transition-colors flex items-center gap-1"
+                          >
+                            {item.ticker}
+                            <span className="text-[10px] text-muted opacity-0 group-hover:opacity-100 transition-opacity">↗</span>
+                          </Link>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            item.category === "FRESH"
+                              ? "bg-green/15 text-green border-green/30"
+                              : item.is_vol_surge
+                              ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+                              : "bg-purple-500/15 text-purple-300 border-purple-500/30"
+                          }`}>
+                            {item.category_badge}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-bold font-mono text-white">${item.price.toFixed(2)}</span>
+                          <span className={`block text-[10px] font-mono font-semibold ${item.dist_from_sma30 >= 0 ? "text-bull" : "text-bear"}`}>
+                            {item.dist_from_sma30 >= 0 ? `+${item.dist_from_sma30}%` : `${item.dist_from_sma30}%`} 30W
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Technical Details */}
+                      <div className="grid grid-cols-2 gap-2 text-[11px] bg-black/30 p-2 rounded-lg border border-border/40 font-mono mb-2">
+                        <div>
+                          <span className="text-muted">30W SMA: </span>
+                          <span className="text-white font-semibold">${item.sma30.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Slope: </span>
+                          <span className="text-bull font-semibold">+{item.slope.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Arrow: </span>
+                          <span className={item.weeks_ago === 0 ? "text-yellow font-bold" : "text-white"}>
+                            {item.weeks_ago === 0 ? "✨ This Week" : `${item.weeks_ago}w ago`}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Volume: </span>
+                          <span className={item.is_vol_surge ? "text-cyan-300 font-bold" : "text-muted"}>
+                            {item.is_vol_surge ? `🔥 ${item.vol_ratio.toFixed(1)}x` : `${item.vol_ratio.toFixed(1)}x`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Trade Plan: Entry, Stop, T1 */}
+                      <div className="grid grid-cols-3 gap-1.5 text-center text-[10px] font-mono mb-2">
+                        <div className="bg-surface/60 p-1 rounded border border-border/40">
+                          <span className="text-muted block text-[9px]">ENTRY</span>
+                          <span className="text-white font-bold">${item.price.toFixed(2)}</span>
+                        </div>
+                        <div className="bg-bear/10 p-1 rounded border border-bear/30">
+                          <span className="text-bear block text-[9px]">STOP (-{item.risk_pct}%)</span>
+                          <span className="text-bear font-bold">${item.stop_loss.toFixed(2)}</span>
+                        </div>
+                        <div className="bg-bull/10 p-1 rounded border border-bull/30">
+                          <span className="text-bull block text-[9px]">T1 (+{item.reward_pct}%)</span>
+                          <span className="text-bull font-bold">${item.target1.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Options + Chart link footer */}
+                    <div className="pt-2 border-t border-border/30 flex items-center justify-between text-[11px]">
+                      <div className="truncate max-w-[70%]" title={item.options}>
+                        <span className="text-[10px] text-muted">💡 </span>
+                        <code className="text-yellow text-[10px]">{item.options}</code>
+                      </div>
+                      <Link
+                        href={`/stock/${item.ticker}`}
+                        className="text-[10px] font-semibold text-purple-300 hover:text-purple-200 flex items-center gap-0.5"
+                      >
+                        30W Chart ↗
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 🏆 Best Swing Trade Pick of the Day Showcase ── */}
       {(bestPicks?.best_pick || rankingLoading) && (
@@ -870,13 +1132,15 @@ export default function ScannerPage() {
                       <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
                     </button>
                     <button
-                      onClick={send30wCurlTelegram}
-                      disabled={curlSending}
+                      onClick={() => {
+                        setShowCurlSection(true);
+                        if (curlMatches.length === 0) load30wCurls(false);
+                      }}
                       className="px-3 py-1 text-xs rounded-lg border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 transition-colors font-semibold flex items-center gap-1.5"
-                      title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and dispatch Telegram alert"
+                      title="View all 30-Week MA Curl Up setups on screen"
                     >
-                      <span>{curlSending ? "⏳" : "🌀"}</span>
-                      <span>{curlSending ? "Scanning Curls..." : curlSentMsg || "30W Curl Alert"}</span>
+                      <span>🌀</span>
+                      <span>30W Curls ({curlMatches.length})</span>
                     </button>
                   </div>
                 </div>
@@ -1267,7 +1531,7 @@ export default function ScannerPage() {
                 : f === "emerging"  ? `🚀 Emerging (${results.filter(r => (r.dist_from_high ?? 999) <= 15.0 && (r.sma30_slope ?? 0) > 0 && (r.risk_pct ?? 999) <= 8.5 && (r.verdict ?? "").toUpperCase().includes("BULLISH")).length})`
                 : f === "weakness"  ? `🛡️ Weakness (${results.filter(r => (r.rr_t1 ?? 0) >= 1.8 && (r.dist_from_high ?? 0) >= 3.0).length})`
                 : f === "fresh_curl"? `🎉 Fresh Breakout (${results.filter(r => r.is_fresh_stage2 || r.stage2_status === "FRESH").length})`
-                : f === "curl_vol"  ? `⚡ 30W Advancing (${results.filter(r => r.is_30w_curl).length})`
+                : f === "curl_vol"  ? `🌀 30W Curl (${results.filter(r => r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0)).length})`
                 : f === "rank1"     ? `Rank 1 (${results.filter(r => r.mtf_rank === 1).length})`
                 : f === "good_rr"   ? `🎯 Good R/R ≥1.5× (${results.filter(r => (r.rr_t1 ?? 0) >= 1.5).length})`
                 : f === "high_short"? `🔥 High Short (${results.filter(r => (r.short_pct ?? 0) >= 10).length})`
