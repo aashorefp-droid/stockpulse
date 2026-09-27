@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.services.scanner import WATCHLISTS, scan_single, get_short_squeeze_tickers
 from backend.services.best_pick import analyze_and_rank_stocks, dispatch_triad_telegram_alert
+from backend.services.curl_scanner import scan_30w_curl_candidates, dispatch_30w_curl_telegram
 from backend.services.gmail_watchlist import (
     poll_and_store, fetch_today_watchlist, get_watchlist_status
 )
@@ -261,3 +262,70 @@ def send_triad_alert(
         return _clean_nans(res)
     except Exception as e:
         return {"ok": False, "error": str(e), "sent": False}
+
+
+@router.get("/30w-curl")
+def get_30w_curl_candidates(
+    watchlist: str = Query("tos_email"),
+    days: int = Query(1),
+    subjects: str = Query(""),
+    max_weeks_ago: int = Query(8),
+    tickers: Optional[str] = Query(None),
+):
+    """
+    Scans candidates for 30-Week MA Curl Up signals matching TradingView (30W Curl Arrows) indicator.
+    """
+    try:
+        t_list = [t.strip().upper() for t in tickers.split(",") if t.strip()] if tickers else None
+        res = scan_30w_curl_candidates(
+            tickers=t_list,
+            watchlist=watchlist,
+            days=days,
+            subjects=subjects,
+            max_weeks_ago=max_weeks_ago,
+        )
+        return _clean_nans(res)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "matches": [], "total_scanned": 0}
+
+
+@router.post("/30w-curl/alert")
+def send_30w_curl_alert(
+    payload: Dict[str, Any] = Body(default={}),
+    watchlist: str = Query("tos_email"),
+    subjects: str = Query(""),
+    days: int = Query(1),
+    max_weeks_ago: int = Query(8),
+    send_telegram: bool = Query(True),
+):
+    """
+    Scans candidates for 30-Week MA Curl Up signals and dispatches the formatted
+    TradingView Curl list to Telegram.
+    """
+    try:
+        raw_tickers = payload.get("tickers")
+        t_list = None
+        if raw_tickers:
+            if isinstance(raw_tickers, list):
+                t_list = [str(t).strip().upper() for t in raw_tickers if str(t).strip()]
+            elif isinstance(raw_tickers, str):
+                t_list = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
+
+        wl = payload.get("watchlist") or watchlist
+        subs = payload.get("subjects") if payload.get("subjects") is not None else subjects
+        d = payload.get("days") if payload.get("days") is not None else days
+        mw = payload.get("max_weeks_ago") if payload.get("max_weeks_ago") is not None else max_weeks_ago
+        send_msg = payload.get("send_telegram") if payload.get("send_telegram") is not None else send_telegram
+
+        res = dispatch_30w_curl_telegram(
+            tickers=t_list,
+            watchlist=wl,
+            days=d,
+            subjects=subs,
+            max_weeks_ago=mw,
+            send_msg=send_msg,
+        )
+        return _clean_nans(res)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "sent": False}
+

@@ -190,6 +190,8 @@ export default function ScannerPage() {
   const [tosMsg, setTosMsg] = useState<string | null>(null);
   const [telegramSending, setTelegramSending] = useState(false);
   const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
+  const [curlSending, setCurlSending] = useState(false);
+  const [curlSentMsg, setCurlSentMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
@@ -221,6 +223,36 @@ export default function ScannerPage() {
     } finally {
       setTelegramSending(false);
       setTimeout(() => setTelegramSentMsg(null), 5000);
+    }
+  }
+
+  async function send30wCurlTelegram() {
+    setCurlSending(true);
+    setCurlSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scanner/30w-curl/alert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
+          subjects: tosSubjectFilter,
+          days: tosDays,
+          send_telegram: true,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.sent) {
+        setCurlSentMsg(`✅ Sent ${data.count || 0} Curls!`);
+      } else if (data && data.error) {
+        setCurlSentMsg(`⚠️ ${data.error}`);
+      } else {
+        setCurlSentMsg(`⚠️ Found ${data.count || 0} Curls`);
+      }
+    } catch (err: any) {
+      setCurlSentMsg(`⚠️ ${err.message || "Failed to send 30W curl alert"}`);
+    } finally {
+      setCurlSending(false);
+      setTimeout(() => setCurlSentMsg(null), 5000);
     }
   }
 
@@ -723,6 +755,16 @@ export default function ScannerPage() {
             />
           </label>
 
+          <button
+            onClick={send30wCurlTelegram}
+            disabled={curlSending}
+            className="px-3 py-2 rounded-lg font-semibold text-xs border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 transition-colors flex items-center gap-1.5 shadow-sm"
+            title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and dispatch Telegram alert"
+          >
+            <span>{curlSending ? "⏳" : "🌀"}</span>
+            <span>{curlSending ? "Scanning Curls..." : curlSentMsg || "30W Curl Alert"}</span>
+          </button>
+
           {(scanning || results.length > 0) && (
             <div className="flex-1 max-w-xs">
               <div className="flex justify-between text-xs text-muted mb-1">
@@ -826,6 +868,15 @@ export default function ScannerPage() {
                     >
                       <span>{telegramSending ? "⏳" : "✈️"}</span>
                       <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
+                    </button>
+                    <button
+                      onClick={send30wCurlTelegram}
+                      disabled={curlSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and dispatch Telegram alert"
+                    >
+                      <span>{curlSending ? "⏳" : "🌀"}</span>
+                      <span>{curlSending ? "Scanning Curls..." : curlSentMsg || "30W Curl Alert"}</span>
                     </button>
                   </div>
                 </div>
