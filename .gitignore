@@ -74,6 +74,8 @@ stop_stockpulse.*
 run_stockpulse*
 start_all.*
 stop_all.*
+start_8002*
+stop_8002*
 run_all*
 prompt
 test.py
