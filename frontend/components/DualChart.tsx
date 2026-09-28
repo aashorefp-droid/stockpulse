@@ -23,9 +23,10 @@ function FinvizChart({ ticker, timeframe }: { ticker: string; timeframe: Timefra
   );
 }
 
-function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
+function TVWeeklyCurlChart({ ticker, asOfDate = "" }: { ticker: string; asOfDate?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
+  const [showFuture, setShowFuture] = useState(false);
   const [curlInfo, setCurlInfo] = useState<{
     last_sma30: number;
     is_curling_up: boolean;
@@ -34,6 +35,9 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
     current_price: number;
     trailing_stop: number | null;
     swing_low_8w: number | null;
+    is_backtest: boolean;
+    as_of_date: string | null;
+    subsequent_weeks_count: number;
   } | null>(null);
 
   useEffect(() => {
@@ -41,7 +45,11 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
     let isMounted = true;
     setLoading(true);
 
-    fetch(`${API_BASE}/api/analysis/chart-weekly/${ticker}`)
+    const url = asOfDate
+      ? `${API_BASE}/api/analysis/chart-weekly/${ticker}?as_of=${encodeURIComponent(asOfDate)}`
+      : `${API_BASE}/api/analysis/chart-weekly/${ticker}`;
+
+    fetch(url)
       .then((r) => r.json())
       .then(async (data) => {
         if (!isMounted || !containerRef.current) return;
@@ -58,6 +66,9 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
           current_price: data.current_price,
           trailing_stop: data.trailing_stop,
           swing_low_8w: data.swing_low_8w,
+          is_backtest: Boolean(data.is_backtest),
+          as_of_date: data.as_of_date || asOfDate || null,
+          subsequent_weeks_count: data.subsequent_weeks_count || 0,
         });
 
         const { createChart, CrosshairMode, LineStyle } = await import("lightweight-charts");
@@ -82,6 +93,17 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
           timeScale: { borderColor: "#30363d", timeVisible: false },
         });
 
+        // Determine bars to display: strict cutoff if backtest and !showFuture
+        const activeBars = (data.is_backtest && !showFuture && data.hist_bars && data.hist_bars.length > 0)
+          ? data.hist_bars
+          : data.bars;
+        const activeVolume = (data.is_backtest && !showFuture && data.hist_volume_bars && data.hist_volume_bars.length > 0)
+          ? data.hist_volume_bars
+          : data.volume_bars;
+        const activeSma = (data.is_backtest && !showFuture && data.hist_sma30 && data.hist_sma30.length > 0)
+          ? data.hist_sma30
+          : data.sma30;
+
         // 1. Weekly Volume Histogram (Bottom Pane)
         const volumeSeries = chart.addHistogramSeries({
           color: "#26a69a",
@@ -96,8 +118,8 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
           },
         });
 
-        if (data.volume_bars && data.volume_bars.length > 0) {
-          volumeSeries.setData(data.volume_bars);
+        if (activeVolume && activeVolume.length > 0) {
+          volumeSeries.setData(activeVolume);
         }
 
         // 2. Weekly Candlesticks
@@ -109,10 +131,10 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
           wickUpColor: "#00e5a0",
           wickDownColor: "#ff4d4f",
         });
-        candleSeries.setData(data.bars);
+        candleSeries.setData(activeBars);
 
         // 3. 30-Week Simple Moving Average (amber line)
-        if (data.sma30 && data.sma30.length > 0) {
+        if (activeSma && activeSma.length > 0) {
           const smaSeries = chart.addLineSeries({
             color: "#f59e0b",
             lineWidth: 2,
@@ -120,11 +142,11 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
             priceLineVisible: false,
             lastValueVisible: true,
           });
-          smaSeries.setData(data.sma30);
+          smaSeries.setData(activeSma);
         }
 
         // 4. Trailing Stop Level (Dashed Red Line at 5% below 30W SMA or swing low)
-        if (data.trailing_stop && data.bars.length > 20) {
+        if (data.trailing_stop && activeBars.length > 10) {
           const stopLine = chart.addLineSeries({
             color: "rgba(239, 68, 68, 0.75)",
             lineWidth: 1,
@@ -133,13 +155,16 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
             priceLineVisible: false,
             lastValueVisible: true,
           });
-          const recentBars = data.bars.slice(-20);
+          const recentBars = activeBars.slice(-20);
           stopLine.setData(recentBars.map((b: any) => ({ time: b.time, value: data.trailing_stop })));
         }
 
         // 5. ── Arrows plotted directly on the bar where 30W MA curls up ──
         if (data.markers && data.markers.length > 0) {
-          candleSeries.setMarkers(data.markers);
+          const activeMarkers = (data.is_backtest && !showFuture)
+            ? data.markers.filter((m: any) => m.time <= (data.as_of_date || asOfDate))
+            : data.markers;
+          candleSeries.setMarkers(activeMarkers);
         }
 
         chart.timeScale().fitContent();
@@ -162,15 +187,25 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
       isMounted = false;
       chart?.remove();
     };
-  }, [ticker]);
+  }, [ticker, asOfDate, showFuture]);
 
   return (
     <div className="relative w-full bg-[#0d1117]" style={{ minHeight: 540 }}>
       {curlInfo && (
-        <div className="absolute top-3 left-3 z-10 bg-[#161b22]/95 backdrop-blur border border-border/80 rounded-lg px-3 py-1.5 text-xs flex flex-wrap items-center gap-3 shadow-lg">
+        <div className="absolute top-3 left-3 z-10 bg-[#161b22]/95 backdrop-blur border border-border/80 rounded-lg px-3 py-1.5 text-xs flex flex-wrap items-center gap-2.5 shadow-lg">
+          {curlInfo.is_backtest && (
+            <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow border border-yellow-500/40 flex items-center gap-1">
+              <span>⏪</span>
+              <span>Backtest: {curlInfo.as_of_date}</span>
+            </span>
+          )}
           <span className="font-mono text-[#f59e0b] font-bold flex items-center gap-1">
             <span className="w-2 h-0.5 bg-[#f59e0b] inline-block"></span>
             <span>30W SMA: ${curlInfo.last_sma30?.toFixed(2) ?? "—"}</span>
+          </span>
+          <span className="text-muted">·</span>
+          <span className="font-mono text-white font-semibold">
+            Price: ${curlInfo.current_price?.toFixed(2) ?? "—"}
           </span>
           <span className="text-muted">·</span>
           <span className={curlInfo.is_curling_up ? "text-bull font-bold" : "text-muted"}>
@@ -188,8 +223,24 @@ function TVWeeklyCurlChart({ ticker }: { ticker: string }) {
           <span className="text-muted">·</span>
           <span className="text-accent font-semibold flex items-center gap-1">
             <span>⬆</span>
-            <span>{curlInfo.markersCount} Curl-Up Breakouts (Volume Surge)</span>
+            <span>{curlInfo.markersCount} Curl-Up Breakouts</span>
           </span>
+          {curlInfo.is_backtest && curlInfo.subsequent_weeks_count > 0 && (
+            <>
+              <span className="text-muted">·</span>
+              <button
+                onClick={() => setShowFuture(!showFuture)}
+                className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors ${
+                  showFuture
+                    ? "bg-purple-500/25 border-purple-400 text-purple-200"
+                    : "bg-surface border-border text-muted hover:text-white"
+                }`}
+                title={showFuture ? "Show only bars up to the backtest date" : "Show all subsequent weekly bars to see the outcome"}
+              >
+                {showFuture ? "⏪ Cutoff at As-Of" : `⏩ Show Outcome (+${curlInfo.subsequent_weeks_count}w)`}
+              </button>
+            </>
+          )}
         </div>
       )}
       {loading && (
@@ -261,7 +312,14 @@ function TVEmbedChart({ ticker, timeframe }: { ticker: string; timeframe: Timefr
   return <div id={containerId} style={{ height: 540 }} />;
 }
 
-export default function DualChart({ ticker }: { ticker: string }) {
+interface DualChartProps {
+  ticker: string;
+  initialAsOfDate?: string;
+  asOfDate?: string;
+}
+
+export default function DualChart({ ticker, initialAsOfDate = "", asOfDate = "" }: DualChartProps) {
+  const activeAsOf = asOfDate || initialAsOfDate || "";
   const [tab, setTab] = useState<Tab>("tradingview_curl"); // Default to 30W SMA Curl chart
   const [fvTimeframe, setFvTimeframe] = useState<Timeframe>("D"); // Finviz default Daily
   const [tvTimeframe, setTvTimeframe] = useState<Timeframe>("W"); // Embed default Weekly
@@ -331,6 +389,12 @@ export default function DualChart({ ticker }: { ticker: string }) {
 
         {tab === "tradingview_curl" && (
           <div className="flex items-center gap-3 text-[11px] text-muted mb-1.5 mr-1">
+            {activeAsOf && (
+              <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow border border-yellow-500/40 flex items-center gap-1">
+                <span>⏪</span>
+                <span>Backtest: {activeAsOf}</span>
+              </span>
+            )}
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-0.5 bg-[#f59e0b] rounded"></span>
               <span className="font-mono text-[#f59e0b] font-semibold">30W SMA</span>
@@ -349,8 +413,8 @@ export default function DualChart({ ticker }: { ticker: string }) {
 
       {/* Chart area */}
       <div>
-        {tab === "tradingview_daily" && <DailyTradeChart ticker={ticker} />}
-        {tab === "tradingview_curl" && <TVWeeklyCurlChart ticker={ticker} />}
+        {tab === "tradingview_daily" && <DailyTradeChart ticker={ticker} initialAsOfDate={activeAsOf} />}
+        {tab === "tradingview_curl" && <TVWeeklyCurlChart ticker={ticker} asOfDate={activeAsOf} />}
         {tab === "finviz" && <FinvizChart ticker={ticker} timeframe={fvTimeframe} />}
         {tab === "tradingview_embed" && <TVEmbedChart ticker={ticker} timeframe={tvTimeframe} />}
       </div>

@@ -279,24 +279,43 @@ def get_ticker_verdict(ticker: str):
 
 
 @router.get("/chart-weekly/{ticker}")
-def get_weekly_chart_data(ticker: str):
+def get_weekly_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
     ticker = ticker.upper().strip()
+    cache_key = f"{ticker}:{as_of or 'live'}"
     now = time.time()
-    if ticker in _WEEKLY_CACHE:
-        entry = _WEEKLY_CACHE[ticker]
-        if now - entry["time"] < _CACHE_TTL_LIVE:
+    ttl = _CACHE_TTL_BACKTEST if as_of else _CACHE_TTL_LIVE
+    if cache_key in _WEEKLY_CACHE:
+        entry = _WEEKLY_CACHE[cache_key]
+        if now - entry["time"] < ttl:
             return entry["data"]
     try:
-        df = yf.Ticker(ticker).history(period="3y", interval="1wk")
+        period = "5y" if as_of else "3y"
+        df = yf.Ticker(ticker).history(period=period, interval="1wk")
         if df.empty:
             raise HTTPException(404, f"No weekly data for {ticker}")
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        if hasattr(df.index, "tz_localize") and df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         if len(df) < 30:
             raise HTTPException(404, f"Insufficient data for 30W SMA on {ticker}")
 
         df["sma30"] = df["Close"].rolling(30).mean()
         df["slope"] = df["sma30"].diff()
         df["vol_sma10"] = df["Volume"].rolling(10).mean() if "Volume" in df.columns else None
+
+        target_ts = None
+        df_hist = df
+        df_future = pd.DataFrame()
+        if as_of:
+            try:
+                target_ts = pd.Timestamp(as_of)
+                df_hist = df[df.index <= target_ts]
+                if len(df_hist) < 30:
+                    df_hist = df
+                else:
+                    df_future = df[df.index > target_ts]
+            except Exception:
+                df_hist = df
 
         bars = []
         volume_bars = []
@@ -340,36 +359,63 @@ def get_weekly_chart_data(ticker: str):
                             v_ratio = (v / v_avg) if v_avg > 0 else 1.0
                             is_vol_surge = v_ratio >= 1.25
 
-                            label = f"30W Curl ({v_ratio:.1f}x Vol)" if is_vol_surge else "30W MA Curl Up"
-                            markers.append({
-                                "time": t_str,
-                                "position": "belowBar",
-                                "color": "#00e5a0" if is_vol_surge else "#4d9fff",
-                                "shape": "arrowUp",
-                                "text": label,
-                                "size": 2,
-                            })
+                            is_future_arrow = target_ts is not None and df.index[i] > target_ts
+                            if not is_future_arrow:
+                                label = f"30W Curl ({v_ratio:.1f}x Vol)" if is_vol_surge else "30W MA Curl Up"
+                                markers.append({
+                                    "time": t_str,
+                                    "position": "belowBar",
+                                    "color": "#00e5a0" if is_vol_surge else "#4d9fff",
+                                    "shape": "arrowUp",
+                                    "text": label,
+                                    "size": 2,
+                                })
 
-        last_sma = round(float(df["sma30"].iloc[-1]), 2) if not math.isnan(df["sma30"].iloc[-1]) else None
-        last_slope = round(float(df["slope"].iloc[-1]), 3) if not math.isnan(df["slope"].iloc[-1]) else 0.0
-        cur_price = round(float(df["Close"].iloc[-1]), 2)
+        hist_len = len(df_hist)
+        as_of_time = df_hist.index[-1].strftime("%Y-%m-%d")
+        last_sma = round(float(df_hist["sma30"].iloc[-1]), 2) if not math.isnan(df_hist["sma30"].iloc[-1]) else None
+        last_slope = round(float(df_hist["slope"].iloc[-1]), 3) if not math.isnan(df_hist["slope"].iloc[-1]) else 0.0
+        cur_price = round(float(df_hist["Close"].iloc[-1]), 2)
         trailing_stop = round(last_sma * 0.95, 2) if last_sma else None
-        swing_low_8w = round(float(df["Low"].tail(8).min()), 2)
+        swing_low_8w = round(float(df_hist["Low"].tail(8).min()), 2)
+        dist_from_sma = round(float((cur_price - last_sma) / last_sma * 100), 2) if last_sma else 0.0
+
+        if as_of and not df_future.empty:
+            markers.append({
+                "time": as_of_time,
+                "position": "aboveBar",
+                "color": "#f59e0b",
+                "shape": "circle",
+                "text": f"AS OF {as_of}",
+                "size": 2,
+            })
+
+        hist_bars = bars[:hist_len]
+        hist_volume_bars = volume_bars[:hist_len]
+        hist_sma_data = [s for s in sma_data if s["time"] <= as_of_time]
 
         res = _clean_nans({
             "ticker": ticker,
+            "is_backtest": bool(as_of),
+            "as_of": as_of if as_of else None,
+            "as_of_date": as_of_time,
             "bars": bars,
             "volume_bars": volume_bars,
             "sma30": sma_data,
+            "hist_bars": hist_bars,
+            "hist_volume_bars": hist_volume_bars,
+            "hist_sma30": hist_sma_data,
             "markers": markers,
             "last_sma30": last_sma,
             "current_price": cur_price,
             "trailing_stop": trailing_stop,
             "swing_low_8w": swing_low_8w,
+            "dist_from_sma30": dist_from_sma,
             "is_curling_up": bool(last_slope > 0),
             "slope": last_slope,
+            "subsequent_weeks_count": len(df_future),
         })
-        _WEEKLY_CACHE[ticker] = {"time": now, "data": res}
+        _WEEKLY_CACHE[cache_key] = {"time": now, "data": res}
         return res
     except HTTPException:
         raise
