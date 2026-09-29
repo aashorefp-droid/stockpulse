@@ -431,8 +431,19 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             return entry["data"]
     try:
         from backend.services.trade_backtest import evaluate_trade_outcome
-        period = "2y" if as_of else "1y"
-        df = yf.Ticker(ticker).history(period=period, interval="1d")
+        target_ts = None
+        if as_of:
+            try:
+                target_ts = pd.Timestamp(as_of)
+                start_date = (target_ts - pd.Timedelta(days=450)).strftime("%Y-%m-%d")
+                df = yf.Ticker(ticker).history(start=start_date, interval="1d")
+                if df.empty or len(df) < 20:
+                    df = yf.Ticker(ticker).history(period="5y", interval="1d")
+            except Exception:
+                df = yf.Ticker(ticker).history(period="5y", interval="1d")
+        else:
+            df = yf.Ticker(ticker).history(period="1y", interval="1d")
+
         if df.empty:
             raise HTTPException(404, f"No daily data for {ticker}")
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
@@ -441,8 +452,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             df.index = df.index.tz_localize(None)
 
         # Historical slice for trade levels evaluation
-        if as_of:
-            target_ts = pd.Timestamp(as_of)
+        if target_ts is not None:
             df_hist = df[df.index <= target_ts]
             if len(df_hist) < 20:
                 df_hist = df
@@ -493,6 +503,13 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 sma50_data.append({"time": t_str, "value": round(float(df["sma50"].iloc[i]), 2)})
             if not math.isnan(df["sma200"].iloc[i]):
                 sma200_data.append({"time": t_str, "value": round(float(df["sma200"].iloc[i]), 2)})
+
+        target_str = target_ts.strftime("%Y-%m-%d") if (target_ts is not None and not df_future.empty) else None
+        hist_bars = [b for b in bars if target_str is None or b["time"] <= target_str]
+        hist_volume_bars = [v for v in volume_bars if target_str is None or v["time"] <= target_str]
+        hist_sma20 = [s for s in sma20_data if target_str is None or s["time"] <= target_str]
+        hist_sma50 = [s for s in sma50_data if target_str is None or s["time"] <= target_str]
+        hist_sma200 = [s for s in sma200_data if target_str is None or s["time"] <= target_str]
 
         # Trade Entry and Exit Points
         entry = trade.get("entry", cur_price)
@@ -570,6 +587,9 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "current_price": cur_price,
             "live_price": live_price,
             "as_of": as_of,
+            "is_backtest": bool(as_of and target_ts is not None and not df_future.empty),
+            "as_of_date": as_of,
+            "subsequent_bars_count": len(df_future),
             "direction": direction,
             "verdict": verdict,
             "confidence": scored.get("confidence", "N/A"),
@@ -579,6 +599,11 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "sma20": sma20_data,
             "sma50": sma50_data,
             "sma200": sma200_data,
+            "hist_bars": hist_bars,
+            "hist_volume_bars": hist_volume_bars,
+            "hist_sma20": hist_sma20,
+            "hist_sma50": hist_sma50,
+            "hist_sma200": hist_sma200,
             "trade": trade,
             "backtest": backtest_result,
             "levels": {

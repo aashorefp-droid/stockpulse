@@ -15,6 +15,7 @@ interface DailyTradeChartProps {
   onTickerChange?: (ticker: string) => void;
   availableTickers?: string[];
   initialAsOfDate?: string;
+  asOfDate?: string;
 }
 
 export default function DailyTradeChart({
@@ -22,6 +23,7 @@ export default function DailyTradeChart({
   onTickerChange,
   availableTickers = [],
   initialAsOfDate = "",
+  asOfDate: propAsOfDate = "",
 }: DailyTradeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sma20ValRef = useRef<HTMLSpanElement>(null);
@@ -31,21 +33,23 @@ export default function DailyTradeChart({
   const [data, setData] = useState<any>(null);
   const [viewMode, setViewMode] = useState<"levels" | "embed" | "finviz">("levels");
   const [showSma, setShowSma] = useState(true);
+  const [showFuture, setShowFuture] = useState(false);
 
   // Backtest state
-  const [backtestMode, setBacktestMode] = useState(Boolean(initialAsOfDate));
-  const [asOfDate, setAsOfDate] = useState(initialAsOfDate);
+  const effectiveInitialDate = propAsOfDate || initialAsOfDate || "";
+  const [backtestMode, setBacktestMode] = useState(Boolean(effectiveInitialDate));
+  const [asOfDate, setAsOfDate] = useState(effectiveInitialDate);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyData, setHistoryData] = useState<any>(null);
   const [historyDays, setHistoryDays] = useState(365);
 
   useEffect(() => {
-    if (initialAsOfDate !== undefined) {
-      setAsOfDate(initialAsOfDate);
-      setBacktestMode(Boolean(initialAsOfDate));
-    }
-  }, [initialAsOfDate]);
+    const nextDate = propAsOfDate || initialAsOfDate || "";
+    setAsOfDate(nextDate);
+    setBacktestMode(Boolean(nextDate));
+    setShowFuture(false);
+  }, [propAsOfDate, initialAsOfDate]);
 
   // Fetch daily chart data with calculated trade levels (and backtest outcome if asOfDate is active)
   useEffect(() => {
@@ -107,6 +111,23 @@ export default function DailyTradeChart({
         timeScale: { borderColor: "#202438", timeVisible: false },
       });
 
+      const isBacktest = Boolean(data.is_backtest || (backtestMode && asOfDate));
+      const activeBars = (isBacktest && !showFuture && data.hist_bars && data.hist_bars.length > 0)
+        ? data.hist_bars
+        : data.bars;
+      const activeVolume = (isBacktest && !showFuture && data.hist_volume_bars && data.hist_volume_bars.length > 0)
+        ? data.hist_volume_bars
+        : data.volume_bars;
+      const activeSma20 = (isBacktest && !showFuture && data.hist_sma20 && data.hist_sma20.length > 0)
+        ? data.hist_sma20
+        : data.sma20;
+      const activeSma50 = (isBacktest && !showFuture && data.hist_sma50 && data.hist_sma50.length > 0)
+        ? data.hist_sma50
+        : data.sma50;
+      const activeSma200 = (isBacktest && !showFuture && data.hist_sma200 && data.hist_sma200.length > 0)
+        ? data.hist_sma200
+        : data.sma200;
+
       // 1. Volume Series
       const volumeSeries = chart.addHistogramSeries({
         color: "#26a69a",
@@ -116,8 +137,8 @@ export default function DailyTradeChart({
       chart.priceScale("volume").applyOptions({
         scaleMargins: { top: 0.8, bottom: 0 },
       });
-      if (data.volume_bars && data.volume_bars.length > 0) {
-        volumeSeries.setData(data.volume_bars);
+      if (activeVolume && activeVolume.length > 0) {
+        volumeSeries.setData(activeVolume);
       }
 
       // 2. Candlestick Series
@@ -129,7 +150,7 @@ export default function DailyTradeChart({
         wickUpColor: "#00e5a0",
         wickDownColor: "#ff4d6a",
       });
-      candleSeries.setData(data.bars);
+      candleSeries.setData(activeBars);
 
       // 3. SMA Overlays (20, 50, 200)
       let sma20Series: any = null;
@@ -137,7 +158,7 @@ export default function DailyTradeChart({
       let sma200Series: any = null;
 
       if (showSma) {
-        if (data.sma20 && data.sma20.length > 0) {
+        if (activeSma20 && activeSma20.length > 0) {
           sma20Series = chart.addLineSeries({
             color: "#60a5fa",
             lineWidth: 1,
@@ -145,9 +166,9 @@ export default function DailyTradeChart({
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          sma20Series.setData(data.sma20);
+          sma20Series.setData(activeSma20);
         }
-        if (data.sma50 && data.sma50.length > 0) {
+        if (activeSma50 && activeSma50.length > 0) {
           sma50Series = chart.addLineSeries({
             color: "#f59e0b",
             lineWidth: 1.5,
@@ -155,9 +176,9 @@ export default function DailyTradeChart({
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          sma50Series.setData(data.sma50);
+          sma50Series.setData(activeSma50);
         }
-        if (data.sma200 && data.sma200.length > 0) {
+        if (activeSma200 && activeSma200.length > 0) {
           sma200Series = chart.addLineSeries({
             color: "#a855f7",
             lineWidth: 2,
@@ -165,24 +186,25 @@ export default function DailyTradeChart({
             priceLineVisible: false,
             lastValueVisible: false,
           });
-          sma200Series.setData(data.sma200);
+          sma200Series.setData(activeSma200);
         }
       }
 
       // 4. Horizontal Trade Price Lines
       const { entry, stop_loss, target1, target2 } = data.levels || {};
       
-      // If backtest mode, draw lines from entry date onwards
-      let activeBars = data.bars.slice(-40);
-      if (data.as_of) {
-        const asOfIdx = data.bars.findIndex((b: any) => b.time >= data.as_of);
+      // If backtest mode with future bars shown, draw lines from entry date onwards
+      let lineBars = activeBars.slice(-40);
+      if (isBacktest && showFuture && (data.as_of || asOfDate)) {
+        const targetDate = data.as_of || asOfDate;
+        const asOfIdx = activeBars.findIndex((b: any) => b.time >= targetDate);
         if (asOfIdx >= 0) {
-          activeBars = data.bars.slice(Math.max(0, asOfIdx - 5));
+          lineBars = activeBars.slice(Math.max(0, asOfIdx - 5));
         }
       }
 
       // Best Entry Line (Solid Emerald)
-      if (entry && activeBars.length > 0) {
+      if (entry && lineBars.length > 0) {
         const entryLine = chart.addLineSeries({
           color: "#00e5a0",
           lineWidth: 2,
@@ -191,11 +213,11 @@ export default function DailyTradeChart({
           priceLineVisible: true,
           lastValueVisible: true,
         });
-        entryLine.setData(activeBars.map((b: any) => ({ time: b.time, value: entry })));
+        entryLine.setData(lineBars.map((b: any) => ({ time: b.time, value: entry })));
       }
 
       // Stop Loss Line (Dashed Red)
-      if (stop_loss && activeBars.length > 0) {
+      if (stop_loss && lineBars.length > 0) {
         const stopLine = chart.addLineSeries({
           color: "#ff4d6a",
           lineWidth: 2,
@@ -204,11 +226,11 @@ export default function DailyTradeChart({
           priceLineVisible: true,
           lastValueVisible: true,
         });
-        stopLine.setData(activeBars.map((b: any) => ({ time: b.time, value: stop_loss })));
+        stopLine.setData(lineBars.map((b: any) => ({ time: b.time, value: stop_loss })));
       }
 
       // Target 1 Exit Line (Dashed Green)
-      if (target1 && activeBars.length > 0) {
+      if (target1 && lineBars.length > 0) {
         const t1Line = chart.addLineSeries({
           color: "#34d399",
           lineWidth: 2,
@@ -217,11 +239,11 @@ export default function DailyTradeChart({
           priceLineVisible: true,
           lastValueVisible: true,
         });
-        t1Line.setData(activeBars.map((b: any) => ({ time: b.time, value: target1 })));
+        t1Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target1 })));
       }
 
       // Target 2 Exit Line (Dashed Cyan)
-      if (target2 && activeBars.length > 0) {
+      if (target2 && lineBars.length > 0) {
         const t2Line = chart.addLineSeries({
           color: "#38bdf8",
           lineWidth: 2,
@@ -230,12 +252,15 @@ export default function DailyTradeChart({
           priceLineVisible: true,
           lastValueVisible: true,
         });
-        t2Line.setData(activeBars.map((b: any) => ({ time: b.time, value: target2 })));
+        t2Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target2 })));
       }
 
       // 5. Markers (Entry trigger + Exit outcome marker)
       if (data.markers && data.markers.length > 0) {
-        candleSeries.setMarkers(data.markers);
+        const activeMarkers = (isBacktest && !showFuture)
+          ? data.markers.filter((m: any) => m.time <= (data.as_of_date || data.as_of || asOfDate))
+          : data.markers;
+        candleSeries.setMarkers(activeMarkers);
       }
 
       // Update real-time SMA values in legend on crosshair hover
@@ -282,7 +307,7 @@ export default function DailyTradeChart({
       isMounted = false;
       chart?.remove();
     };
-  }, [viewMode, data, showSma]);
+  }, [viewMode, data, showSma, showFuture]);
 
   // Render TradingView Embed widget when selected
   useEffect(() => {
@@ -373,9 +398,10 @@ export default function DailyTradeChart({
             <span className="text-sm font-mono text-[#e8ecff] font-semibold">
               ${data?.current_price?.toFixed(2) ?? "—"}
             </span>
-            {data?.as_of && (
-              <span className="text-[11px] font-mono text-[#f5c842] bg-[#3d3a0a] px-2 py-0.5 rounded border border-[#f5c842]/40">
-                Backtest: {data.as_of}
+            {(data?.as_of || (backtestMode && asOfDate)) && (
+              <span className="text-[11px] font-mono font-bold text-[#f5c842] bg-[#3d3a0a] px-2 py-0.5 rounded border border-[#f5c842]/40 flex items-center gap-1">
+                <span>⏪</span>
+                <span>Backtest: {data?.as_of || asOfDate}</span>
               </span>
             )}
           </div>
@@ -420,6 +446,7 @@ export default function DailyTradeChart({
               if (backtestMode) {
                 setBacktestMode(false);
                 setAsOfDate("");
+                setShowFuture(false);
               } else {
                 setBacktestMode(true);
                 if (!asOfDate) setPresetDaysAgo(30);
@@ -434,6 +461,21 @@ export default function DailyTradeChart({
             <span>⏪</span>
             <span>{backtestMode ? "Exit Backtest" : "Backtest Mode"}</span>
           </button>
+
+          {/* Outcome toggle when backtesting */}
+          {(data?.is_backtest || (backtestMode && asOfDate)) && (
+            <button
+              onClick={() => setShowFuture(!showFuture)}
+              className={`px-3 py-1 rounded text-xs font-semibold border flex items-center gap-1.5 transition-all ${
+                showFuture
+                  ? "bg-purple-500/25 border-purple-400 text-purple-200 shadow-md shadow-purple-500/20"
+                  : "bg-[#1a2d3d] border-[#4d9fff]/40 text-[#4d9fff] hover:text-white"
+              }`}
+              title={showFuture ? "Cut off chart at the backtest date (no future hindsight)" : "Show subsequent bars to see the trade outcome"}
+            >
+              <span>{showFuture ? "⏪ Cutoff at As-Of" : `⏩ Show Outcome (+${data?.subsequent_bars_count || (data?.bars?.length ? data.bars.length - (data?.hist_bars?.length || 0) : 0)}d)`}</span>
+            </button>
+          )}
 
           {/* Full Backtest Report Button */}
           <button
@@ -581,6 +623,17 @@ export default function DailyTradeChart({
             <span>
               Evaluated Across: <b>{bt.subsequent_bars_count} bars</b>
             </span>
+            <button
+              onClick={() => setShowFuture(!showFuture)}
+              className={`px-2.5 py-1 rounded text-[11px] font-semibold border transition-all ${
+                showFuture
+                  ? "bg-purple-500/25 border-purple-400 text-purple-200 shadow-sm"
+                  : "bg-surface border-border text-muted hover:text-white"
+              }`}
+              title={showFuture ? "Cut off chart at the backtest date (no future hindsight)" : "Show subsequent bars to see the trade outcome"}
+            >
+              {showFuture ? "⏪ Cutoff at As-Of" : `⏩ Show Outcome (+${bt.subsequent_bars_count}d)`}
+            </button>
           </div>
         </div>
       )}

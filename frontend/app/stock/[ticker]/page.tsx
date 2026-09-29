@@ -383,7 +383,7 @@ export default function StockPage({ params }: StockPageProps) {
         </div>
 
         {chartView === "daily_plan" ? (
-          <DailyTradeChart ticker={ticker} initialAsOfDate={asOfDate} />
+          <DailyTradeChart ticker={ticker} initialAsOfDate={asOfDate} asOfDate={asOfDate} />
         ) : (
           <DualChart ticker={ticker} initialAsOfDate={asOfDate} asOfDate={asOfDate} />
         )}

@@ -413,7 +413,7 @@ export default function DualChart({ ticker, initialAsOfDate = "", asOfDate = "" 
 
       {/* Chart area */}
       <div>
-        {tab === "tradingview_daily" && <DailyTradeChart ticker={ticker} initialAsOfDate={activeAsOf} />}
+        {tab === "tradingview_daily" && <DailyTradeChart ticker={ticker} initialAsOfDate={activeAsOf} asOfDate={activeAsOf} />}
         {tab === "tradingview_curl" && <TVWeeklyCurlChart ticker={ticker} asOfDate={activeAsOf} />}
         {tab === "finviz" && <FinvizChart ticker={ticker} timeframe={fvTimeframe} />}
         {tab === "tradingview_embed" && <TVEmbedChart ticker={ticker} timeframe={tvTimeframe} />}
