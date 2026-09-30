@@ -201,6 +201,114 @@ export default function ScannerPage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
+  // ── LocalStorage Snapshot Persistence ──
+  const SNAPSHOT_STORAGE_KEY = "stockpulse_scanner_snapshot_v2";
+  const [snapshotTimestamp, setSnapshotTimestamp] = useState<string | null>(null);
+  const [snapshotSavedMsg, setSnapshotSavedMsg] = useState<string | null>(null);
+
+  function stockHref(ticker: string) {
+    const base = `/stock/${encodeURIComponent(ticker)}`;
+    return activeBacktestDate ? `${base}?as_of=${encodeURIComponent(activeBacktestDate)}` : base;
+  }
+
+  function saveSnapshotToStorage(overrides?: {
+    results?: ScanResult[];
+    bestPicks?: BestPickResponse | null;
+    watchlist?: string;
+    customInput?: string;
+    mode?: "live" | "backtest";
+    backtestDate?: string;
+    activeBacktestDate?: string | null;
+    filter?: Filter;
+    sortBy?: "score" | "grade" | "rr" | "stage30w";
+    activePickMode?: "strength" | "emerging" | "weakness";
+    curlMatches?: any[];
+    curlTotalScanned?: number;
+    curlSourceLabel?: string;
+    showCurlSection?: boolean;
+  }) {
+    try {
+      const targetResults = overrides?.results ?? results;
+      const targetBestPicks = overrides?.bestPicks !== undefined ? overrides.bestPicks : bestPicks;
+      const targetCurls = overrides?.curlMatches !== undefined ? overrides.curlMatches : curlMatches;
+      if ((!targetResults || targetResults.length === 0) && (!targetCurls || targetCurls.length === 0)) return;
+
+      const now = new Date();
+      const timeStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
+        " at " + now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+      const snap = {
+        savedAt: now.toISOString(),
+        savedAtLabel: timeStr,
+        watchlist: overrides?.watchlist ?? watchlist,
+        customInput: overrides?.customInput ?? customInput,
+        mode: overrides?.mode ?? mode,
+        backtestDate: overrides?.backtestDate ?? backtestDate,
+        activeBacktestDate: overrides?.activeBacktestDate !== undefined ? overrides.activeBacktestDate : activeBacktestDate,
+        filter: overrides?.filter ?? filter,
+        sortBy: overrides?.sortBy ?? sortBy,
+        results: targetResults,
+        bestPicks: targetBestPicks,
+        activePickMode: overrides?.activePickMode ?? activePickMode,
+        curlMatches: targetCurls,
+        curlTotalScanned: overrides?.curlTotalScanned ?? curlTotalScanned,
+        curlSourceLabel: overrides?.curlSourceLabel ?? curlSourceLabel,
+        showCurlSection: overrides?.showCurlSection ?? showCurlSection,
+      };
+
+      localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(snap));
+      setSnapshotTimestamp(timeStr);
+      setSnapshotSavedMsg("✅ Snapshot Saved!");
+      setTimeout(() => setSnapshotSavedMsg(null), 3500);
+    } catch (e) {
+      console.warn("Failed saving scanner snapshot to localStorage:", e);
+    }
+  }
+
+  function clearSnapshotFromStorage() {
+    try {
+      localStorage.removeItem(SNAPSHOT_STORAGE_KEY);
+      setSnapshotTimestamp(null);
+      setResults([]);
+      setBestPicks(null);
+      setCurlMatches([]);
+      setShowCurlSection(false);
+      setSnapshotSavedMsg("Snapshot cleared.");
+      setTimeout(() => setSnapshotSavedMsg(null), 3000);
+    } catch (e) {
+      console.warn("Failed clearing snapshot:", e);
+    }
+  }
+
+  // Restore snapshot on initial page mount if available
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+      if (raw) {
+        const snap = JSON.parse(raw);
+        if (snap && ((Array.isArray(snap.results) && snap.results.length > 0) || (Array.isArray(snap.curlMatches) && snap.curlMatches.length > 0))) {
+          if (Array.isArray(snap.results)) setResults(snap.results);
+          if (snap.bestPicks) setBestPicks(snap.bestPicks);
+          if (snap.watchlist) setWatchlist(snap.watchlist);
+          if (snap.customInput) setCustomInput(snap.customInput);
+          if (snap.mode) setMode(snap.mode);
+          if (snap.backtestDate) setBacktestDate(snap.backtestDate);
+          if (snap.activeBacktestDate) setActiveBacktestDate(snap.activeBacktestDate);
+          if (snap.filter) setFilter(snap.filter);
+          if (snap.sortBy) setSortBy(snap.sortBy);
+          if (snap.activePickMode) setActivePickMode(snap.activePickMode);
+          if (Array.isArray(snap.curlMatches)) setCurlMatches(snap.curlMatches);
+          if (snap.curlTotalScanned) setCurlTotalScanned(snap.curlTotalScanned);
+          if (snap.curlSourceLabel) setCurlSourceLabel(snap.curlSourceLabel);
+          if (snap.showCurlSection !== undefined) setShowCurlSection(snap.showCurlSection);
+          if (snap.savedAtLabel) setSnapshotTimestamp(snap.savedAtLabel);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not load scanner snapshot:", e);
+    }
+  }, []);
+
   async function sendTriadTelegram() {
     setTelegramSending(true);
     setTelegramSentMsg(null);
@@ -256,6 +364,12 @@ export default function ScannerPage() {
           setCurlMatches(data.matches);
           setCurlTotalScanned(data.total_scanned || 0);
           setCurlSourceLabel(data.source_label || "");
+          saveSnapshotToStorage({
+            curlMatches: data.matches,
+            curlTotalScanned: data.total_scanned || 0,
+            curlSourceLabel: data.source_label || "",
+            showCurlSection: true,
+          });
         }
         if (data && data.sent) {
           setCurlSentMsg(`✅ Sent ${data.count || data.matches?.length || 0} Curls!`);
@@ -276,6 +390,12 @@ export default function ScannerPage() {
           setCurlMatches(data.matches);
           setCurlTotalScanned(data.total_scanned || 0);
           setCurlSourceLabel(data.source_label || "");
+          saveSnapshotToStorage({
+            curlMatches: data.matches,
+            curlTotalScanned: data.total_scanned || 0,
+            curlSourceLabel: data.source_label || "",
+            showCurlSection: true,
+          });
         }
       }
     } catch (err: any) {
@@ -373,16 +493,19 @@ export default function ScannerPage() {
         const data = await res.json();
         if (data && (data.best_pick || (data.ranked && data.ranked.length > 0))) {
           setBestPicks(data);
+          saveSnapshotToStorage({ bestPicks: data, results: list });
           return;
         }
       }
       // If backend responded with empty or error, use instant client-side evaluator
       const fallbackData = computeClientSideBestPicks(list);
       setBestPicks(fallbackData);
+      saveSnapshotToStorage({ bestPicks: fallbackData, results: list });
     } catch (err) {
       console.warn("Backend ranking failed, falling back to client-side ranking:", err);
       const fallbackData = computeClientSideBestPicks(list);
       setBestPicks(fallbackData);
+      saveSnapshotToStorage({ bestPicks: fallbackData, results: list });
     } finally {
       setRankingLoading(false);
     }
@@ -402,6 +525,7 @@ export default function ScannerPage() {
       if (res.ok) {
         const data = await res.json();
         setBestPicks(data);
+        saveSnapshotToStorage({ bestPicks: data });
       }
     } catch (err) {
       console.error("Failed to rank uploaded CSV:", err);
@@ -457,6 +581,7 @@ export default function ScannerPage() {
         if (accumulated.length > 0) {
           runRanking(accumulated);
         }
+        saveSnapshotToStorage({ results: accumulated });
         return;
       }
       accumulated.push(data);
@@ -470,6 +595,7 @@ export default function ScannerPage() {
       if (accumulated.length > 0) {
         runRanking(accumulated);
       }
+      saveSnapshotToStorage({ results: accumulated });
     };
   }
 
@@ -478,6 +604,7 @@ export default function ScannerPage() {
     setScanning(false);
     if (results.length > 0) {
       runRanking(results);
+      saveSnapshotToStorage({ results });
     }
   }
 
@@ -538,10 +665,44 @@ export default function ScannerPage() {
     <div className="space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex flex-wrap items-end gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-white">Scanner</h1>
           <p className="text-muted text-sm mt-0.5">Multi-stock scoring · Rank 1 signals · Exceptional setups</p>
+        </div>
+
+        {/* ── Snapshot Persistence Controls ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          {snapshotTimestamp && (
+            <div className="flex items-center gap-2 bg-[#131625] border border-border px-3 py-1.5 rounded-lg text-xs font-mono">
+              <span className="text-yellow">📸 Last Snapshot:</span>
+              <span className="text-white font-semibold">{snapshotTimestamp}</span>
+              <button
+                type="button"
+                onClick={clearSnapshotFromStorage}
+                className="ml-1 text-muted hover:text-red transition-colors text-[11px] underline"
+                title="Clear saved snapshot and start fresh"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          {results.length > 0 && (
+            <button
+              type="button"
+              onClick={() => saveSnapshotToStorage()}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 transition-all flex items-center gap-1.5 shadow-sm"
+              title="Save current scan results and best picks to your browser so they are preserved"
+            >
+              <span>💾</span>
+              <span>Save Snapshot</span>
+            </button>
+          )}
+          {snapshotSavedMsg && (
+            <span className="text-xs text-green font-mono font-semibold animate-fade-in">
+              {snapshotSavedMsg}
+            </span>
+          )}
         </div>
       </div>
 
@@ -976,7 +1137,9 @@ export default function ScannerPage() {
                       <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-2">
                           <Link
-                            href={`/stock/${item.ticker}`}
+                            href={stockHref(item.ticker)}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="text-lg font-black font-mono text-white group-hover:text-purple-300 transition-colors flex items-center gap-1"
                           >
                             {item.ticker}
@@ -1048,7 +1211,9 @@ export default function ScannerPage() {
                         <code className="text-yellow text-[10px]">{item.options}</code>
                       </div>
                       <Link
-                        href={`/stock/${item.ticker}`}
+                        href={stockHref(item.ticker)}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="text-[10px] font-semibold text-purple-300 hover:text-purple-200 flex items-center gap-0.5"
                       >
                         30W Chart ↗
@@ -1266,7 +1431,9 @@ export default function ScannerPage() {
 
                       <div className="flex items-baseline gap-3 my-2">
                         <Link
-                          href={`/stock/${currentPick.ticker}`}
+                          href={stockHref(currentPick.ticker)}
+                          target="_blank"
+                          rel="noopener noreferrer"
                           className="text-4xl font-extrabold text-white hover:text-accent transition-colors font-mono tracking-tight"
                         >
                           {currentPick.ticker}
@@ -1326,7 +1493,9 @@ export default function ScannerPage() {
                         </div>
                       </div>
                       <Link
-                        href={`/stock/${currentPick.ticker}`}
+                        href={stockHref(currentPick.ticker)}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="px-4 py-2 rounded-lg bg-accent text-black font-bold text-xs hover:bg-accent/80 transition-colors flex items-center gap-1"
                       >
                         <span>📈 Open Live Chart</span>
@@ -1440,7 +1609,12 @@ export default function ScannerPage() {
                             >
                               <td className="text-center py-2 px-2.5 text-muted">{idx + 1}</td>
                               <td className="text-left py-2 px-3">
-                                <Link href={`/stock/${item.ticker}`} className="text-white hover:text-accent font-bold">
+                                <Link
+                                  href={stockHref(item.ticker)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-white hover:text-accent font-bold"
+                                >
                                   {item.ticker}
                                 </Link>
                                 {idx === 0 && <span className="ml-1 text-yellow">★</span>}
@@ -1497,7 +1671,12 @@ export default function ScannerPage() {
                               <td className="text-right py-2 px-3 text-green">+{item.swing_reward_pct}%</td>
                               <td className="text-right py-2 px-3 text-accent">{item.swing_rr}x</td>
                               <td className="text-center py-2 px-2.5">
-                                <Link href={`/stock/${item.ticker}`} className="text-accent hover:underline text-[11px]">
+                                <Link
+                                  href={stockHref(item.ticker)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-accent hover:underline text-[11px]"
+                                >
                                   Chart →
                                 </Link>
                               </td>
@@ -1664,8 +1843,12 @@ export default function ScannerPage() {
                     <tr key={r.ticker}
                       className="border-b border-border/40 hover:bg-surface/50 transition-colors">
                       <td className="pl-4 pr-3 py-2.5 whitespace-nowrap sticky left-0 bg-card">
-                        <Link href={`/stock/${r.ticker}`}
-                          className="font-bold text-white hover:text-accent transition-colors">
+                        <Link
+                          href={stockHref(r.ticker)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold text-white hover:text-accent transition-colors"
+                        >
                           {r.ticker}
                         </Link>
                         {r.vol_surge && <span className="ml-1 text-[10px] text-yellow">⚡</span>}
