@@ -698,6 +698,7 @@ def format_triad_telegram_message(
     best_picks: Dict[str, Any],
     total_scanned: int = 0,
     source_label: str = "TOS Scan",
+    curl_matches: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Formats a clean, high-impact HTML alert message for Telegram featuring
@@ -705,6 +706,8 @@ def format_triad_telegram_message(
       ⚡ BUY THE STRENGTH
       🚀 BUY THE EMERGING
       🛡️ BUY THE WEAKNESS
+    And also includes qualifying:
+      🌀 30-WEEK MA CURL UP SETUPS
     """
     try:
         now_cst = datetime.now(ZoneInfo("America/Chicago"))
@@ -821,6 +824,53 @@ def format_triad_telegram_message(
             "",
         ])
 
+    # 4. 🌀 30-WEEK MA CURL UP SETUPS
+    if curl_matches:
+        curl_count = len(curl_matches)
+        all_curl_tickers = [str(m.get("ticker", "")).upper() for m in curl_matches if m.get("ticker")]
+        tickers_str = ", ".join(all_curl_tickers[:25])
+        if len(all_curl_tickers) > 25:
+            tickers_str += f" (+{len(all_curl_tickers) - 25} more)"
+
+        lines.extend([
+            f"🌀 <b>30W MA CURL UP ARROWS ({curl_count} Qualifying)</b>",
+            "<i>Weekly bar curling up above rising 30W SMA · Stage 2 Inflection</i>",
+            f"• <b>Tickers</b>: <code>{tickers_str}</code>",
+            "",
+        ])
+
+        # Feature top 3 individual curl setups
+        for idx, c in enumerate(curl_matches[:3], 1):
+            c_tk = c.get("ticker")
+            c_p = _safe_float(c.get("price"), 0.0)
+            c_sma = _safe_float(c.get("sma30"), 0.0)
+            c_dist = _safe_float(c.get("dist_from_sma30"), 0.0)
+            c_slope = _safe_float(c.get("slope"), 0.0)
+            c_w = c.get("weeks_ago", 0)
+            c_ago = "✨ This Week" if c_w == 0 else f"{c_w}w ago"
+            c_badge = c.get("category_badge", "⚡ FRESH CURL")
+            c_opt = c.get("options") or _derive_options_contract(c_p, "LONG")
+            c_vol = f"🔥 {c.get('vol_ratio', 1.0):.1f}x Vol" if c.get("is_vol_surge") else f"{c.get('vol_ratio', 1.0):.1f}x Vol"
+            c_entry = _safe_float(c.get("price"), c_p)
+            c_stop = _safe_float(c.get("stop_loss"), c_p * 0.95)
+            c_t1 = _safe_float(c.get("target1"), c_p * 1.10)
+            c_risk = _safe_float(c.get("risk_pct"), 5.0)
+            c_rr = _safe_float(c.get("rr"), 2.0)
+
+            lines.extend([
+                f"• <b>#{idx} {c_badge}: {c_tk}</b> · <b>${c_p:.2f}</b>",
+                f"  30W SMA: ${c_sma:.2f} (<b>{c_dist:+.1f}%</b>) | Slope: +{c_slope:.2f} | {c_ago} ({c_vol})",
+                f"  Entry: ${c_entry:.2f} | Stop: ${c_stop:.2f} (-{c_risk:.1f}%) | Target: ${c_t1:.2f} (R:R: {c_rr:.1f}×)",
+                f"  💡 <b>Options</b>: <code>{c_opt}</code>",
+                "",
+            ])
+    else:
+        lines.extend([
+            "🌀 <b>30W MA CURL UP ARROWS</b>",
+            "<i>No qualifying 30W MA Curl Up arrow setups detected in this scan.</i>",
+            "",
+        ])
+
     lines.extend([
         "━━━━━━━━━━━━━━━━━━━━━━━━━━",
         "🔒 <i>Trade with disciplined risk management. Set hard stops before entry.</i>",
@@ -837,9 +887,11 @@ def dispatch_triad_telegram_alert(
     send_msg: bool = True,
     bot_token: Optional[str] = None,
     chat_id: Optional[str] = None,
+    curl_matches: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Ranks the 3 swing trading categories and sends the Triad Telegram alert.
+    Ranks the 3 swing trading categories and sends the Triad Telegram alert,
+    including all qualifying 30-Week MA Curl Up tickers.
     If items_or_df is not provided, scans the specified watchlist.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -856,11 +908,16 @@ def dispatch_triad_telegram_alert(
 
     source_label = "TOS Scan"
     total_scanned = 0
+    candidate_tickers: List[str] = []
 
     if items_or_df is not None:
         if isinstance(items_or_df, pd.DataFrame):
             df = items_or_df.copy()
             total_scanned = len(df)
+            if "Ticker" in df.columns:
+                candidate_tickers = [str(t).strip().upper() for t in df["Ticker"].dropna().unique() if str(t).strip()]
+            elif "ticker" in df.columns:
+                candidate_tickers = [str(t).strip().upper() for t in df["ticker"].dropna().unique() if str(t).strip()]
         else:
             items = [
                 it for it in items_or_df
@@ -870,6 +927,11 @@ def dispatch_triad_telegram_alert(
             ]
             df = pd.DataFrame(items)
             total_scanned = len(df)
+            candidate_tickers = [
+                str(it.get("ticker") or it.get("Ticker") or it.get("Symbol") or it.get("symbol")).strip().upper()
+                for it in items
+                if it.get("ticker") or it.get("Ticker") or it.get("Symbol") or it.get("symbol")
+            ]
         source_label = "Scanner Setup"
     else:
         # Fetch tickers
@@ -890,6 +952,8 @@ def dispatch_triad_telegram_alert(
             ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS.get("default", []))
             source_label = f"{watchlist.capitalize()} Watchlist"
 
+        candidate_tickers = list(ticker_list)
+
         # Concurrently scan tickers
         from backend.services.scanner import scan_single
         scanned_items = []
@@ -906,6 +970,16 @@ def dispatch_triad_telegram_alert(
         total_scanned = len(ticker_list)
         df = pd.DataFrame(scanned_items)
 
+    # Discover 30W Curls if not already provided
+    if curl_matches is None and candidate_tickers:
+        try:
+            from backend.services.curl_scanner import scan_30w_curl_candidates
+            c_scan = scan_30w_curl_candidates(tickers=candidate_tickers[:60], max_weeks_ago=8)
+            curl_matches = c_scan.get("matches", [])
+        except Exception as e:
+            logger.warning(f"Failed scanning 30W curl setups for triad alert: {e}")
+            curl_matches = []
+
     # Run ranking analysis
     ranking_res = analyze_and_rank_stocks(df) if not df.empty else {
         "best_picks": {"strength": None, "emerging": None, "weakness": None},
@@ -917,7 +991,12 @@ def dispatch_triad_telegram_alert(
     }
 
     best_picks = ranking_res.get("best_picks", {})
-    message_text = format_triad_telegram_message(best_picks, total_scanned=total_scanned, source_label=source_label)
+    message_text = format_triad_telegram_message(
+        best_picks,
+        total_scanned=total_scanned,
+        source_label=source_label,
+        curl_matches=curl_matches,
+    )
 
     sent = False
     send_err = None
@@ -925,7 +1004,7 @@ def dispatch_triad_telegram_alert(
         try:
             sent = send_telegram(token, cid, message_text)
             if sent:
-                logger.info(f"Triad Telegram alert successfully sent ({total_scanned} tickers scanned)")
+                logger.info(f"Triad Telegram alert successfully sent ({total_scanned} tickers scanned, {len(curl_matches or [])} curls)")
             else:
                 send_err = "Telegram API rejected message"
         except Exception as e:
@@ -941,5 +1020,7 @@ def dispatch_triad_telegram_alert(
         "total_scanned": total_scanned,
         "source_label": source_label,
         "best_picks": best_picks,
+        "curl_matches": curl_matches or [],
+        "curl_count": len(curl_matches) if curl_matches else 0,
         "message": message_text,
     }

@@ -167,3 +167,19 @@ def trigger_paper_exit_monitor(force: bool = False):
         "result": res,
     }
 
+
+@router.post("/run-triad")
+def trigger_triad_alert():
+    """Manually trigger the 7:30 PM CST Triad Best Picks + 30W Curl after-market alert."""
+    from backend.services.scheduler import triad_best_picks_alert_job
+    res = triad_best_picks_alert_job()
+    return {"status": "triad_best_picks_alert completed", "result": res}
+
+
+@router.post("/run-tos-poll")
+def trigger_tos_email_poll():
+    """Manually trigger the 7:15 PM CST ThinkOrSwim email poll + 30W Curl alert."""
+    from backend.services.scheduler import tos_email_poll_job
+    res = tos_email_poll_job()
+    return {"status": "tos_email_poll completed", "new_messages": res}
+

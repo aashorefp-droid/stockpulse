@@ -913,11 +913,23 @@ def tos_email_poll_job() -> int:
         tickers = fetch_today_watchlist()
         logger.info(f"[scheduler] 7:15 PM TOS scan email poll finished: {new_count} new messages, {len(tickers)} today's tickers")
         if tickers and TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+            curl_extra = ""
+            try:
+                from backend.services.curl_scanner import scan_30w_curl_candidates
+                c_res = scan_30w_curl_candidates(tickers=tickers[:50], max_weeks_ago=8)
+                c_matches = c_res.get("matches", [])
+                if c_matches:
+                    c_tks = [m["ticker"] for m in c_matches]
+                    curl_extra = f"\n🌀 <b>30W MA Curl Setups ({len(c_tks)})</b>:\n<code>{', '.join(c_tks)}</code>\n"
+            except Exception as e:
+                logger.warning(f"[scheduler] TOS email poll 30W curl check failed: {e}")
+
             send_telegram(
                 TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
                 f"📧 <b>ThinkOrSwim Scan Watchlist ({today_str()})</b>\n"
                 f"Fetched <b>{len(tickers)}</b> tickers from TOS email alerts:\n"
-                f"<code>{', '.join(tickers)}</code>"
+                f"<code>{', '.join(tickers)}</code>\n"
+                f"{curl_extra}"
             )
         return new_count
     except Exception as e:
@@ -929,13 +941,15 @@ def triad_best_picks_alert_job() -> dict:
     """
     7:30 PM CST (Mon-Fri) — Dispatch the 3-Category Swing Best Picks Alert to Telegram.
     Scans today's ThinkOrSwim scan alerts (from the 7:15 PM poll) or Default 50.
-    Evaluates 52W ATH momentum (Strength), tight VCP coils (Emerging), and dip support (Weakness).
+    Evaluates 52W ATH momentum (Strength), tight VCP coils (Emerging), and dip support (Weakness),
+    along with qualifying 30-Week MA Curl Up tickers.
     """
     try:
         from backend.services.best_pick import dispatch_triad_telegram_alert
         logger.info("[scheduler] 7:30 PM CST Triad Best Picks Alert Job started")
         res = dispatch_triad_telegram_alert(watchlist="tos_email", days=1, send_msg=True)
-        logger.info(f"[scheduler] Triad Best Picks Alert Job completed: sent={res.get('sent')} scanned={res.get('total_scanned')}")
+        curl_cnt = res.get("curl_count", 0)
+        logger.info(f"[scheduler] Triad Best Picks Alert Job completed: sent={res.get('sent')} scanned={res.get('total_scanned')} curls={curl_cnt}")
         return res
     except Exception as e:
         logger.error(f"[scheduler] Triad Best Picks Alert Job error: {e}")

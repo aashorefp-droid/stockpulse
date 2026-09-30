@@ -252,12 +252,14 @@ def send_triad_alert(
         d = payload.get("days") if payload.get("days") is not None else days
         send_msg = payload.get("send_telegram") if payload.get("send_telegram") is not None else send_telegram
 
+        curls = payload.get("curl_matches") or payload.get("curls")
         res = dispatch_triad_telegram_alert(
             items_or_df=items,
             watchlist=wl,
             subjects=subs,
             days=d,
             send_msg=send_msg,
+            curl_matches=curls,
         )
         return _clean_nans(res)
     except Exception as e:

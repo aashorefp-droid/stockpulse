@@ -322,6 +322,7 @@ export default function ScannerPage() {
           subjects: tosSubjectFilter,
           days: tosDays,
           send_telegram: true,
+          curl_matches: curlMatches.length > 0 ? curlMatches : undefined,
         }),
       });
       const data = await res.json();
