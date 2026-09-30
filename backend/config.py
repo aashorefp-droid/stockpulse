@@ -6,25 +6,31 @@ try:
     from dotenv import load_dotenv
     _root_env = Path(__file__).resolve().parent.parent / ".env"
     _backend_env = Path(__file__).resolve().parent / ".env"
+    if _backend_env.exists():
+        load_dotenv(_backend_env, override=False)
     if _root_env.exists():
-        load_dotenv(_root_env)
-    elif _backend_env.exists():
-        load_dotenv(_backend_env)
-    else:
-        load_dotenv()
+        load_dotenv(_root_env, override=False)
+    load_dotenv(override=False)
 except ImportError:
     pass
 
-ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY",    "AKBTFWNEQOAQ6YTHVSEBZHSERS")
-ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "9r3XFuhPUcaouy4Vin38D3zeT8ksYxM8tmvj6PwhQzDF")
-POLYGON_API_KEY   = os.getenv("POLYGON_API_KEY",   "q4Sx_c3RB9LeUkX4_efYSjFqi4dWtBHz")
+def _get_clean_env(key: str, default: str = "") -> str:
+    val = os.getenv(key, default)
+    if val is None:
+        return default
+    return str(val).strip().strip('"').strip("'")
+
+ALPACA_API_KEY    = _get_clean_env("ALPACA_API_KEY",    "AKBTFWNEQOAQ6YTHVSEBZHSERS")
+ALPACA_API_SECRET = _get_clean_env("ALPACA_API_SECRET", "9r3XFuhPUcaouy4Vin38D3zeT8ksYxM8tmvj6PwhQzDF")
+POLYGON_API_KEY   = _get_clean_env("POLYGON_API_KEY",   "q4Sx_c3RB9LeUkX4_efYSjFqi4dWtBHz")
 ALPACA_DATA_BASE  = "https://data.alpaca.markets"
 
 # ── Telegram Watchlist & Alerts ──────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-WATCHLIST_BOT_TOKEN = os.getenv("WATCHLIST_BOT_TOKEN", "").strip()
-WATCHLIST_CHAT_ID   = os.getenv("WATCHLIST_CHAT_ID", "").strip()
+TELEGRAM_BOT_TOKEN  = _get_clean_env("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID    = _get_clean_env("TELEGRAM_CHAT_ID", "")
+TELEGRAM_MESSAGE_THREAD_ID = _get_clean_env("TELEGRAM_MESSAGE_THREAD_ID", "")
+WATCHLIST_BOT_TOKEN = _get_clean_env("WATCHLIST_BOT_TOKEN", "")
+WATCHLIST_CHAT_ID   = _get_clean_env("WATCHLIST_CHAT_ID", "")
 
 # ── ThinkOrSwim (TOS) Gmail Watchlist ────────────────────────────────────────
 GMAIL_USER         = os.getenv("GMAIL_USER", "").strip()
