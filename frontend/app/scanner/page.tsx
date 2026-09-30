@@ -17,7 +17,7 @@ const WATCHLISTS = [
   { key: "custom",        label: "Custom",           count: 0  },
 ];
 
-type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "rank1" | "exceptional" | "good_rr" | "high_short";
+type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "below_va" | "rank1" | "exceptional" | "good_rr" | "high_short";
 
 interface OptLeg {
   action:     string;
@@ -51,6 +51,13 @@ interface ScanResult {
   daily_bias?:   string;
   vol_trend?:    string;
   vol_surge?:    boolean;
+  vol_ratio?:    number | null;
+  vol_bias?:     string;
+  below_va?:     boolean;
+  vol_detail?:   string;
+  poc?:          number | null;
+  val?:          number | null;
+  vah?:          number | null;
   breakout_score?: number;
   dist_from_high?: number;
   stage2_curl_surge?: boolean;
@@ -634,6 +641,12 @@ export default function ScannerPage() {
       }
       if (filter === "fresh_curl")  return Boolean(r.is_fresh_stage2 || r.stage2_status === "FRESH");
       if (filter === "curl_vol")    return Boolean(r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0));
+      if (filter === "below_va") {
+        const isBelowVal = Boolean(r.below_va || (r.val != null && r.price != null && r.price < r.val));
+        const isAcc = r.vol_trend === "ACCUMULATING";
+        const isSurge = Boolean(r.vol_surge || (r.vol_ratio != null && r.vol_ratio >= 1.5));
+        return isBelowVal && isAcc && isSurge;
+      }
       if (filter === "rank1")       return r.mtf_rank === 1;
       if (filter === "good_rr")     return (r.rr_t1 ?? 0) >= 1.5;
       if (filter === "high_short")  return (r.short_pct ?? 0) >= 10;
@@ -1698,7 +1711,7 @@ export default function ScannerPage() {
       {results.length > 0 && (
         <div className="flex flex-wrap gap-4 items-center">
           <div className="flex flex-wrap gap-1 bg-card border border-border rounded-lg p-1">
-            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
+            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "below_va", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
               <button key={f} onClick={() => {
                 setFilter(f);
                 if (f === "good_rr") setSortBy("rr");
@@ -1712,6 +1725,7 @@ export default function ScannerPage() {
                 : f === "weakness"  ? `🛡️ Weakness (${results.filter(r => (r.rr_t1 ?? 0) >= 1.8 && (r.dist_from_high ?? 0) >= 3.0).length})`
                 : f === "fresh_curl"? `🎉 Fresh Breakout (${results.filter(r => r.is_fresh_stage2 || r.stage2_status === "FRESH").length})`
                 : f === "curl_vol"  ? `🌀 30W Curl (${results.filter(r => r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0)).length})`
+                : f === "below_va"  ? `🔻 Below VA Surge (${results.filter(r => (r.below_va || (r.val != null && r.price != null && r.price < r.val)) && r.vol_trend === "ACCUMULATING" && (r.vol_surge || (r.vol_ratio != null && r.vol_ratio >= 1.5))).length})`
                 : f === "rank1"     ? `Rank 1 (${results.filter(r => r.mtf_rank === 1).length})`
                 : f === "good_rr"   ? `🎯 Good R/R ≥1.5× (${results.filter(r => (r.rr_t1 ?? 0) >= 1.5).length})`
                 : f === "high_short"? `🔥 High Short (${results.filter(r => (r.short_pct ?? 0) >= 10).length})`
@@ -1852,7 +1866,10 @@ export default function ScannerPage() {
                         >
                           {r.ticker}
                         </Link>
-                        {r.vol_surge && <span className="ml-1 text-[10px] text-yellow">⚡</span>}
+                        {r.vol_surge && <span className="ml-1 text-[10px] text-yellow" title="Volume Surge (>1.5x)">⚡</span>}
+                        {(r.below_va || (r.val != null && r.price != null && r.price < r.val)) && r.vol_trend === "ACCUMULATING" && (
+                          <span className="ml-1 text-[10px] text-red font-bold" title={`Volume Profile Breakdown: Below VAL ($${r.val ?? "—"}) + Accumulating Vol`}>🔻</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right font-mono text-white whitespace-nowrap">
                         ${r.price?.toFixed(2)}
