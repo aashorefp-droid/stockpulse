@@ -131,6 +131,7 @@ export default function StockPage({ params }: StockPageProps) {
     strategy_signals = {},
     options = null,
     stock_verdict = null,
+    final_judgement = null,
     is_backtest = false,
     as_of = null,
     backtest_outcome = null,
@@ -383,7 +384,15 @@ export default function StockPage({ params }: StockPageProps) {
         </div>
 
         {chartView === "daily_plan" ? (
-          <DailyTradeChart ticker={ticker} initialAsOfDate={asOfDate} asOfDate={asOfDate} />
+          <DailyTradeChart
+            ticker={ticker}
+            initialAsOfDate={asOfDate}
+            asOfDate={asOfDate}
+            volumeProfile={volume_profile}
+            entryGrade={entry_grade}
+            verdict={verdict}
+            finalJudgement={final_judgement}
+          />
         ) : (
           <DualChart ticker={ticker} initialAsOfDate={asOfDate} asOfDate={asOfDate} />
         )}
@@ -404,7 +413,15 @@ export default function StockPage({ params }: StockPageProps) {
           optionsStrategy={options?.strategy ?? null}
         />
         {volume_profile ? (
-          <VolumeProfileCard vp={volume_profile} currentPrice={current_price} />
+          <VolumeProfileCard
+            vp={volume_profile}
+            currentPrice={current_price}
+            hi52={fundamentals?.["52w_high"] && fundamentals["52w_high"] !== "N/A" ? Number(fundamentals["52w_high"]) : strategy_signals?.hi_52}
+            lo52={fundamentals?.["52w_low"] && fundamentals["52w_low"] !== "N/A" ? Number(fundamentals["52w_low"]) : strategy_signals?.lo_52}
+            distFromHigh={strategy_signals?.dist_from_high}
+            distFromLow={strategy_signals?.dist_from_low}
+            finalJudgement={final_judgement}
+          />
         ) : (
           <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-5 flex items-center justify-center text-slate-500 text-sm">
             Volume profile calculated from price bars

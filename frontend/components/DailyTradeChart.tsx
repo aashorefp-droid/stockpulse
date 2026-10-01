@@ -16,6 +16,10 @@ interface DailyTradeChartProps {
   availableTickers?: string[];
   initialAsOfDate?: string;
   asOfDate?: string;
+  volumeProfile?: any;
+  entryGrade?: any;
+  verdict?: string;
+  finalJudgement?: any;
 }
 
 export default function DailyTradeChart({
@@ -24,6 +28,10 @@ export default function DailyTradeChart({
   availableTickers = [],
   initialAsOfDate = "",
   asOfDate: propAsOfDate = "",
+  volumeProfile: propVolumeProfile,
+  entryGrade: propEntryGrade,
+  verdict: propVerdict,
+  finalJudgement: propFinalJudgement,
 }: DailyTradeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sma20ValRef = useRef<HTMLSpanElement>(null);
@@ -387,6 +395,106 @@ export default function DailyTradeChart({
   const latestSma50 = data?.sma50 && data.sma50.length > 0 ? data.sma50[data.sma50.length - 1]?.value : null;
   const latestSma200 = data?.sma200 && data.sma200.length > 0 ? data.sma200[data.sma200.length - 1]?.value : null;
 
+  // Synthesize or retrieve final judgement based on entry alert + volume profile decision
+  const finalJudgement = data?.final_judgement ?? propFinalJudgement ?? (() => {
+    const vp = data?.vol_profile ?? propVolumeProfile;
+    const v = data?.verdict ?? propVerdict;
+    const eg = data?.entry_grade ?? propEntryGrade;
+    const cp = data?.current_price;
+    const tr = data?.levels;
+    if (!vp && !eg) return null;
+
+    const direction = (v || (isBull ? "LONG" : "SHORT") || "LONG").toUpperCase().includes("BEAR") ? "SHORT" : "LONG";
+    const gradeLetter = eg?.entry_grade || "C";
+    const gradeLabel = eg?.entry_label || "Neutral";
+    const entryPrice = tr?.entry || cp || 0;
+    const vah = vp?.vah;
+    const val = vp?.val;
+    const poc = vp?.poc;
+    const volTrend = vp?.vol_trend || "FLAT";
+    const volSurge = Boolean(vp?.vol_surge);
+    const volRatio = vp?.vol_ratio || 1.0;
+    const aboveVah = cp && vah ? cp > vah : false;
+    const belowVal = cp && val ? cp < val : false;
+    const insideVa = !aboveVah && !belowVal;
+
+    if (direction === "LONG") {
+      if (aboveVah && (volTrend === "ACCUMULATING" || volSurge)) {
+        return {
+          verdict_title: "HIGH CONVICTION BUY · INSTITUTIONALLY CONFIRMED",
+          badge: "STRONG BUY",
+          color: "emerald",
+          confluence_score: 95,
+          summary: `Entry alert (${gradeLetter} Grade) aligns with institutional volume accumulation above fair value (${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}). Volume confirms breakout momentum.`,
+          entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
+          vp_call: `Above VAH ($${vah?.toFixed(2)}) · ${volTrend} (${volRatio.toFixed(1)}x)`,
+        };
+      } else if (insideVa || (!belowVal && val && cp >= val)) {
+        return {
+          verdict_title: "VALUE AREA ACCUMULATION BUY",
+          badge: "DIP BUY SUPPORT",
+          color: "cyan",
+          confluence_score: 85,
+          summary: `Price holding institutional Value Area support (${val ? `$${val.toFixed(2)}` : ""}${vah ? `–$${vah.toFixed(2)}` : ""}). High R/R dip accumulation with defined stop below VAL.`,
+          entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
+          vp_call: `Inside Value Area · POC $${poc?.toFixed(2)}`,
+        };
+      } else if (belowVal) {
+        return {
+          verdict_title: "VOLUME DIVERGENCE · CAUTION ON LONGS",
+          badge: "CAUTION TRAP",
+          color: "amber",
+          confluence_score: 45,
+          summary: `Bullish entry alert conflict: Price is trading below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) with distribution volume. High probability of false breakout. Wait for reclaim of VAL or reduce size.`,
+          entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
+          vp_call: `Below VAL ($${val?.toFixed(2)}) · ${volTrend} (${volRatio.toFixed(1)}x)`,
+        };
+      } else {
+        return {
+          verdict_title: "MODERATE BULLISH BIAS · MONITOR VOLUME",
+          badge: "SPECULATIVE BUY",
+          color: "emerald",
+          confluence_score: 70,
+          summary: `Bullish price signal with steady volume profile. Maintain strict risk management at stop loss.`,
+          entry_call: `${gradeLetter} Grade at $${entryPrice.toFixed(2)}`,
+          vp_call: `${vp?.detail || "Normal volume profile"}`,
+        };
+      }
+    } else {
+      if (belowVal && (volTrend === "ACCUMULATING" || volSurge)) {
+        return {
+          verdict_title: "INSTITUTIONAL BREAKDOWN CONFIRMED",
+          badge: "CONFIRMED SHORT",
+          color: "rose",
+          confluence_score: 95,
+          summary: `Decisive breakdown below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) confirmed by expanding volume surge. Institutional liquidation favors aggressive short continuation.`,
+          entry_call: `${gradeLetter} Grade (${gradeLabel}) Short at $${entryPrice.toFixed(2)}`,
+          vp_call: `Below VAL ($${val?.toFixed(2)}) · ${volTrend} Surge (${volRatio.toFixed(1)}x)`,
+        };
+      } else if (insideVa) {
+        return {
+          verdict_title: "BEARISH FADE · SITTING NEAR POC SUPPORT",
+          badge: "CAUTION SHORT",
+          color: "amber",
+          confluence_score: 60,
+          summary: `Short signal active, but price is sitting near heavy Point of Control liquidity (${poc ? `$${poc.toFixed(2)}` : ""}). Expect choppy support; wait for breakdown below VAL.`,
+          entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
+          vp_call: `Inside Value Area · Near POC $${poc?.toFixed(2)}`,
+        };
+      } else {
+        return {
+          verdict_title: "BEARISH BIAS · VOLUME RESISTANCE",
+          badge: "LEAN SHORT",
+          color: "rose",
+          confluence_score: 75,
+          summary: `Bearish trajectory with institutional resistance at ${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}.`,
+          entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
+          vp_call: `${vp?.detail || "Normal volume profile"}`,
+        };
+      }
+    }
+  })();
+
   return (
     <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl overflow-hidden shadow-lg mb-8">
       {/* ── Top Control Bar ─────────────────────────────────────────── */}
@@ -635,6 +743,73 @@ export default function DailyTradeChart({
               {showFuture ? "⏪ Cutoff at As-Of" : `⏩ Show Outcome (+${bt.subsequent_bars_count}d)`}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* ── Final Judgement Confluence Banner (Entry Alert + Volume Profile) ── */}
+      {finalJudgement && finalJudgement.verdict_title && (
+        <div className={`px-4 py-3 border-b border-[#1a1d2e] ${
+          finalJudgement.color === "emerald"
+            ? "bg-gradient-to-r from-emerald-950/60 via-[#0d2219] to-[#0a0d16] border-emerald-500/40"
+            : finalJudgement.color === "cyan"
+            ? "bg-gradient-to-r from-cyan-950/60 via-[#0d1e28] to-[#0a0d16] border-cyan-500/40"
+            : finalJudgement.color === "amber"
+            ? "bg-gradient-to-r from-amber-950/60 via-[#241c0e] to-[#0a0d16] border-amber-500/40"
+            : finalJudgement.color === "rose"
+            ? "bg-gradient-to-r from-rose-950/60 via-[#260e15] to-[#0a0d16] border-rose-500/40"
+            : "bg-[#10131f] border-slate-700/40"
+        }`}>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">⚡</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-black tracking-wider uppercase text-white font-mono">
+                  FINAL JUDGEMENT:
+                </span>
+                <span className={`text-sm font-black font-mono tracking-wide ${
+                  finalJudgement.color === "emerald" ? "text-emerald-400" :
+                  finalJudgement.color === "cyan" ? "text-cyan-400" :
+                  finalJudgement.color === "amber" ? "text-amber-400" :
+                  finalJudgement.color === "rose" ? "text-rose-400" : "text-slate-300"
+                }`}>
+                  {finalJudgement.verdict_title}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded border uppercase ${
+                finalJudgement.color === "emerald" ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/50 shadow-sm" :
+                finalJudgement.color === "cyan" ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-sm" :
+                finalJudgement.color === "amber" ? "bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-sm" :
+                finalJudgement.color === "rose" ? "bg-rose-500/20 text-rose-300 border-rose-500/50 shadow-sm" :
+                "bg-slate-500/20 text-slate-300 border-slate-500/50"
+              }`}>
+                {finalJudgement.badge}
+              </span>
+              {finalJudgement.confluence_score && (
+                <span className="text-xs font-mono font-bold text-yellow bg-black/40 px-2.5 py-0.5 rounded border border-border/50">
+                  {finalJudgement.confluence_score}% Confluence
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Confluence Dual Readout (Entry Alert + Volume Profile) */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono bg-black/40 p-2.5 rounded-lg border border-border/40 mt-1">
+            <div className="flex items-center gap-1.5 truncate">
+              <span className="text-[#6b7099]">🔔 Entry Alert:</span>
+              <span className="text-white font-semibold truncate">{finalJudgement.entry_call || "Evaluating..."}</span>
+            </div>
+            <div className="flex items-center gap-1.5 truncate">
+              <span className="text-[#6b7099]">📊 Volume Profile:</span>
+              <span className="text-[#4d9fff] font-semibold truncate">{finalJudgement.vp_call || "Calculating..."}</span>
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-300 mt-2 leading-relaxed font-sans">
+            {finalJudgement.summary}
+          </p>
         </div>
       )}
 
