@@ -14,6 +14,7 @@ from backend.services.analysis import (
     compute_weekly_bias, compute_daily_bias, compute_4h_bias,
     mtf_signal_action, get_multiframe_bias, get_entry_grade,
     calc_trade_levels, get_fundamentals, get_weekly_fib_and_rsi, _col,
+    generate_final_judgement,
 )
 from backend.services.options import get_options_bias, get_options_strategy
 from backend.services.market_data import (
@@ -248,6 +249,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "entry_grade":   entry_grade,
         "trade":         trade_levels,
         "volume_profile": scored.get("vol_profile"),
+        "final_judgement": _safe(generate_final_judgement, {}, trade_levels, scored.get("vol_profile"), verdict, entry_grade, current_price),
         "strategy_signals": scored.get("strategy_signals", {}),
         "bias": {
             "weekly": weekly_bias, "daily": daily_bias,
@@ -475,6 +477,10 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         trade = _safe(calc_trade_levels, _EMPTY_TRADE, df_hist, verdict, cur_price)
         sr = _safe(calc_support_resistance, {"support": [], "resistance": []}, df_hist, cur_price)
 
+        vol_profile = scored.get("vol_profile") or {}
+        entry_grade = _safe(get_entry_grade, _EMPTY_GRADE, scored.get("score", 0), scored.get("confidence", "LOW"))
+        final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price)
+
         bars = []
         volume_bars = []
         sma20_data = []
@@ -624,6 +630,9 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             },
             "support_resistance": sr,
             "markers": markers,
+            "vol_profile": vol_profile,
+            "entry_grade": entry_grade,
+            "final_judgement": final_judgement,
         })
         _DAILY_CACHE[cache_key] = {"time": now, "data": res}
         return res

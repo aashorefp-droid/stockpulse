@@ -106,14 +106,18 @@ def calc_support_resistance(daily_df: pd.DataFrame, current_price: float, n_leve
 def analyze_volume_profile(daily_df: pd.DataFrame, lookback: int = 50, n_bins: int = 50) -> Optional[dict]:
     if daily_df is None or len(daily_df) < 20:
         return None
-    df = daily_df.tail(lookback).copy()
-    vol_col   = _col(df, "volume")
-    close_col = _col(df, "close")
-    hi_col    = _col(df, "high")
-    lo_col    = _col(df, "low")
-    if vol_col not in df.columns:
+    vol_col   = _col(daily_df, "volume")
+    close_col = _col(daily_df, "close")
+    hi_col    = _col(daily_df, "high")
+    lo_col    = _col(daily_df, "low")
+    if vol_col not in daily_df.columns or close_col not in daily_df.columns:
         return None
 
+    clean_daily = daily_df.dropna(subset=[close_col, hi_col, lo_col, vol_col]).copy()
+    if len(clean_daily) < 20:
+        return None
+
+    df = clean_daily.tail(lookback).copy()
     current_price = float(df[close_col].iloc[-1])
     price_min = float(df[lo_col].min())
     price_max = float(df[hi_col].max())
@@ -186,9 +190,20 @@ def analyze_volume_profile(daily_df: pd.DataFrame, lookback: int = 50, n_bins: i
                  "Below POC" if current_price < poc else "At POC")
     detail = f"{pos_label} | POC ${poc:.2f} | VA ${val:.2f}–${vah:.2f} | {vol_trend} | Vol {vol_ratio:.1f}x"
 
-    return {"poc": round(poc, 2), "vah": round(vah, 2), "val": round(val, 2),
-            "vol_bias": vol_bias, "vol_trend": vol_trend,
-            "vol_ratio": round(float(vol_ratio), 2), "vol_surge": bool(vol_surge), "detail": detail}
+    # 52-week High / Low & Distance (252 trading days)
+    lookback_52w = min(252, len(clean_daily))
+    hi_52 = float(clean_daily[hi_col].iloc[-lookback_52w:].max())
+    lo_52 = float(clean_daily[lo_col].iloc[-lookback_52w:].min())
+    dist_hi_52 = round(float((hi_52 - current_price) / current_price * 100), 1) if current_price > 0 else 0.0
+    dist_lo_52 = round(float((current_price - lo_52) / lo_52 * 100), 1) if lo_52 > 0 else 0.0
+
+    return {
+        "poc": round(poc, 2), "vah": round(vah, 2), "val": round(val, 2),
+        "vol_bias": vol_bias, "vol_trend": vol_trend,
+        "vol_ratio": round(float(vol_ratio), 2), "vol_surge": bool(vol_surge), "detail": detail,
+        "hi_52": round(hi_52, 2), "lo_52": round(lo_52, 2),
+        "dist_hi_52": dist_hi_52, "dist_lo_52": dist_lo_52,
+    }
 
 
 # ── Strategy signals (Weinstein + FVG + swing + conviction) ──────────────────
@@ -440,6 +455,136 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             "risk_pct": risk_pct, "rr_t1": rr1, "rr_t2": rr2,
             "t1_days": t1_days, "t2_days": t2_days, "atr": round(atr, 2)}
 
+
+# ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
+
+def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: str, entry_grade: dict, current_price: float) -> dict:
+    """
+    Synthesizes Entry Alert + Volume Profile Decision into a Final Trading Judgement.
+    Evaluates whether institutional volume confirms or conflicts with the price signal.
+    """
+    direction = "SHORT" if (verdict or "").upper() in ("BEARISH", "LEAN BEARISH") else "LONG"
+    grade_letter = (entry_grade.get("entry_grade") if isinstance(entry_grade, dict) else str(entry_grade)) or "C"
+    grade_label = (entry_grade.get("entry_label") if isinstance(entry_grade, dict) else "") or "Neutral"
+    entry_price = (trade.get("entry") or current_price) if isinstance(trade, dict) else current_price
+
+    vp = vol_profile or {}
+    vah = vp.get("vah")
+    val = vp.get("val")
+    poc = vp.get("poc")
+    vol_trend = vp.get("vol_trend", "FLAT")
+    vol_surge = bool(vp.get("vol_surge", False))
+    vol_ratio = vp.get("vol_ratio", 1.0) or 1.0
+
+    above_vah = current_price > vah if vah else False
+    below_val = current_price < val if val else False
+    inside_va = not above_vah and not below_val
+
+    is_bull_signal = direction == "LONG"
+    is_bear_signal = direction == "SHORT"
+
+    if is_bull_signal:
+        if above_vah and (vol_trend == "ACCUMULATING" or vol_surge):
+            return {
+                "verdict_title": "HIGH CONVICTION BUY · INSTITUTIONALLY CONFIRMED",
+                "badge": "STRONG BUY",
+                "status": "CONFIRMED",
+                "color": "emerald",
+                "confluence_score": 95,
+                "summary": f"Entry Alert ({grade_letter} Grade) aligns with institutional volume accumulation above fair value (${vah:.2f} VAH). Volume confirms breakout momentum.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Above VAH (${vah:.2f}) · {vol_trend} ({vol_ratio:.1f}x)",
+            }
+        elif inside_va or (val is not None and current_price >= val and not below_val):
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+            poc_str = f"${poc:.2f}" if poc is not None else "POC"
+            return {
+                "verdict_title": "VALUE AREA ACCUMULATION BUY",
+                "badge": "DIP BUY SUPPORT",
+                "status": "ACCUMULATING",
+                "color": "cyan",
+                "confluence_score": 85,
+                "summary": f"Price holding institutional Value Area support ({val_str}–{vah_str}). High R/R dip accumulation with protective stop below VAL.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Inside Value Area ({val_str}–{vah_str}) · POC {poc_str}",
+            }
+        elif below_val:
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "VOLUME DIVERGENCE · CAUTION ON LONGS",
+                "badge": "CAUTION TRAP",
+                "status": "DIVERGENCE",
+                "color": "amber",
+                "confluence_score": 45,
+                "summary": f"Bullish entry alert conflict: Price is trading below Value Area Low ({val_str}) with distribution volume. High probability of false breakout. Wait for reclaim of {val_str} or reduce size.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x)",
+            }
+        else:
+            stop_str = f"${trade.get('stop_loss', entry_price * 0.95):.2f}" if isinstance(trade, dict) and trade.get('stop_loss') else "defined stop"
+            return {
+                "verdict_title": "MODERATE BULLISH BIAS · MONITOR VOLUME",
+                "badge": "SPECULATIVE BUY",
+                "status": "MODERATE",
+                "color": "emerald",
+                "confluence_score": 70,
+                "summary": f"Bullish entry setup with steady volume. Manage risk at {stop_str}.",
+                "entry_call": f"{grade_letter} Grade at ${entry_price:.2f}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+            }
+    elif is_bear_signal:
+        if below_val and (vol_trend == "ACCUMULATING" or vol_surge):
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "INSTITUTIONAL BREAKDOWN CONFIRMED",
+                "badge": "CONFIRMED SHORT",
+                "status": "BREAKDOWN",
+                "color": "rose",
+                "confluence_score": 95,
+                "summary": f"Decisive breakdown below Value Area Low ({val_str}) confirmed by expanding volume surge. Institutional distribution favors aggressive short continuation.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) Short at ${entry_price:.2f}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x)",
+            }
+        elif inside_va:
+            poc_str = f"${poc:.2f}" if poc is not None else "POC"
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "BEARISH FADE · SITTING NEAR POC SUPPORT",
+                "badge": "CAUTION SHORT",
+                "status": "SUPPORT_WARNING",
+                "color": "amber",
+                "confluence_score": 60,
+                "summary": f"Short signal active, but price is sitting near heavy Point of Control liquidity ({poc_str}). Expect choppy support; wait for breakdown below {val_str}.",
+                "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
+                "vp_call": f"Inside Value Area · Near POC {poc_str}",
+            }
+        else:
+            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+            return {
+                "verdict_title": "BEARISH BIAS · VOLUME RESISTANCE",
+                "badge": "LEAN SHORT",
+                "status": "BEARISH",
+                "color": "rose",
+                "confluence_score": 75,
+                "summary": f"Bearish trajectory with institutional resistance at {vah_str} (VAH).",
+                "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+            }
+    else:
+        val_str = f"${val:.2f}" if val is not None else "VAL"
+        vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+        poc_str = f"${poc:.2f}" if poc is not None else "POC"
+        return {
+            "verdict_title": "NEUTRAL ROTATION · BALANCED VALUE AREA",
+            "badge": "CONSOLIDATION",
+            "status": "NEUTRAL",
+            "color": "slate",
+            "confluence_score": 50,
+            "summary": f"Price oscillating within 70% Value Area ({val_str}–{vah_str}) with neutral volume. Wait for directional breakout expansion.",
+            "entry_call": f"Neutral ({grade_letter} Grade)",
+            "vp_call": f"POC {poc_str} · VA {val_str}–{vah_str}",
+        }
 
 
 # ── Full scoring pipeline (replaces simple MTF-only signal) ──────────────────
