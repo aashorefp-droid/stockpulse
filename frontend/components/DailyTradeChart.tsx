@@ -272,7 +272,7 @@ export default function DailyTradeChart({
           color: "#38bdf8",
           lineWidth: 2,
           lineStyle: LineStyle.Dotted,
-          title: `RETEST $${retestLevel}`,
+          title: `PWL $${retestLevel}`,
           priceLineVisible: true,
           lastValueVisible: true,
         });
@@ -632,10 +632,10 @@ export default function DailyTradeChart({
                       ? "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 shadow-sm"
                       : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
                   }`}
-                  title="Toggle Retest Support Level (Prior Week Red Day Low)"
+                  title="Toggle Previous Week Low (PWL) Support Line"
                 >
                   <span>🔄</span>
-                  <span>Retest ${levels.retest_entry?.toFixed(2)}</span>
+                  <span>PWL ${levels.retest_entry?.toFixed(2)}</span>
                 </button>
               )}
             </>
@@ -877,9 +877,9 @@ export default function DailyTradeChart({
                           ? "bg-[#38bdf8] text-black shadow-sm"
                           : "text-[#6b7099] hover:text-[#38bdf8]"
                       }`}
-                      title="Retest dip entry at prior week red day low"
+                      title="Retest dip entry at Previous Week Low (PWL)"
                     >
-                      🔄 Retest
+                      🔄 Prev Week Low
                     </button>
                   </div>
                 ) : (
@@ -894,8 +894,8 @@ export default function DailyTradeChart({
                   </div>
                   <div className="text-[11px] font-mono mt-0.5">
                     {entryMode === "retest" && levels.retest_zone_min != null ? (
-                      <span className="text-[#38bdf8]/90">
-                        Retest Zone: ${levels.retest_zone_min?.toFixed(2)} – ${levels.retest_zone_max?.toFixed(2)}
+                      <span className="text-[#38bdf8]/90 font-medium">
+                        PWL Zone: ${levels.retest_zone_min?.toFixed(2)} – ${levels.retest_zone_max?.toFixed(2)}
                       </span>
                     ) : (
                       <span className="text-[#00e5a0]/80">
@@ -915,14 +915,14 @@ export default function DailyTradeChart({
                           ? "bg-[#00e5a0]/20 text-[#00e5a0] border-[#00e5a0]/40"
                           : "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 hover:bg-[#13374d]"
                       }`}
-                      title={entryMode === "retest" ? "Switch to Breakout Trigger Entry" : "Switch to Retest Dip Entry"}
+                      title={entryMode === "retest" ? "Switch to Breakout Trigger Entry" : "Switch to Prev Week Low (PWL) Entry"}
                     >
-                      {entryMode === "retest" ? "⚡ Trigger Mode" : "🔄 Retest Dip"}
+                      {entryMode === "retest" ? "⚡ Trigger Mode" : "🔄 Prev Week Low"}
                     </button>
                     <div className="text-[11px] font-mono font-bold mt-1 text-slate-400">
                       {entryMode === "retest"
                         ? `Trig: $${levels.entry?.toFixed(2)}`
-                        : `$${levels.retest_entry?.toFixed(2)}`}
+                        : `PWL: $${levels.retest_entry?.toFixed(2)}`}
                     </div>
                   </div>
                 )}
@@ -933,12 +933,12 @@ export default function DailyTradeChart({
               <div className="mt-2.5 pt-2 border-t border-[#1a2d26] text-[11px] font-mono flex flex-wrap items-center justify-between gap-1">
                 <span className="text-slate-300">
                   {entryMode === "retest" ? (
-                    <span className="text-[#38bdf8] font-bold">★ Retest Zone Active</span>
+                    <span className="text-[#38bdf8] font-bold">★ Prev Week Low Active</span>
                   ) : (
-                    <span>Retest: <b className="text-[#38bdf8] font-mono">${levels.retest_zone_min?.toFixed(2)}–${levels.retest_zone_max?.toFixed(2)}</b></span>
+                    <span>Prev Week Low: <b className="text-[#38bdf8] font-mono">${levels.retest_entry?.toFixed(2)}</b> <span className="text-[10px] text-slate-400">(${levels.retest_zone_min?.toFixed(2)}–${levels.retest_zone_max?.toFixed(2)})</span></span>
                   )}
                 </span>
-                <span className="text-[10px] text-[#6b7099] font-sans">
+                <span className="text-[10px] text-[#38bdf8] font-semibold font-sans">
                   {levels.retest_label} {levels.retest_diff_pct != null && `(${levels.retest_diff_pct > 0 ? "+" : ""}${levels.retest_diff_pct}%)`}
                 </span>
               </div>
@@ -961,7 +961,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode === "retest" && levels.retest_risk_pct != null && (
               <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
-                Tighter risk from <span className="text-[#38bdf8] font-mono font-bold">${levels.retest_entry?.toFixed(2)}</span> entry
+                Tighter risk from PWL <span className="text-[#38bdf8] font-mono font-bold">${levels.retest_entry?.toFixed(2)}</span> entry
               </div>
             )}
           </div>
@@ -982,7 +982,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode === "retest" && levels.retest_rr_t1 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#1a2d24] text-[10px] text-emerald-400 font-sans flex items-center justify-between">
-                <span>Expanded Retest R/R:</span>
+                <span>Expanded PWL R/R:</span>
                 <span className="font-mono font-bold">1:{levels.retest_rr_t1?.toFixed(1)}</span>
               </div>
             )}
@@ -1004,7 +1004,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode === "retest" && levels.retest_rr_t2 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#152538] text-[10px] text-sky-400 font-sans flex items-center justify-between">
-                <span>Expanded Retest R/R:</span>
+                <span>Expanded PWL R/R:</span>
                 <span className="font-mono font-bold">1:{levels.retest_rr_t2?.toFixed(1)}</span>
               </div>
             )}
@@ -1044,6 +1044,15 @@ export default function DailyTradeChart({
                 <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dashed"></span>
                 <span>Target 2: ${levels.target2?.toFixed(2) ?? "—"}</span>
               </span>
+              {showRetestLine && levels.retest_entry != null && (
+                <>
+                  <span className="text-[#6b7099]">·</span>
+                  <span className="flex items-center gap-1.5 text-[#38bdf8]">
+                    <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dotted"></span>
+                    <span>PWL: ${levels.retest_entry?.toFixed(2)}</span>
+                  </span>
+                </>
+              )}
               {showSma && (
                 <>
                   <span className="text-[#6b7099]">·</span>
@@ -1093,9 +1102,20 @@ export default function DailyTradeChart({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[#8b949e]">
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
-            <b className="text-[#00e5a0] block mb-1">1. Entry Execution</b>
-            Buy in the zone <span className="font-mono text-white">${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}</span>.
-            Enter on intraday pullbacks or market open if holding above moving averages.
+            <b className="text-[#00e5a0] block mb-1">
+              {entryMode === "retest" ? "1. Prev Week Low (PWL) Entry" : "1. Breakout Trigger Entry"}
+            </b>
+            {entryMode === "retest" && levels.retest_entry != null ? (
+              <>
+                Buy retest dip near PWL <span className="font-mono text-[#38bdf8] font-bold">${levels.retest_entry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${levels.retest_zone_min?.toFixed(2)} – ${levels.retest_zone_max?.toFixed(2)}</span>).
+                Provides tighter risk (-{levels.retest_risk_pct?.toFixed(1)}%) vs breakout trigger.
+              </>
+            ) : (
+              <>
+                Buy in the zone <span className="font-mono text-white">${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}</span>.
+                Enter on intraday pullbacks or market open if holding above moving averages.
+              </>
+            )}
           </div>
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
             <b className="text-[#34d399] block mb-1">2. Target 1 Exit (Scale Out 50%)</b>
