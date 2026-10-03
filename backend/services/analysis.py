@@ -419,26 +419,71 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
     retest_zone_min = None
     retest_zone_max = None
     retest_label = "Previous Week Low"
+    pw_low = None
+    pw_hi = None
+    red_day_lows = []
+    green_day_highs = []
 
     if len(weeks) >= 2:
         prior_yw = weeks[-2]
         prior_week_df = df_copy[(df_copy["year"] == prior_yw[0]) & (df_copy["week"] == prior_yw[1])]
         if not prior_week_df.empty:
+            lowest_row = prior_week_df.sort_values(lo_col).iloc[0]
+            pw_low = round(float(lowest_row[lo_col]), 2)
+            highest_row = prior_week_df.sort_values(hi_col, ascending=False).iloc[0]
+            pw_hi = round(float(highest_row[hi_col]), 2)
+
+            for dt, row in prior_week_df.iterrows():
+                o_val = float(row[open_col])
+                c_val = float(row[close_col])
+                h_val = float(row[hi_col])
+                l_val = float(row[lo_col])
+                dt_str = dt.strftime('%b %d') if hasattr(dt, 'strftime') else str(dt)
+                day_name = dt.strftime('%a') if hasattr(dt, 'strftime') else ''
+                date_iso = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)
+
+                if c_val < o_val:
+                    diff = round(((l_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+                    red_day_lows.append({
+                        "date": date_iso,
+                        "date_label": dt_str,
+                        "day_name": day_name,
+                        "low": round(l_val, 2),
+                        "open": round(o_val, 2),
+                        "close": round(c_val, 2),
+                        "high": round(h_val, 2),
+                        "diff_pct": diff,
+                        "is_pwl": abs(round(l_val, 2) - pw_low) < 0.01,
+                        "zone_min": round(l_val * 0.995, 2),
+                        "zone_max": round(max(l_val * 1.01, min(c_val, l_val * 1.015)), 2),
+                    })
+                elif c_val > o_val:
+                    diff = round(((h_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+                    green_day_highs.append({
+                        "date": date_iso,
+                        "date_label": dt_str,
+                        "day_name": day_name,
+                        "high": round(h_val, 2),
+                        "open": round(o_val, 2),
+                        "close": round(c_val, 2),
+                        "low": round(l_val, 2),
+                        "diff_pct": diff,
+                        "is_pwh": abs(round(h_val, 2) - pw_hi) < 0.01,
+                        "zone_min": round(min(h_val * 0.99, max(c_val, h_val * 0.985)), 2),
+                        "zone_max": round(h_val * 1.005, 2),
+                    })
+
             if direction == "LONG":
-                lowest_row = prior_week_df.sort_values(lo_col).iloc[0]
-                pw_low = float(lowest_row[lo_col])
                 pw_cl = float(lowest_row[close_col])
                 dt_str = lowest_row.name.strftime('%b %d') if hasattr(lowest_row.name, 'strftime') else 'Prior Wk'
-                retest_entry = round(pw_low, 2)
+                retest_entry = pw_low
                 retest_zone_min = round(pw_low * 0.995, 2)
                 retest_zone_max = round(max(pw_low * 1.01, min(pw_cl, pw_low * 1.015)), 2)
                 retest_label = f"Previous Week Low ({dt_str})"
             else:
-                highest_row = prior_week_df.sort_values(hi_col, ascending=False).iloc[0]
-                pw_hi = float(highest_row[hi_col])
                 pw_cl = float(highest_row[close_col])
                 dt_str = highest_row.name.strftime('%b %d') if hasattr(highest_row.name, 'strftime') else 'Prior Wk'
-                retest_entry = round(pw_hi, 2)
+                retest_entry = pw_hi
                 retest_zone_min = round(min(pw_hi * 0.99, max(pw_cl, pw_hi * 0.985)), 2)
                 retest_zone_max = round(pw_hi * 1.005, 2)
                 retest_label = f"Previous Week High ({dt_str})"
@@ -448,12 +493,14 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
         if direction == "LONG":
             lo_val = float(df_copy[lo_col].iloc[-10:].min())
             retest_entry = round(lo_val, 2)
+            pw_low = retest_entry
             retest_zone_min = round(lo_val * 0.995, 2)
             retest_zone_max = round(lo_val * 1.01, 2)
             retest_label = "Previous Low (PWL)"
         else:
             hi_val = float(df_copy[hi_col].iloc[-10:].max())
             retest_entry = round(hi_val, 2)
+            pw_hi = retest_entry
             retest_zone_min = round(hi_val * 0.99, 2)
             retest_zone_max = round(hi_val * 1.005, 2)
             retest_label = "Previous High (PWH)"
@@ -462,8 +509,10 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
 
     return {
         "retest_entry": retest_entry,
-        "pw_low": retest_entry if direction == "LONG" else None,
-        "pw_high": retest_entry if direction == "SHORT" else None,
+        "pw_low": pw_low,
+        "pw_high": pw_hi,
+        "pw_red_day_lows": red_day_lows,
+        "pw_green_day_highs": green_day_highs,
         "retest_zone_min": retest_zone_min,
         "retest_zone_max": retest_zone_max,
         "retest_label": retest_label,
@@ -575,6 +624,8 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
         "retest_entry": r_entry,
         "pw_low": retest_info.get("pw_low"),
         "pw_high": retest_info.get("pw_high"),
+        "pw_red_day_lows": retest_info.get("pw_red_day_lows", []),
+        "pw_green_day_highs": retest_info.get("pw_green_day_highs", []),
         "retest_zone_min": retest_info.get("retest_zone_min"),
         "retest_zone_max": retest_info.get("retest_zone_max"),
         "retest_label": retest_info.get("retest_label"),

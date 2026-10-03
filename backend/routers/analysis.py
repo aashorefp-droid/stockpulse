@@ -630,6 +630,8 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "retest_entry": trade.get("retest_entry"),
                 "pw_low": trade.get("pw_low"),
                 "pw_high": trade.get("pw_high"),
+                "pw_red_day_lows": trade.get("pw_red_day_lows", []),
+                "pw_green_day_highs": trade.get("pw_green_day_highs", []),
                 "retest_zone_min": trade.get("retest_zone_min"),
                 "retest_zone_max": trade.get("retest_zone_max"),
                 "retest_label": trade.get("retest_label"),
