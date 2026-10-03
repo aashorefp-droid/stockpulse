@@ -97,11 +97,12 @@ def trigger_breakout_digest():
 
 
 @router.post("/run-exceptional")
+@router.post("/run-exceptional-scan")
 def trigger_exceptional_swing_digest():
-    """Manually trigger the post-market exceptional/V3 scanner digest."""
-    from backend.services.scheduler import exceptional_swing_digest_job
-    exceptional_swing_digest_job()
-    return {"status": "exceptional/V3 digest completed"}
+    """Manually trigger the EOD Multi-Timeframe Exceptional Scanner (Default + Momentum + Gmail TOS) alert."""
+    from backend.services.scheduler import eod_exceptional_scan_job
+    res = eod_exceptional_scan_job()
+    return {"status": "eod_exceptional_scan completed", "result": res}
 
 
 @router.post("/run-v3-refresh")

@@ -25,6 +25,8 @@ export default function StockAnalysisPage() {
   const [activeTab, setActiveTab] = useState<"exceptional" | "exceptional_bear" | "rank1" | "rank2" | "rank3" | "all">("rank1");
   const [tgTickers, setTgTickers] = useState<string[]>([]);
   const [tgPulling, setTgPulling] = useState(false);
+  const [exceptionalSending, setExceptionalSending] = useState(false);
+  const [exceptionalStatus, setExceptionalStatus] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const chartRef = useRef<HTMLDivElement | null>(null);
 
@@ -50,6 +52,65 @@ export default function StockAnalysisPage() {
       console.error(e);
     } finally {
       setTgPulling(false);
+    }
+  };
+
+  const handleLoadCombinedUniverse = async () => {
+    setTgPulling(true);
+    try {
+      // Pull TOS Gmail Watchlist
+      const tosRes = await fetch(`${API_BASE}/api/scanner/tos-email/status?days=2`);
+      const tosData = await tosRes.json().catch(() => ({ tickers: [] }));
+      const gmailList = Array.isArray(tosData?.tickers) ? tosData.tickers : [];
+
+      // Default 50 + Momentum leaders
+      const baseList = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD", "NFLX", "CRM",
+        "ORCL", "ADBE", "INTC", "PYPL", "SQ", "SHOP", "COIN", "UBER", "ABNB", "SNOW",
+        "BA", "CAT", "GS", "JPM", "V", "MA", "DIS", "NKE", "SBUX", "MCD",
+        "XOM", "CVX", "PFE", "JNJ", "UNH", "MRNA", "LLY", "ABBV", "BMY", "MRK",
+        "SPY", "QQQ", "DIA", "XLF", "XLE", "XLK", "ARKK", "SOXX", "SMH", "MRVL",
+        "AVGO", "ARM", "PLTR", "CRWD", "DDOG", "NET", "SMCI"
+      ];
+
+      const combined = Array.from(new Set([...baseList, ...gmailList]));
+      setTickersInput(combined.join(","));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setTgPulling(false);
+    }
+  };
+
+  const handleSendExceptionalTelegram = async () => {
+    setExceptionalSending(true);
+    setExceptionalStatus(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scanner/exceptional-alert`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          as_of: asOfDate || undefined,
+          send_telegram: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok && data.sent) {
+        setExceptionalStatus(
+          `Alert dispatched! ${data.total_scanned} scanned · ${data.exceptional_bull_count} bull · ${data.exceptional_bear_count} bear · ${data.stage2_curl_count} curls`
+        );
+      } else if (data.ok && !data.sent) {
+        setExceptionalStatus(`Scan complete (${data.total_scanned} tickers), but message not sent: ${data.errors?.join(", ") || "Telegram unconfigured"}`);
+      } else {
+        setExceptionalStatus(`Failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (e: any) {
+      setExceptionalStatus(`Error: ${e.message || "Request failed"}`);
+    } finally {
+      setExceptionalSending(false);
+      setTimeout(() => {
+        setExceptionalStatus(null);
+      }, 9000);
     }
   };
 
@@ -202,14 +263,25 @@ export default function StockAnalysisPage() {
               <label className="text-xs font-semibold text-[#6b7099] uppercase tracking-wider">
                 Tickers to Scan (comma-separated)
               </label>
-              <button
-                type="button"
-                onClick={handlePullTelegram}
-                disabled={tgPulling}
-                className="text-xs bg-[#1a1d2e] hover:bg-[#252a42] text-[#4d9fff] px-2.5 py-1 rounded border border-[#4d9fff]/30 transition-all"
-              >
-                {tgPulling ? "📱 Pulling..." : "📱 Pull Telegram"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoadCombinedUniverse}
+                  disabled={tgPulling}
+                  className="text-xs bg-[#1a2d3d] hover:bg-[#25394d] text-[#00e5a0] px-2.5 py-1 rounded border border-[#00e5a0]/30 transition-all font-semibold"
+                  title="Load Default 50 + Momentum + Gmail TOS alert tickers"
+                >
+                  ⚡ Load All Universe
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePullTelegram}
+                  disabled={tgPulling}
+                  className="text-xs bg-[#1a1d2e] hover:bg-[#252a42] text-[#4d9fff] px-2.5 py-1 rounded border border-[#4d9fff]/30 transition-all"
+                >
+                  {tgPulling ? "📱 Pulling..." : "📱 Pull Telegram"}
+                </button>
+              </div>
             </div>
             <textarea
               className="w-full bg-[#131625] border border-[#1a1d2e] rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-[#4d9fff] resize-none h-20"
@@ -479,12 +551,38 @@ export default function StockAnalysisPage() {
       {/* 3. MULTI-TIMEFRAME STRATEGY SCAN SECTION */}
       {scanResults.length > 0 && (
         <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-5 shadow-sm">
-          <div className="mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h2 className="text-base font-bold text-[#e8ecff] flex items-center gap-2">
               <span>🔬</span>
               <span>Stock Analysis — Multi-Timeframe Strategy Scan</span>
             </h2>
+            <button
+              type="button"
+              onClick={handleSendExceptionalTelegram}
+              disabled={exceptionalSending}
+              className="text-xs bg-gradient-to-r from-[#1a3d2e] to-[#122b20] hover:from-[#23523e] hover:to-[#1a3d2e] text-[#00e5a0] px-3.5 py-1.5 rounded-lg border border-[#00e5a0]/40 font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-[#00e5a0]/10 disabled:opacity-50"
+              title="Run EOD scan on Default 50 + Momentum + Gmail TOS and dispatch exceptional trade setups to Telegram"
+            >
+              {exceptionalSending ? (
+                <>
+                  <div className="w-3.5 h-3.5 border-2 border-[#00e5a0] border-t-transparent rounded-full animate-spin"></div>
+                  <span>Scanning & Sending Telegram...</span>
+                </>
+              ) : (
+                <>
+                  <span>📱</span>
+                  <span>Send Exceptional to Telegram</span>
+                </>
+              )}
+            </button>
           </div>
+
+          {exceptionalStatus && (
+            <div className="text-xs bg-[#13251c] text-[#00e5a0] border border-[#00e5a0]/40 px-3.5 py-2 rounded-lg mb-4 flex items-center gap-2 shadow-sm animate-fade-in">
+              <span>📱</span>
+              <span>{exceptionalStatus}</span>
+            </div>
+          )}
 
           <div className="bg-[#131625] border border-[#1a1d2e] rounded-lg p-3.5 mb-5 text-xs space-y-1.5">
             <div className="text-[#6b7099]">

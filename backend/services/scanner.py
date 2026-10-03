@@ -12,7 +12,7 @@ from typing import Iterator, Optional
 from backend.services.analysis import (
     full_score_pipeline, get_entry_grade, calc_trade_levels,
     compute_weekly_bias, compute_daily_bias, compute_4h_bias,
-    mtf_signal_action, get_fundamentals, _col,
+    mtf_signal_action, get_fundamentals, _col, generate_final_judgement,
 )
 from backend.services.market_data import get_daily_bars_alpaca
 from backend.services.options import get_options_strategy
@@ -280,6 +280,13 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
         except Exception:
             pass
 
+        # Final Judgement confluence
+        final_judgement = None
+        try:
+            final_judgement = generate_final_judgement(trade, vol_profile, verdict, grade, price)
+        except Exception:
+            pass
+
         return {
             "ticker":            ticker,
             "price":             price,
@@ -323,6 +330,11 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
             "poc":          vol_profile.get("poc"),
             "val":          vol_profile.get("val"),
             "vah":          vol_profile.get("vah"),
+            "hi_52":        vol_profile.get("hi_52"),
+            "lo_52":        vol_profile.get("lo_52"),
+            "dist_hi_52":   vol_profile.get("dist_hi_52"),
+            "dist_lo_52":   vol_profile.get("dist_lo_52"),
+            "final_judgement": final_judgement,
             "breakout_score": strategy_sig.get("breakout_score", 0),
             "dist_from_high": strategy_sig.get("dist_from_high", None),
             "short_pct":    short_pct,

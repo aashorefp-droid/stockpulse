@@ -956,6 +956,33 @@ def triad_best_picks_alert_job() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def eod_exceptional_scan_job() -> dict:
+    """
+    4:15 PM CST (Mon-Fri) — Dispatch the End-of-Day Multi-Timeframe Strategy Exceptional Scans to Telegram.
+    Scans the complete combined universe: Default 50 + Momentum + ThinkOrSwim (TOS) Gmail alerts.
+    Filters and formats Grade S/A setups, 30W Stage 2 Curls, Volume Profile confluence, and Options.
+    """
+    try:
+        from backend.services.exceptional_scanner import dispatch_exceptional_telegram_alert
+        logger.info("[scheduler] End-of-Day Exceptional Scan Job started (Default 50 + Momentum + Gmail TOS)...")
+        res = dispatch_exceptional_telegram_alert(send_msg=True)
+        bull_cnt = res.get("exceptional_bull_count", 0)
+        bear_cnt = res.get("exceptional_bear_count", 0)
+        curl_cnt = res.get("stage2_curl_count", 0)
+        logger.info(
+            f"[scheduler] EOD Exceptional Scan Job completed: sent={res.get('sent')} "
+            f"scanned={res.get('total_scanned')} bull={bull_cnt} bear={bear_cnt} curls={curl_cnt}"
+        )
+        return res
+    except Exception as e:
+        logger.error(f"[scheduler] EOD Exceptional Scan Job error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+# Alias for backwards compatibility with scheduler router
+exceptional_swing_digest_job = eod_exceptional_scan_job
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -1036,9 +1063,28 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # 4:15 PM CST (Mon-Fri) — EOD Market Close Exceptional Scans (Default + Momentum + Gmail TOS)
+    scheduler.add_job(
+        eod_exceptional_scan_job,
+        CronTrigger(hour=16, minute=15, day_of_week="mon-fri", timezone=CST),
+        id="eod_exceptional_scan",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # 7:45 PM CST (Mon-Fri) — Evening Post-TOS Exceptional Scans
+    scheduler.add_job(
+        eod_exceptional_scan_job,
+        CronTrigger(hour=19, minute=45, day_of_week="mon-fri", timezone=CST),
+        id="eod_exceptional_scan_evening",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info(
         "[scheduler] registered: default50_scan@8:00CST, "
         "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
         "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST, "
-        "tos_email_poll@19:15CST, triad_best_picks@19:30CST"
+        "eod_exceptional_scan@16:15CST, tos_email_poll@19:15CST, "
+        "triad_best_picks@19:30CST, eod_exceptional_evening@19:45CST"
     )
