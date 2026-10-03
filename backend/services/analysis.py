@@ -387,7 +387,7 @@ def get_entry_grade(score: int, confidence: str) -> dict:
 
 # ── Entry / Stop / Target levels ──────────────────────────────────────────────
 
-def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: float) -> dict:
+def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: float, as_of: Optional[str] = None) -> dict:
     """
     Computes the Retest Entry Zone based on Prior Week Red Day Low (for longs)
     or Prior Week Green Day High (for shorts), as well as multi-day swing pivot retest levels.
@@ -421,17 +421,88 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
     retest_label = "Previous Week Low"
     pw_low = None
     pw_hi = None
+    pw_latest_low = None
+    pw_latest_date = None
+    pw_latest_day = None
+    pw_latest_diff_pct = None
+    pw_latest_zone_min = None
+    pw_latest_zone_max = None
+    pw_latest_high = None
+    pw_latest_red_low = None
+    pw_latest_red_date = None
+    pw_latest_red_day = None
+    pw_latest_red_diff_pct = None
+    pw_latest_red_zone_min = None
+    pw_latest_red_zone_max = None
+    pw_latest_green_high = None
+    pw_range_label = None
     red_day_lows = []
     green_day_highs = []
 
-    if len(weeks) >= 2:
-        prior_yw = weeks[-2]
+    if len(weeks) >= 1:
+        # Determine whether the last week in daily_df is a completed week or an ongoing active week.
+        ref_dt = None
+        if as_of:
+            try:
+                ref_dt = pd.Timestamp(as_of)
+                if getattr(ref_dt, "tz", None) is not None:
+                    ref_dt = ref_dt.tz_localize(None)
+            except Exception:
+                ref_dt = None
+        if ref_dt is None:
+            last_bar_dt = pd.Timestamp(df_copy.index[-1])
+            if getattr(last_bar_dt, "tz", None) is not None:
+                last_bar_dt = last_bar_dt.tz_localize(None)
+            now_dt = pd.Timestamp.now()
+            # If last bar is within the last 5 days, reference is now; otherwise use last bar date (e.g. backtest slice)
+            if (now_dt - last_bar_dt).days <= 5:
+                ref_dt = now_dt
+            else:
+                ref_dt = last_bar_dt
+
+        # Check if ref_dt is weekend (Saturday=5, Sunday=6) or Friday post-market close (after 16:00 EST / 4 PM)
+        ref_weekday = ref_dt.weekday()
+        is_weekend_or_post_market = (ref_weekday in (5, 6)) or (ref_weekday == 4 and getattr(ref_dt, 'hour', 0) >= 16)
+
+        last_yw = weeks[-1]
+        try:
+            ref_iso = ref_dt.isocalendar()
+            ref_yw = [int(ref_iso.year), int(ref_iso.week)]
+        except Exception:
+            ref_yw = last_yw
+
+        if is_weekend_or_post_market:
+            # On the weekend or Friday post-market, the trading week that just concluded IS the prior week!
+            if last_yw == ref_yw or len(weeks) < 2:
+                prior_yw = last_yw
+            else:
+                prior_yw = weeks[-1]
+        else:
+            # During an active trading week (Mon-Fri pre-close):
+            # If the current active week already has bars in df_copy, take the previous completed week (weeks[-2])
+            if last_yw == ref_yw and len(weeks) >= 2:
+                prior_yw = weeks[-2]
+            else:
+                # Monday pre-market before any bars for current week exist: last week in df is the completed prior week
+                prior_yw = weeks[-1]
+
         prior_week_df = df_copy[(df_copy["year"] == prior_yw[0]) & (df_copy["week"] == prior_yw[1])]
         if not prior_week_df.empty:
+            pw_range_label = f"{prior_week_df.index[0].strftime('%b %d')} – {prior_week_df.index[-1].strftime('%b %d')}"
             lowest_row = prior_week_df.sort_values(lo_col).iloc[0]
             pw_low = round(float(lowest_row[lo_col]), 2)
             highest_row = prior_week_df.sort_values(hi_col, ascending=False).iloc[0]
             pw_hi = round(float(highest_row[hi_col]), 2)
+
+            latest_row = prior_week_df.iloc[-1]
+            pw_latest_low = round(float(latest_row[lo_col]), 2)
+            pw_latest_cl = float(latest_row[close_col])
+            pw_latest_date = latest_row.name.strftime('%b %d') if hasattr(latest_row.name, 'strftime') else 'Prior Wk'
+            pw_latest_day = latest_row.name.strftime('%a') if hasattr(latest_row.name, 'strftime') else ''
+            pw_latest_diff_pct = round(((pw_latest_low - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+            pw_latest_zone_min = round(pw_latest_low * 0.995, 2)
+            pw_latest_zone_max = round(max(pw_latest_low * 1.01, min(pw_latest_cl, pw_latest_low * 1.015)), 2)
+            pw_latest_high = round(float(latest_row[hi_col]), 2)
 
             for dt, row in prior_week_df.iterrows():
                 o_val = float(row[open_col])
@@ -473,6 +544,19 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
                         "zone_max": round(h_val * 1.005, 2),
                     })
 
+            latest_red = red_day_lows[-1] if red_day_lows else None
+            if latest_red:
+                pw_latest_red_low = latest_red["low"]
+                pw_latest_red_date = latest_red["date_label"]
+                pw_latest_red_day = latest_red["day_name"]
+                pw_latest_red_diff_pct = latest_red["diff_pct"]
+                pw_latest_red_zone_min = latest_red["zone_min"]
+                pw_latest_red_zone_max = latest_red["zone_max"]
+
+            latest_green = green_day_highs[-1] if green_day_highs else None
+            if latest_green:
+                pw_latest_green_high = latest_green["high"]
+
             if direction == "LONG":
                 pw_cl = float(lowest_row[close_col])
                 dt_str = lowest_row.name.strftime('%b %d') if hasattr(lowest_row.name, 'strftime') else 'Prior Wk'
@@ -494,6 +578,12 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
             lo_val = float(df_copy[lo_col].iloc[-10:].min())
             retest_entry = round(lo_val, 2)
             pw_low = retest_entry
+            pw_latest_low = retest_entry
+            pw_latest_date = "Prior Wk"
+            pw_latest_day = ""
+            pw_latest_diff_pct = 0.0
+            pw_latest_zone_min = round(lo_val * 0.995, 2)
+            pw_latest_zone_max = round(lo_val * 1.01, 2)
             retest_zone_min = round(lo_val * 0.995, 2)
             retest_zone_max = round(lo_val * 1.01, 2)
             retest_label = "Previous Low (PWL)"
@@ -501,6 +591,7 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
             hi_val = float(df_copy[hi_col].iloc[-10:].max())
             retest_entry = round(hi_val, 2)
             pw_hi = retest_entry
+            pw_latest_high = retest_entry
             retest_zone_min = round(hi_val * 0.99, 2)
             retest_zone_max = round(hi_val * 1.005, 2)
             retest_label = "Previous High (PWH)"
@@ -511,16 +602,31 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
         "retest_entry": retest_entry,
         "pw_low": pw_low,
         "pw_high": pw_hi,
+        "pw_latest_low": pw_latest_low,
+        "pw_latest_date": pw_latest_date,
+        "pw_latest_day": pw_latest_day,
+        "pw_latest_diff_pct": pw_latest_diff_pct,
+        "pw_latest_zone_min": pw_latest_zone_min,
+        "pw_latest_zone_max": pw_latest_zone_max,
+        "pw_latest_red_low": pw_latest_red_low,
+        "pw_latest_red_date": pw_latest_red_date,
+        "pw_latest_red_day": pw_latest_red_day,
+        "pw_latest_red_diff_pct": pw_latest_red_diff_pct,
+        "pw_latest_red_zone_min": pw_latest_red_zone_min,
+        "pw_latest_red_zone_max": pw_latest_red_zone_max,
+        "pw_latest_high": pw_latest_high,
+        "pw_latest_green_high": pw_latest_green_high,
         "pw_red_day_lows": red_day_lows,
         "pw_green_day_highs": green_day_highs,
         "retest_zone_min": retest_zone_min,
         "retest_zone_max": retest_zone_max,
         "retest_label": retest_label,
         "retest_diff_pct": retest_diff_pct,
+        "pw_range_label": pw_range_label,
     }
 
 
-def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float) -> dict:
+def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float, as_of: Optional[str] = None) -> dict:
     atr = calc_atr(daily_df)
     close_col = _col(daily_df, "close")
     hi_col    = _col(daily_df, "high")
@@ -586,7 +692,7 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
     risk_pct = round(abs(risk / entry) * 100, 2) if entry > 0 else None
 
     # Compute secondary Retest Entry Zone (Prior Week Red Day Low Retest)
-    retest_info = calc_retest_entry_zone(daily_df, verdict, current_price)
+    retest_info = calc_retest_entry_zone(daily_df, verdict, current_price, as_of=as_of)
     r_entry = retest_info.get("retest_entry")
     r_risk_pct = None
     r_rr1 = None
@@ -610,6 +716,52 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             r_t1_gain = round(((r_entry - t1) / r_entry) * 100, 1)
             r_t2_gain = round(((r_entry - t2) / r_entry) * 100, 1)
 
+    # Latest Low Metrics (Last week's most recent trading day low, e.g. Friday low)
+    lat_entry = retest_info.get("pw_latest_low")
+    lat_risk_pct = None
+    lat_rr1 = None
+    lat_rr2 = None
+    lat_t1_gain = None
+    lat_t2_gain = None
+    if lat_entry and lat_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            lat_risk = max(lat_entry - stop, atr * 0.4, lat_entry * 0.015)
+            lat_risk_pct = round((lat_risk / lat_entry) * 100, 1)
+            lat_rr1 = round((t1 - lat_entry) / lat_risk, 1) if lat_risk > 0 else 2.5
+            lat_rr2 = round((t2 - lat_entry) / lat_risk, 1) if lat_risk > 0 else 3.5
+            lat_t1_gain = round(((t1 - lat_entry) / lat_entry) * 100, 1)
+            lat_t2_gain = round(((t2 - lat_entry) / lat_entry) * 100, 1)
+        else:
+            lat_risk = max(stop - lat_entry, atr * 0.4, lat_entry * 0.015)
+            lat_risk_pct = round((lat_risk / lat_entry) * 100, 1)
+            lat_rr1 = round((lat_entry - t1) / lat_risk, 1) if lat_risk > 0 else 2.5
+            lat_rr2 = round((lat_entry - t2) / lat_risk, 1) if lat_risk > 0 else 3.5
+            lat_t1_gain = round(((lat_entry - t1) / lat_entry) * 100, 1)
+            lat_t2_gain = round(((lat_entry - t2) / lat_entry) * 100, 1)
+
+    # Latest Red Day Low Metrics (Most recent red day low of prior week)
+    red_entry = retest_info.get("pw_latest_red_low")
+    red_risk_pct = None
+    red_rr1 = None
+    red_rr2 = None
+    red_t1_gain = None
+    red_t2_gain = None
+    if red_entry and red_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            red_risk = max(red_entry - stop, atr * 0.4, red_entry * 0.015)
+            red_risk_pct = round((red_risk / red_entry) * 100, 1)
+            red_rr1 = round((t1 - red_entry) / red_risk, 1) if red_risk > 0 else 2.5
+            red_rr2 = round((t2 - red_entry) / red_risk, 1) if red_risk > 0 else 3.5
+            red_t1_gain = round(((t1 - red_entry) / red_entry) * 100, 1)
+            red_t2_gain = round(((t2 - red_entry) / red_entry) * 100, 1)
+        else:
+            red_risk = max(stop - red_entry, atr * 0.4, red_entry * 0.015)
+            red_risk_pct = round((red_risk / red_entry) * 100, 1)
+            red_rr1 = round((red_entry - t1) / red_risk, 1) if red_risk > 0 else 2.5
+            red_rr2 = round((red_entry - t2) / red_risk, 1) if red_risk > 0 else 3.5
+            red_t1_gain = round(((red_entry - t1) / red_entry) * 100, 1)
+            red_t2_gain = round(((red_entry - t2) / red_entry) * 100, 1)
+
     return {
         "entry": entry,
         "stop_loss": stop,
@@ -624,6 +776,30 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
         "retest_entry": r_entry,
         "pw_low": retest_info.get("pw_low"),
         "pw_high": retest_info.get("pw_high"),
+        "pw_latest_low": retest_info.get("pw_latest_low"),
+        "pw_latest_date": retest_info.get("pw_latest_date"),
+        "pw_latest_day": retest_info.get("pw_latest_day"),
+        "pw_latest_diff_pct": retest_info.get("pw_latest_diff_pct"),
+        "pw_latest_zone_min": retest_info.get("pw_latest_zone_min"),
+        "pw_latest_zone_max": retest_info.get("pw_latest_zone_max"),
+        "pw_latest_risk_pct": lat_risk_pct,
+        "pw_latest_rr_t1": lat_rr1,
+        "pw_latest_rr_t2": lat_rr2,
+        "pw_latest_t1_gain": lat_t1_gain,
+        "pw_latest_t2_gain": lat_t2_gain,
+        "pw_latest_red_low": retest_info.get("pw_latest_red_low"),
+        "pw_latest_red_date": retest_info.get("pw_latest_red_date"),
+        "pw_latest_red_day": retest_info.get("pw_latest_red_day"),
+        "pw_latest_red_diff_pct": retest_info.get("pw_latest_red_diff_pct"),
+        "pw_latest_red_zone_min": retest_info.get("pw_latest_red_zone_min"),
+        "pw_latest_red_zone_max": retest_info.get("pw_latest_red_zone_max"),
+        "pw_latest_red_risk_pct": red_risk_pct,
+        "pw_latest_red_rr_t1": red_rr1,
+        "pw_latest_red_rr_t2": red_rr2,
+        "pw_latest_red_t1_gain": red_t1_gain,
+        "pw_latest_red_t2_gain": red_t2_gain,
+        "pw_latest_high": retest_info.get("pw_latest_high"),
+        "pw_latest_green_high": retest_info.get("pw_latest_green_high"),
         "pw_red_day_lows": retest_info.get("pw_red_day_lows", []),
         "pw_green_day_highs": retest_info.get("pw_green_day_highs", []),
         "retest_zone_min": retest_info.get("retest_zone_min"),
@@ -635,6 +811,7 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
         "retest_rr_t2": r_rr2,
         "retest_t1_gain": r_t1_gain,
         "retest_t2_gain": r_t2_gain,
+        "pw_range_label": retest_info.get("pw_range_label"),
     }
 
 

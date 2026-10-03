@@ -43,7 +43,7 @@ export default function DailyTradeChart({
   const [showSma, setShowSma] = useState(true);
   const [showFuture, setShowFuture] = useState(false);
   const [showRetestLine, setShowRetestLine] = useState(true);
-  const [entryMode, setEntryMode] = useState<"trigger" | "retest">("trigger");
+  const [entryMode, setEntryMode] = useState<"trigger" | "latest_low" | "retest">("trigger");
   const [selectedRedDay, setSelectedRedDay] = useState<any>(null);
   const [showAllRedDayLines, setShowAllRedDayLines] = useState(true);
 
@@ -269,17 +269,21 @@ export default function DailyTradeChart({
         t2Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target2 })));
       }
 
-      // Retest Entry Line(s) (PWL & Prior Week Red Day Lows)
+      // Retest Entry Line(s) (Latest Low, PWL & Prior Week Red Day Lows)
       const pwRedDays = data.levels?.pw_red_day_lows || [];
-      const primaryRetestLevel = selectedRedDay?.low ?? data.levels?.retest_entry;
+      const latestLowVal = data.levels?.pw_latest_low;
+      const pwlVal = data.levels?.retest_entry;
+      const primaryRetestLevel = entryMode === "latest_low"
+        ? (latestLowVal ?? pwlVal)
+        : (selectedRedDay?.low ?? pwlVal);
 
       if (showRetestLine && lineBars.length > 0) {
         // Draw all other prior week red day lows as dashed coral support lines
         if (showAllRedDayLines && pwRedDays.length > 0) {
           pwRedDays.forEach((rd: any) => {
-            if (rd.low && Math.abs(rd.low - (primaryRetestLevel || 0)) > 0.01) {
+            if (rd.low && Math.abs(rd.low - (primaryRetestLevel || 0)) > 0.01 && (!latestLowVal || Math.abs(rd.low - latestLowVal) > 0.01)) {
               const rdLine = chart.addLineSeries({
-                color: "rgba(255, 77, 106, 0.5)",
+                color: "rgba(255, 77, 106, 0.45)",
                 lineWidth: 1,
                 lineStyle: LineStyle.Dashed,
                 title: `RED LOW $${rd.low} (${rd.date_label})`,
@@ -291,14 +295,43 @@ export default function DailyTradeChart({
           });
         }
 
-        // Draw primary active retest level (Dotted Bright Sky Blue)
-        if (primaryRetestLevel) {
-          const isPwl = selectedRedDay ? selectedRedDay.is_pwl : true;
-          const retestLine = chart.addLineSeries({
-            color: "#38bdf8",
-            lineWidth: 2,
+        // Draw Latest Low line as dashed gold reference if not primary
+        if (latestLowVal && entryMode !== "latest_low" && Math.abs(latestLowVal - (primaryRetestLevel || 0)) > 0.01) {
+          const latLine = chart.addLineSeries({
+            color: "rgba(245, 200, 66, 0.65)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            title: `LATEST LOW $${latestLowVal} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          latLine.setData(lineBars.map((b: any) => ({ time: b.time, value: latestLowVal })));
+        }
+
+        // Draw PWL line if entryMode is latest_low (so trader sees both key prior week levels)
+        if (entryMode === "latest_low" && pwlVal && Math.abs(pwlVal - (latestLowVal || 0)) > 0.01) {
+          const pwlLine = chart.addLineSeries({
+            color: "rgba(56, 189, 248, 0.65)",
+            lineWidth: 1,
             lineStyle: LineStyle.Dotted,
-            title: `${isPwl ? 'PWL' : 'RED LOW'} $${primaryRetestLevel}${selectedRedDay ? ` (${selectedRedDay.date_label})` : ''}`,
+            title: `PWL $${pwlVal}`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          pwlLine.setData(lineBars.map((b: any) => ({ time: b.time, value: pwlVal })));
+        }
+
+        // Draw primary active retest level
+        if (primaryRetestLevel) {
+          const isLatest = entryMode === "latest_low";
+          const isPwl = selectedRedDay ? selectedRedDay.is_pwl : !isLatest;
+          const retestLine = chart.addLineSeries({
+            color: isLatest ? "#f5c842" : "#38bdf8",
+            lineWidth: 2,
+            lineStyle: isLatest ? LineStyle.Solid : LineStyle.Dotted,
+            title: isLatest
+              ? `LATEST LOW $${primaryRetestLevel} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`
+              : `${isPwl ? 'PWL' : 'RED LOW'} $${primaryRetestLevel}${selectedRedDay ? ` (${selectedRedDay.date_label})` : ''}`,
             priceLineVisible: true,
             lastValueVisible: true,
           });
@@ -358,7 +391,7 @@ export default function DailyTradeChart({
       isMounted = false;
       chart?.remove();
     };
-  }, [viewMode, data, showSma, showFuture, showRetestLine, selectedRedDay, showAllRedDayLines]);
+  }, [viewMode, data, showSma, showFuture, showRetestLine, selectedRedDay, showAllRedDayLines, entryMode]);
 
   // Render TradingView Embed widget when selected
   useEffect(() => {
@@ -436,21 +469,45 @@ export default function DailyTradeChart({
 
   const pwRedDays: any[] = levels.pw_red_day_lows || [];
   const selectedRedDayLow = selectedRedDay?.low;
-  const activeRetestEntry = selectedRedDayLow != null ? selectedRedDayLow : levels.retest_entry;
-  const activeRetestZoneMin = selectedRedDay?.zone_min != null ? selectedRedDay.zone_min : levels.retest_zone_min;
-  const activeRetestZoneMax = selectedRedDay?.zone_max != null ? selectedRedDay.zone_max : levels.retest_zone_max;
-  const activeRetestLabel = selectedRedDay
-    ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Day Low`
-    : levels.retest_label;
-  const activeRetestDiffPct = selectedRedDay ? selectedRedDay.diff_pct : levels.retest_diff_pct;
 
-  let activeRetestRiskPct = levels.retest_risk_pct;
-  let activeRetestRrT1 = levels.retest_rr_t1;
-  let activeRetestRrT2 = levels.retest_rr_t2;
-  let activeRetestT1Gain = levels.retest_t1_gain;
-  let activeRetestT2Gain = levels.retest_t2_gain;
+  let activeRetestEntry = levels.entry;
+  let activeRetestZoneMin = levels.entry_zone_min;
+  let activeRetestZoneMax = levels.entry_zone_max;
+  let activeRetestLabel = "Breakout Trigger Entry";
+  let activeRetestDiffPct = 0;
+  let activeRetestRiskPct = levels.risk_pct;
+  let activeRetestRrT1 = levels.rr_t1;
+  let activeRetestRrT2 = levels.rr_t2;
+  let activeRetestT1Gain = levels.target1_gain_pct;
+  let activeRetestT2Gain = levels.target2_gain_pct;
 
-  if (activeRetestEntry && levels.stop_loss && levels.target1 && levels.target2) {
+  if (entryMode === "latest_low" && levels.pw_latest_low != null) {
+    activeRetestEntry = levels.pw_latest_low;
+    activeRetestZoneMin = levels.pw_latest_zone_min;
+    activeRetestZoneMax = levels.pw_latest_zone_max;
+    activeRetestLabel = `Last Week Latest Low (${levels.pw_latest_date ?? "Prior Wk"}${levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""})`;
+    activeRetestDiffPct = levels.pw_latest_diff_pct ?? 0;
+    activeRetestRiskPct = levels.pw_latest_risk_pct;
+    activeRetestRrT1 = levels.pw_latest_rr_t1;
+    activeRetestRrT2 = levels.pw_latest_rr_t2;
+    activeRetestT1Gain = levels.pw_latest_t1_gain;
+    activeRetestT2Gain = levels.pw_latest_t2_gain;
+  } else if (entryMode === "retest") {
+    activeRetestEntry = selectedRedDayLow != null ? selectedRedDayLow : levels.retest_entry;
+    activeRetestZoneMin = selectedRedDay?.zone_min != null ? selectedRedDay.zone_min : levels.retest_zone_min;
+    activeRetestZoneMax = selectedRedDay?.zone_max != null ? selectedRedDay.zone_max : levels.retest_zone_max;
+    activeRetestLabel = selectedRedDay
+      ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Day Low`
+      : levels.retest_label;
+    activeRetestDiffPct = selectedRedDay ? selectedRedDay.diff_pct : (levels.retest_diff_pct ?? 0);
+    activeRetestRiskPct = levels.retest_risk_pct;
+    activeRetestRrT1 = levels.retest_rr_t1;
+    activeRetestRrT2 = levels.retest_rr_t2;
+    activeRetestT1Gain = levels.retest_t1_gain;
+    activeRetestT2Gain = levels.retest_t2_gain;
+  }
+
+  if (activeRetestEntry && levels.stop_loss && levels.target1 && levels.target2 && entryMode !== "trigger") {
     const atrBuffer = (levels.atr || 1) * 0.4;
     const rRisk = Math.max(activeRetestEntry - levels.stop_loss, atrBuffer, activeRetestEntry * 0.015);
     activeRetestRiskPct = Math.round((rRisk / activeRetestEntry) * 1000) / 10;
@@ -908,32 +965,48 @@ export default function DailyTradeChart({
             <div>
               <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
                 <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
-                {levels.retest_entry != null ? (
+                {levels.retest_entry != null || levels.pw_latest_low != null ? (
                   <div className="flex items-center gap-1 bg-[#0a0b14] p-0.5 rounded border border-[#1a1d2e]">
                     <button
                       type="button"
-                      onClick={() => setEntryMode("trigger")}
+                      onClick={() => { setEntryMode("trigger"); setSelectedRedDay(null); }}
                       className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
                         entryMode === "trigger"
-                          ? "bg-[#00e5a0] text-black shadow-sm"
+                          ? "bg-[#00e5a0] text-black shadow-sm font-extrabold"
                           : "text-[#6b7099] hover:text-white"
                       }`}
                       title="Trigger entry at current breakout price"
                     >
                       Trigger
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => setEntryMode("retest")}
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
-                        entryMode === "retest"
-                          ? "bg-[#38bdf8] text-black shadow-sm"
-                          : "text-[#6b7099] hover:text-[#38bdf8]"
-                      }`}
-                      title="Retest dip entry at Previous Week Low (PWL)"
-                    >
-                      🔄 Prev Week Low
-                    </button>
+                    {levels.pw_latest_low != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("latest_low"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "latest_low"
+                            ? "bg-[#f5c842] text-black shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#f5c842]"
+                        }`}
+                        title={`Retest Last Week Latest Day Low: $${levels.pw_latest_low?.toFixed(2)} (${levels.pw_latest_date} ${levels.pw_latest_day})`}
+                      >
+                        ⚡ Latest Low
+                      </button>
+                    )}
+                    {levels.retest_entry != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("retest"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "retest" && !selectedRedDay
+                            ? "bg-[#38bdf8] text-black shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#38bdf8]"
+                        }`}
+                        title="Retest dip entry at Previous Week Low (PWL)"
+                      >
+                        ★ PWL Low
+                      </button>
+                    )}
                   </div>
                 ) : (
                   <span className="text-[#00e5a0]">🟢 TRIGGER</span>
@@ -942,11 +1015,18 @@ export default function DailyTradeChart({
 
               <div className="flex items-baseline justify-between">
                 <div>
-                  <div className={`text-2xl font-mono font-extrabold ${entryMode === "retest" ? "text-[#38bdf8]" : "text-[#00e5a0]"}`}>
-                    ${(entryMode === "retest" && activeRetestEntry != null ? activeRetestEntry : levels.entry)?.toFixed(2)}
+                  <div className={`text-2xl font-mono font-extrabold ${
+                    entryMode === "latest_low" ? "text-[#f5c842]" :
+                    entryMode === "retest" ? "text-[#38bdf8]" : "text-[#00e5a0]"
+                  }`}>
+                    ${(entryMode !== "trigger" && activeRetestEntry != null ? activeRetestEntry : levels.entry)?.toFixed(2)}
                   </div>
                   <div className="text-[11px] font-mono mt-0.5">
-                    {entryMode === "retest" && activeRetestZoneMin != null ? (
+                    {entryMode === "latest_low" && activeRetestZoneMin != null ? (
+                      <span className="text-[#f5c842]/90 font-medium">
+                        Latest Low Zone: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
+                      </span>
+                    ) : entryMode === "retest" && activeRetestZoneMin != null ? (
                       <span className="text-[#38bdf8]/90 font-medium">
                         {selectedRedDay ? `${selectedRedDay.date_label} Zone` : "PWL Zone"}: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
                       </span>
@@ -958,46 +1038,52 @@ export default function DailyTradeChart({
                   </div>
                 </div>
 
-                {levels.retest_entry != null && (
-                  <div className="text-right">
-                    <button
-                      type="button"
-                      onClick={() => setEntryMode(entryMode === "trigger" ? "retest" : "trigger")}
-                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider inline-flex items-center gap-0.5 transition-all ${
-                        entryMode === "retest"
-                          ? "bg-[#00e5a0]/20 text-[#00e5a0] border-[#00e5a0]/40"
-                          : "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 hover:bg-[#13374d]"
-                      }`}
-                      title={entryMode === "retest" ? "Switch to Breakout Trigger Entry" : "Switch to Prev Week Low (PWL) Entry"}
-                    >
-                      {entryMode === "retest" ? "⚡ Trigger Mode" : "🔄 Prev Week Low"}
-                    </button>
-                    <div className="text-[11px] font-mono font-bold mt-1 text-slate-400">
-                      {entryMode === "retest"
-                        ? `Trig: $${levels.entry?.toFixed(2)}`
-                        : `PWL: $${levels.retest_entry?.toFixed(2)}`}
-                    </div>
+                <div className="text-right">
+                  {entryMode === "latest_low" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#f5c842]/40 bg-[#f5c842]/20 text-[#f5c842] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ⚡ Latest Low
+                    </span>
+                  ) : entryMode === "retest" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#38bdf8]/40 bg-[#38bdf8]/20 text-[#38bdf8] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ★ {selectedRedDay ? "Red Low" : "PWL Low"}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#00e5a0]/40 bg-[#00e5a0]/20 text-[#00e5a0] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      🟢 Trigger
+                    </span>
+                  )}
+                  <div className="text-[11px] font-mono font-bold mt-1 text-slate-400">
+                    {entryMode === "trigger"
+                      ? (levels.pw_latest_low ? `Lat: $${levels.pw_latest_low?.toFixed(2)}` : (levels.retest_entry ? `PWL: $${levels.retest_entry?.toFixed(2)}` : ""))
+                      : `Trig: $${levels.entry?.toFixed(2)}`}
                   </div>
-                )}
+                </div>
               </div>
             </div>
 
-            {activeRetestZoneMin != null && activeRetestZoneMax != null && (
-              <div className="mt-2.5 pt-2 border-t border-[#1a2d26] text-[11px] font-mono flex flex-wrap items-center justify-between gap-1">
-                <span className="text-slate-300">
-                  {entryMode === "retest" ? (
-                    <span className="text-[#38bdf8] font-bold">
-                      ★ {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Low Active` : "Prev Week Low Active"}
-                    </span>
-                  ) : (
-                    <span>Prev Week Low: <b className="text-[#38bdf8] font-mono">${levels.retest_entry?.toFixed(2)}</b> <span className="text-[10px] text-slate-400">(${levels.retest_zone_min?.toFixed(2)}–${levels.retest_zone_max?.toFixed(2)})</span></span>
-                  )}
-                </span>
-                <span className="text-[10px] text-[#38bdf8] font-semibold font-sans">
-                  {activeRetestLabel} {activeRetestDiffPct != null && `(${activeRetestDiffPct > 0 ? "+" : ""}${activeRetestDiffPct}%)`}
-                </span>
-              </div>
-            )}
+            <div className="mt-2.5 pt-2 border-t border-[#1a2d26] text-[11px] font-mono flex flex-wrap items-center justify-between gap-1">
+              <span className="text-slate-300">
+                {entryMode === "latest_low" ? (
+                  <span className="text-[#f5c842] font-bold">
+                    ⚡ {activeRetestLabel} Active
+                  </span>
+                ) : entryMode === "retest" ? (
+                  <span className="text-[#38bdf8] font-bold">
+                    ★ {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Low Active` : "Prev Week Low Active"}
+                  </span>
+                ) : (
+                  <span>
+                    PWL: <b className="text-[#38bdf8] font-mono">${levels.retest_entry?.toFixed(2)}</b>
+                    {levels.pw_latest_low != null && (
+                      <span className="ml-1.5 text-slate-400">· Latest: <b className="text-[#f5c842] font-mono">${levels.pw_latest_low?.toFixed(2)}</b></span>
+                    )}
+                  </span>
+                )}
+              </span>
+              <span className={`text-[10px] font-semibold font-sans ${entryMode === "latest_low" ? "text-[#f5c842]" : entryMode === "retest" ? "text-[#38bdf8]" : "text-slate-400"}`}>
+                {activeRetestDiffPct != null && activeRetestDiffPct !== 0 && `(${activeRetestDiffPct > 0 ? "+" : ""}${activeRetestDiffPct}%)`}
+              </span>
+            </div>
           </div>
 
           {/* Protective Stop Loss */}
@@ -1011,12 +1097,12 @@ export default function DailyTradeChart({
                 ${levels.stop_loss?.toFixed(2)}
               </div>
               <div className="text-[11px] text-[#ff4d6a]/80 mt-1 font-mono">
-                Risk: -{(entryMode === "retest" && activeRetestRiskPct != null ? activeRetestRiskPct : levels.risk_pct)?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
+                Risk: -{(entryMode !== "trigger" && activeRetestRiskPct != null ? activeRetestRiskPct : levels.risk_pct)?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
               </div>
             </div>
-            {entryMode === "retest" && activeRetestRiskPct != null && (
+            {entryMode !== "trigger" && activeRetestRiskPct != null && (
               <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
-                Tighter risk from {selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL"} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
+                Tighter risk from {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL")} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
               </div>
             )}
           </div>
@@ -1026,18 +1112,18 @@ export default function DailyTradeChart({
             <div>
               <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
                 <span>Target 1 (Primary Exit)</span>
-                <span className="text-[#34d399]">🎯 {(entryMode === "retest" && activeRetestRrT1 != null ? activeRetestRrT1 : levels.rr_t1)?.toFixed(1)}R</span>
+                <span className="text-[#34d399]">🎯 {(entryMode !== "trigger" && activeRetestRrT1 != null ? activeRetestRrT1 : levels.rr_t1)?.toFixed(1)}R</span>
               </div>
               <div className="text-2xl font-mono font-extrabold text-[#34d399]">
                 ${levels.target1?.toFixed(2)}
               </div>
               <div className="text-[11px] text-[#34d399]/80 mt-1 font-mono">
-                +{(entryMode === "retest" && activeRetestT1Gain != null ? activeRetestT1Gain : levels.target1_gain_pct)?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
+                +{(entryMode !== "trigger" && activeRetestT1Gain != null ? activeRetestT1Gain : levels.target1_gain_pct)?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
               </div>
             </div>
-            {entryMode === "retest" && activeRetestRrT1 != null && (
+            {entryMode !== "trigger" && activeRetestRrT1 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#1a2d24] text-[10px] text-emerald-400 font-sans flex items-center justify-between">
-                <span>Expanded {selectedRedDay ? "Red Low" : "PWL"} R/R:</span>
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
                 <span className="font-mono font-bold">1:{activeRetestRrT1?.toFixed(1)}</span>
               </div>
             )}
@@ -1048,18 +1134,18 @@ export default function DailyTradeChart({
             <div>
               <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
                 <span>Target 2 (Runner Exit)</span>
-                <span className="text-[#38bdf8]">🚀 {(entryMode === "retest" && activeRetestRrT2 != null ? activeRetestRrT2 : levels.rr_t2)?.toFixed(1)}R</span>
+                <span className="text-[#38bdf8]">🚀 {(entryMode !== "trigger" && activeRetestRrT2 != null ? activeRetestRrT2 : levels.rr_t2)?.toFixed(1)}R</span>
               </div>
               <div className="text-2xl font-mono font-extrabold text-[#38bdf8]">
                 ${levels.target2?.toFixed(2)}
               </div>
               <div className="text-[11px] text-[#38bdf8]/80 mt-1 font-mono">
-                +{(entryMode === "retest" && activeRetestT2Gain != null ? activeRetestT2Gain : levels.target2_gain_pct)?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
+                +{(entryMode !== "trigger" && activeRetestT2Gain != null ? activeRetestT2Gain : levels.target2_gain_pct)?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
               </div>
             </div>
-            {entryMode === "retest" && activeRetestRrT2 != null && (
+            {entryMode !== "trigger" && activeRetestRrT2 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#152538] text-[10px] text-sky-400 font-sans flex items-center justify-between">
-                <span>Expanded {selectedRedDay ? "Red Low" : "PWL"} R/R:</span>
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
                 <span className="font-mono font-bold">1:{activeRetestRrT2?.toFixed(1)}</span>
               </div>
             )}
@@ -1067,19 +1153,76 @@ export default function DailyTradeChart({
         </div>
       )}
 
-      {/* ── Prior Week Red Day Lows Shelf ──────────────────────────── */}
-      {pwRedDays && pwRedDays.length > 0 && (
+      {/* ── Prior Week Lows Shelf (Latest Low, PWL & Red Days) ──────────── */}
+      {(levels.pw_latest_low != null || levels.retest_entry != null || (pwRedDays && pwRedDays.length > 0)) && (
         <div className="bg-[#09111e] border-b border-[#1a2d3d] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-[#38bdf8] font-bold uppercase tracking-wider flex items-center gap-1.5 text-xs">
               <span>📅</span>
-              <span>Prior Week Red Day Lows ({pwRedDays.length}):</span>
+              <span>Prior Week Lows{levels.pw_range_label ? ` (${levels.pw_range_label})` : ""}:</span>
             </span>
             <div className="flex flex-wrap items-center gap-2">
+              {/* 1. Last Week Latest Day Low Pill */}
+              {levels.pw_latest_low != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("latest_low");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "latest_low"
+                      ? "bg-[#f5c842] text-black font-extrabold border-[#f5c842] shadow-md shadow-[#f5c842]/30 ring-1 ring-[#f5c842]"
+                      : "bg-[#1f1a0e] text-[#f5c842] hover:text-white border-[#4d3e14] hover:border-[#f5c842]/60"
+                  }`}
+                  title={`Set entry to Last Week Latest Day Low: $${levels.pw_latest_low?.toFixed(2)} (${levels.pw_latest_date} ${levels.pw_latest_day})`}
+                >
+                  <span>⚡</span>
+                  <span className="font-semibold">Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}):</span>
+                  <span className="font-bold">${levels.pw_latest_low?.toFixed(2)}</span>
+                  {levels.pw_latest_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "latest_low" ? "text-slate-900 font-bold" : "text-slate-400"}`}>
+                      ({levels.pw_latest_diff_pct > 0 ? "+" : ""}{levels.pw_latest_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "latest_low" ? "bg-black text-[#f5c842]" : "bg-[#f5c842]/20 text-[#f5c842]"}`}>
+                    LATEST
+                  </span>
+                </button>
+              )}
+
+              {/* 2. Absolute Lowest Low (PWL) Pill */}
+              {levels.retest_entry != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("retest");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "retest" && !selectedRedDay
+                      ? "bg-[#38bdf8] text-black font-extrabold border-[#38bdf8] shadow-md shadow-[#38bdf8]/30 ring-1 ring-[#38bdf8]"
+                      : "bg-[#131d2e] text-[#38bdf8] hover:text-white border-[#1e344d] hover:border-[#38bdf8]/60"
+                  }`}
+                  title={`Set entry to Absolute Lowest Low of Prior Week (PWL): $${levels.retest_entry?.toFixed(2)}`}
+                >
+                  <span>★</span>
+                  <span className="font-semibold">PWL (Lowest):</span>
+                  <span className="font-bold">${levels.retest_entry?.toFixed(2)}</span>
+                  {levels.retest_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "retest" && !selectedRedDay ? "text-slate-900 font-bold" : "text-slate-400"}`}>
+                      ({levels.retest_diff_pct > 0 ? "+" : ""}{levels.retest_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "retest" && !selectedRedDay ? "bg-black text-[#38bdf8]" : "bg-[#38bdf8]/30 text-[#38bdf8]"}`}>
+                    PWL
+                  </span>
+                </button>
+              )}
+
+              {/* 3. Individual Prior Week Red Day Lows */}
               {pwRedDays.map((rd: any) => {
-                const isSelected = entryMode === "retest" && (
-                  selectedRedDay ? selectedRedDay.date === rd.date : (rd.is_pwl || rd.low === levels.retest_entry)
-                );
+                const isSelected = entryMode === "retest" && selectedRedDay && selectedRedDay.date === rd.date;
                 return (
                   <button
                     key={rd.date}
@@ -1090,19 +1233,19 @@ export default function DailyTradeChart({
                     }}
                     className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
                       isSelected
-                        ? "bg-[#38bdf8] text-black font-bold border-[#38bdf8] shadow-md shadow-[#38bdf8]/30 ring-1 ring-[#38bdf8]"
-                        : "bg-[#131d2e] text-slate-200 hover:text-white border-[#1e344d] hover:border-[#38bdf8]/60"
+                        ? "bg-[#ff4d6a] text-white font-extrabold border-[#ff4d6a] shadow-md shadow-[#ff4d6a]/30 ring-1 ring-[#ff4d6a]"
+                        : "bg-[#1a1215] text-slate-200 hover:text-white border-[#381a20] hover:border-[#ff4d6a]/60"
                     }`}
                     title={`Click to set entry to ${rd.date_label} (${rd.day_name}) Red Day Low: $${rd.low?.toFixed(2)}`}
                   >
-                    <span className={isSelected ? "text-black" : "text-[#ff4d6a]"}>🔴</span>
+                    <span className={isSelected ? "text-white" : "text-[#ff4d6a]"}>🔴</span>
                     <span className="font-semibold">{rd.date_label} ({rd.day_name}):</span>
                     <span className="font-bold">${rd.low?.toFixed(2)}</span>
-                    <span className={`text-[10px] ${isSelected ? "text-slate-900" : "text-slate-400"}`}>
+                    <span className={`text-[10px] ${isSelected ? "text-slate-100 font-bold" : "text-slate-400"}`}>
                       ({rd.diff_pct > 0 ? "+" : ""}{rd.diff_pct}%)
                     </span>
                     {rd.is_pwl && (
-                      <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${isSelected ? "bg-black text-[#38bdf8]" : "bg-[#38bdf8]/30 text-[#38bdf8]"}`}>
+                      <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${isSelected ? "bg-white text-black" : "bg-[#38bdf8]/30 text-[#38bdf8]"}`}>
                         PWL
                       </span>
                     )}
@@ -1122,13 +1265,16 @@ export default function DailyTradeChart({
               />
               <span>Show all on chart</span>
             </label>
-            {selectedRedDay && (
+            {(selectedRedDay || entryMode !== "trigger") && (
               <button
                 type="button"
-                onClick={() => setSelectedRedDay(null)}
-                className="text-[#6b7099] hover:text-[#38bdf8] underline"
+                onClick={() => {
+                  setSelectedRedDay(null);
+                  setEntryMode("trigger");
+                }}
+                className="text-[#6b7099] hover:text-[#00e5a0] underline"
               >
-                Reset to PWL
+                Reset to Trigger
               </button>
             )}
           </div>
@@ -1167,13 +1313,26 @@ export default function DailyTradeChart({
                 <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dashed"></span>
                 <span>Target 2: ${levels.target2?.toFixed(2) ?? "—"}</span>
               </span>
-              {showRetestLine && activeRetestEntry != null && (
+              {showRetestLine && (
                 <>
-                  <span className="text-[#6b7099]">·</span>
-                  <span className="flex items-center gap-1.5 text-[#38bdf8]">
-                    <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dotted"></span>
-                    <span>{selectedRedDay ? (selectedRedDay.is_pwl ? "PWL" : `Red Low (${selectedRedDay.date_label})`) : "PWL"}: ${activeRetestEntry?.toFixed(2)}</span>
-                  </span>
+                  {levels.pw_latest_low != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#f5c842]">
+                        <span className="w-2.5 h-0.5 bg-[#f5c842] rounded border-b border-dashed"></span>
+                        <span>Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}): ${levels.pw_latest_low?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
+                  {levels.retest_entry != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#38bdf8]">
+                        <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dotted"></span>
+                        <span>{selectedRedDay ? (selectedRedDay.is_pwl ? "PWL" : `Red Low (${selectedRedDay.date_label})`) : "PWL"}: ${(selectedRedDay?.low ?? levels.retest_entry)?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
                 </>
               )}
               {showSma && (
@@ -1225,12 +1384,25 @@ export default function DailyTradeChart({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[#8b949e]">
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
-            <b className="text-[#00e5a0] block mb-1">
-              {entryMode === "retest"
-                ? `1. ${selectedRedDay ? `${selectedRedDay.date_label} Red Day Low` : "Prev Week Low (PWL)"} Entry`
-                : "1. Breakout Trigger Entry"}
-            </b>
-            {entryMode === "retest" && activeRetestEntry != null ? (
+            {entryMode === "latest_low" ? (
+              <b className="text-[#f5c842] block mb-1">
+                1. Last Week Latest Low Entry ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""})
+              </b>
+            ) : entryMode === "retest" ? (
+              <b className="text-[#38bdf8] block mb-1">
+                1. {selectedRedDay ? `${selectedRedDay.date_label} Red Day Low` : "Prev Week Low (PWL)"} Entry
+              </b>
+            ) : (
+              <b className="text-[#00e5a0] block mb-1">
+                1. Breakout Trigger Entry
+              </b>
+            )}
+            {entryMode === "latest_low" && activeRetestEntry != null ? (
+              <>
+                Buy shallow pullback near Last Week Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}) <span className="font-mono text-[#f5c842] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
+                Provides earlier retest support entry with tighter risk (-{activeRetestRiskPct?.toFixed(1)}%) vs breakout trigger.
+              </>
+            ) : entryMode === "retest" && activeRetestEntry != null ? (
               <>
                 Buy retest dip near {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Day Low` : "PWL"} <span className="font-mono text-[#38bdf8] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
                 Provides tighter risk (-{activeRetestRiskPct?.toFixed(1)}%) vs breakout trigger.

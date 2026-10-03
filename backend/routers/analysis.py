@@ -474,7 +474,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         scored = _safe(full_score_pipeline, {"verdict": "NEUTRAL", "confidence": "N/A", "score": 0}, df_hist)
         verdict = scored.get("verdict", "NEUTRAL")
         direction = "SHORT" if verdict in ("BEARISH", "LEAN BEARISH") else "LONG"
-        trade = _safe(calc_trade_levels, _EMPTY_TRADE, df_hist, verdict, cur_price)
+        trade = _safe(calc_trade_levels, _EMPTY_TRADE, df_hist, verdict, cur_price, as_of)
         sr = _safe(calc_support_resistance, {"support": [], "resistance": []}, df_hist, cur_price)
 
         vol_profile = scored.get("vol_profile") or {}
@@ -630,6 +630,30 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "retest_entry": trade.get("retest_entry"),
                 "pw_low": trade.get("pw_low"),
                 "pw_high": trade.get("pw_high"),
+                "pw_latest_low": trade.get("pw_latest_low"),
+                "pw_latest_date": trade.get("pw_latest_date"),
+                "pw_latest_day": trade.get("pw_latest_day"),
+                "pw_latest_diff_pct": trade.get("pw_latest_diff_pct"),
+                "pw_latest_zone_min": trade.get("pw_latest_zone_min"),
+                "pw_latest_zone_max": trade.get("pw_latest_zone_max"),
+                "pw_latest_risk_pct": trade.get("pw_latest_risk_pct"),
+                "pw_latest_rr_t1": trade.get("pw_latest_rr_t1"),
+                "pw_latest_rr_t2": trade.get("pw_latest_rr_t2"),
+                "pw_latest_t1_gain": trade.get("pw_latest_t1_gain"),
+                "pw_latest_t2_gain": trade.get("pw_latest_t2_gain"),
+                "pw_latest_red_low": trade.get("pw_latest_red_low"),
+                "pw_latest_red_date": trade.get("pw_latest_red_date"),
+                "pw_latest_red_day": trade.get("pw_latest_red_day"),
+                "pw_latest_red_diff_pct": trade.get("pw_latest_red_diff_pct"),
+                "pw_latest_red_zone_min": trade.get("pw_latest_red_zone_min"),
+                "pw_latest_red_zone_max": trade.get("pw_latest_red_zone_max"),
+                "pw_latest_red_risk_pct": trade.get("pw_latest_red_risk_pct"),
+                "pw_latest_red_rr_t1": trade.get("pw_latest_red_rr_t1"),
+                "pw_latest_red_rr_t2": trade.get("pw_latest_red_rr_t2"),
+                "pw_latest_red_t1_gain": trade.get("pw_latest_red_t1_gain"),
+                "pw_latest_red_t2_gain": trade.get("pw_latest_red_t2_gain"),
+                "pw_latest_high": trade.get("pw_latest_high"),
+                "pw_latest_green_high": trade.get("pw_latest_green_high"),
                 "pw_red_day_lows": trade.get("pw_red_day_lows", []),
                 "pw_green_day_highs": trade.get("pw_green_day_highs", []),
                 "retest_zone_min": trade.get("retest_zone_min"),
@@ -641,6 +665,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "retest_rr_t2": trade.get("retest_rr_t2"),
                 "retest_t1_gain": trade.get("retest_t1_gain"),
                 "retest_t2_gain": trade.get("retest_t2_gain"),
+                "pw_range_label": trade.get("pw_range_label"),
             },
             "support_resistance": sr,
             "markers": markers,
