@@ -268,9 +268,19 @@ def _format_ticker_card(item: Dict[str, Any], is_tier2: bool = False) -> str:
         f"🧭 <b>MTF Align:</b> {mtf_sig} (W: {w_bias} | D: {d_bias} | 4H: {h4_bias} | 30MA: {ma_bias})",
     ]
 
+    # Retest Entry Zone
+    retest_entry = item.get("retest_entry")
+    retest_min = item.get("retest_zone_min")
+    retest_max = item.get("retest_zone_max")
+    retest_label = item.get("retest_label")
+    retest_diff = item.get("retest_diff_pct")
+
     # Trade Plan
     plan_lines = ["🎯 <b>Trade Plan:</b>"]
-    plan_lines.append(f"  • Entry: <code>${entry:.2f}</code>")
+    plan_lines.append(f"  • Trigger Entry: <code>${entry:.2f}</code>")
+    if retest_entry and retest_min and retest_max:
+        diff_str = f" ({retest_diff:+.1f}%)" if retest_diff is not None else ""
+        plan_lines.append(f"  • 🔄 Retest Zone: <code>${retest_min:.2f}–${retest_max:.2f}</code> · <i>{retest_label}</i>{diff_str}")
     if stop:
         risk_str = f" ({risk_pct:.1f}% risk)" if risk_pct is not None else ""
         plan_lines.append(f"  • Stop Loss: <code>${stop:.2f}</code>{risk_str}")

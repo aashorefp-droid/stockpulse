@@ -42,6 +42,8 @@ export default function DailyTradeChart({
   const [viewMode, setViewMode] = useState<"levels" | "embed" | "finviz">("levels");
   const [showSma, setShowSma] = useState(true);
   const [showFuture, setShowFuture] = useState(false);
+  const [showRetestLine, setShowRetestLine] = useState(true);
+  const [entryMode, setEntryMode] = useState<"trigger" | "retest">("trigger");
 
   // Backtest state
   const effectiveInitialDate = propAsOfDate || initialAsOfDate || "";
@@ -263,6 +265,20 @@ export default function DailyTradeChart({
         t2Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target2 })));
       }
 
+      // Retest Entry Line (Dotted Sky Blue #38bdf8)
+      const retestLevel = data.levels?.retest_entry;
+      if (showRetestLine && retestLevel && lineBars.length > 0) {
+        const retestLine = chart.addLineSeries({
+          color: "#38bdf8",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dotted,
+          title: `RETEST $${retestLevel}`,
+          priceLineVisible: true,
+          lastValueVisible: true,
+        });
+        retestLine.setData(lineBars.map((b: any) => ({ time: b.time, value: retestLevel })));
+      }
+
       // 5. Markers (Entry trigger + Exit outcome marker)
       if (data.markers && data.markers.length > 0) {
         const activeMarkers = (isBacktest && !showFuture)
@@ -315,7 +331,7 @@ export default function DailyTradeChart({
       isMounted = false;
       chart?.remove();
     };
-  }, [viewMode, data, showSma, showFuture]);
+  }, [viewMode, data, showSma, showFuture, showRetestLine]);
 
   // Render TradingView Embed widget when selected
   useEffect(() => {
@@ -595,16 +611,34 @@ export default function DailyTradeChart({
           </button>
 
           {viewMode === "levels" && (
-            <button
-              onClick={() => setShowSma(!showSma)}
-              className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${
-                showSma
-                  ? "bg-[#1a2d3d] text-[#4d9fff] border-[#4d9fff]/40"
-                  : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
-              }`}
-            >
-              MAs (20/50/200)
-            </button>
+            <>
+              <button
+                onClick={() => setShowSma(!showSma)}
+                className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${
+                  showSma
+                    ? "bg-[#1a2d3d] text-[#4d9fff] border-[#4d9fff]/40"
+                    : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                }`}
+              >
+                MAs (20/50/200)
+              </button>
+
+              {levels.retest_entry != null && (
+                <button
+                  type="button"
+                  onClick={() => setShowRetestLine(!showRetestLine)}
+                  className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 ${
+                    showRetestLine
+                      ? "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 shadow-sm"
+                      : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                  }`}
+                  title="Toggle Retest Support Level (Prior Week Red Day Low)"
+                >
+                  <span>🔄</span>
+                  <span>Retest ${levels.retest_entry?.toFixed(2)}</span>
+                </button>
+              )}
+            </>
           )}
 
           <div className="flex items-center bg-[#131625] p-1 rounded-lg border border-[#1a1d2e]">
@@ -816,60 +850,164 @@ export default function DailyTradeChart({
       {/* ── Key Trade Levels Summary Cards ──────────────────────────── */}
       {levels.entry != null && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-[#0a0b14] border-b border-[#1a1d2e]">
-          {/* Best Entry Point */}
-          <div className="bg-[#0f1d18] border border-[#00e5a0]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
-              <span className="text-[#00e5a0]">🟢 TRIGGER</span>
+          {/* Best Entry Point Card */}
+          <div className="bg-[#0f1d18] border border-[#00e5a0]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
+                {levels.retest_entry != null ? (
+                  <div className="flex items-center gap-1 bg-[#0a0b14] p-0.5 rounded border border-[#1a1d2e]">
+                    <button
+                      type="button"
+                      onClick={() => setEntryMode("trigger")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                        entryMode === "trigger"
+                          ? "bg-[#00e5a0] text-black shadow-sm"
+                          : "text-[#6b7099] hover:text-white"
+                      }`}
+                      title="Trigger entry at current breakout price"
+                    >
+                      Trigger
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEntryMode("retest")}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                        entryMode === "retest"
+                          ? "bg-[#38bdf8] text-black shadow-sm"
+                          : "text-[#6b7099] hover:text-[#38bdf8]"
+                      }`}
+                      title="Retest dip entry at prior week red day low"
+                    >
+                      🔄 Retest
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[#00e5a0]">🟢 TRIGGER</span>
+                )}
+              </div>
+
+              <div className="flex items-baseline justify-between">
+                <div>
+                  <div className={`text-2xl font-mono font-extrabold ${entryMode === "retest" ? "text-[#38bdf8]" : "text-[#00e5a0]"}`}>
+                    ${(entryMode === "retest" && levels.retest_entry != null ? levels.retest_entry : levels.entry)?.toFixed(2)}
+                  </div>
+                  <div className="text-[11px] font-mono mt-0.5">
+                    {entryMode === "retest" && levels.retest_zone_min != null ? (
+                      <span className="text-[#38bdf8]/90">
+                        Retest Zone: ${levels.retest_zone_min?.toFixed(2)} – ${levels.retest_zone_max?.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span className="text-[#00e5a0]/80">
+                        Zone: ${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {levels.retest_entry != null && (
+                  <div className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => setEntryMode(entryMode === "trigger" ? "retest" : "trigger")}
+                      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider inline-flex items-center gap-0.5 transition-all ${
+                        entryMode === "retest"
+                          ? "bg-[#00e5a0]/20 text-[#00e5a0] border-[#00e5a0]/40"
+                          : "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 hover:bg-[#13374d]"
+                      }`}
+                      title={entryMode === "retest" ? "Switch to Breakout Trigger Entry" : "Switch to Retest Dip Entry"}
+                    >
+                      {entryMode === "retest" ? "⚡ Trigger Mode" : "🔄 Retest Dip"}
+                    </button>
+                    <div className="text-[11px] font-mono font-bold mt-1 text-slate-400">
+                      {entryMode === "retest"
+                        ? `Trig: $${levels.entry?.toFixed(2)}`
+                        : `$${levels.retest_entry?.toFixed(2)}`}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#00e5a0]">
-              ${levels.entry?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#00e5a0]/80 mt-1 font-mono">
-              Zone: ${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}
-            </div>
+
+            {levels.retest_zone_min != null && levels.retest_zone_max != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#1a2d26] text-[11px] font-mono flex flex-wrap items-center justify-between gap-1">
+                <span className="text-slate-300">
+                  {entryMode === "retest" ? (
+                    <span className="text-[#38bdf8] font-bold">★ Retest Zone Active</span>
+                  ) : (
+                    <span>Retest: <b className="text-[#38bdf8] font-mono">${levels.retest_zone_min?.toFixed(2)}–${levels.retest_zone_max?.toFixed(2)}</b></span>
+                  )}
+                </span>
+                <span className="text-[10px] text-[#6b7099] font-sans">
+                  {levels.retest_label} {levels.retest_diff_pct != null && `(${levels.retest_diff_pct > 0 ? "+" : ""}${levels.retest_diff_pct}%)`}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Protective Stop Loss */}
-          <div className="bg-[#1f0f14] border border-[#ff4d6a]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Stop Loss</span>
-              <span className="text-[#ff4d6a]">🔴 RISK</span>
+          <div className="bg-[#1f0f14] border border-[#ff4d6a]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Stop Loss</span>
+                <span className="text-[#ff4d6a]">🔴 RISK</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#ff4d6a]">
+                ${levels.stop_loss?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#ff4d6a]/80 mt-1 font-mono">
+                Risk: -{(entryMode === "retest" && levels.retest_risk_pct != null ? levels.retest_risk_pct : levels.risk_pct)?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#ff4d6a]">
-              ${levels.stop_loss?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#ff4d6a]/80 mt-1 font-mono">
-              Risk: -{levels.risk_pct?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
-            </div>
+            {entryMode === "retest" && levels.retest_risk_pct != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
+                Tighter risk from <span className="text-[#38bdf8] font-mono font-bold">${levels.retest_entry?.toFixed(2)}</span> entry
+              </div>
+            )}
           </div>
 
           {/* Target 1 Exit Point */}
-          <div className="bg-[#0f1d1f] border border-[#34d399]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Target 1 (Primary Exit)</span>
-              <span className="text-[#34d399]">🎯 {levels.rr_t1?.toFixed(1)}R</span>
+          <div className="bg-[#0f1d1f] border border-[#34d399]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Target 1 (Primary Exit)</span>
+                <span className="text-[#34d399]">🎯 {(entryMode === "retest" && levels.retest_rr_t1 != null ? levels.retest_rr_t1 : levels.rr_t1)?.toFixed(1)}R</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#34d399]">
+                ${levels.target1?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#34d399]/80 mt-1 font-mono">
+                +{(entryMode === "retest" && levels.retest_t1_gain != null ? levels.retest_t1_gain : levels.target1_gain_pct)?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#34d399]">
-              ${levels.target1?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#34d399]/80 mt-1 font-mono">
-              +{levels.target1_gain_pct?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
-            </div>
+            {entryMode === "retest" && levels.retest_rr_t1 != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#1a2d24] text-[10px] text-emerald-400 font-sans flex items-center justify-between">
+                <span>Expanded Retest R/R:</span>
+                <span className="font-mono font-bold">1:{levels.retest_rr_t1?.toFixed(1)}</span>
+              </div>
+            )}
           </div>
 
           {/* Target 2 Exit Point */}
-          <div className="bg-[#0f172a] border border-[#38bdf8]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Target 2 (Runner Exit)</span>
-              <span className="text-[#38bdf8]">🚀 {levels.rr_t2?.toFixed(1)}R</span>
+          <div className="bg-[#0f172a] border border-[#38bdf8]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Target 2 (Runner Exit)</span>
+                <span className="text-[#38bdf8]">🚀 {(entryMode === "retest" && levels.retest_rr_t2 != null ? levels.retest_rr_t2 : levels.rr_t2)?.toFixed(1)}R</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#38bdf8]">
+                ${levels.target2?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#38bdf8]/80 mt-1 font-mono">
+                +{(entryMode === "retest" && levels.retest_t2_gain != null ? levels.retest_t2_gain : levels.target2_gain_pct)?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#38bdf8]">
-              ${levels.target2?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#38bdf8]/80 mt-1 font-mono">
-              +{levels.target2_gain_pct?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
-            </div>
+            {entryMode === "retest" && levels.retest_rr_t2 != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#152538] text-[10px] text-sky-400 font-sans flex items-center justify-between">
+                <span>Expanded Retest R/R:</span>
+                <span className="font-mono font-bold">1:{levels.retest_rr_t2?.toFixed(1)}</span>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -387,6 +387,113 @@ def get_entry_grade(score: int, confidence: str) -> dict:
 
 # ── Entry / Stop / Target levels ──────────────────────────────────────────────
 
+def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: float) -> dict:
+    """
+    Computes the Retest Entry Zone based on Prior Week Red Day Low (for longs)
+    or Prior Week Green Day High (for shorts), as well as multi-day swing pivot retest levels.
+    """
+    if daily_df is None or len(daily_df) < 5:
+        return {}
+    close_col = _col(daily_df, "close")
+    open_col  = _col(daily_df, "open")
+    hi_col    = _col(daily_df, "high")
+    lo_col    = _col(daily_df, "low")
+
+    df_copy = daily_df.copy()
+    if hasattr(df_copy.index, "isocalendar"):
+        try:
+            iso = df_copy.index.isocalendar()
+            df_copy["week"] = iso.week.values
+            df_copy["year"] = iso.year.values
+        except Exception:
+            df_copy["week"] = [i // 5 for i in range(len(df_copy))]
+            df_copy["year"] = 1
+    else:
+        df_copy["week"] = [i // 5 for i in range(len(df_copy))]
+        df_copy["year"] = 1
+
+    weeks = df_copy[["year", "week"]].drop_duplicates().values.tolist()
+    direction = "SHORT" if verdict in ("BEARISH", "LEAN BEARISH") else "LONG"
+
+    retest_entry = None
+    retest_zone_min = None
+    retest_zone_max = None
+    retest_label = "Prior Red Day Low"
+
+    if len(weeks) >= 2:
+        prior_yw = weeks[-2]
+        prior_week_df = df_copy[(df_copy["year"] == prior_yw[0]) & (df_copy["week"] == prior_yw[1])]
+        if direction == "LONG":
+            red_days = prior_week_df[prior_week_df[close_col] < prior_week_df[open_col]]
+            if not red_days.empty:
+                lowest_red = red_days.sort_values(lo_col).iloc[0]
+                red_lo = float(lowest_red[lo_col])
+                red_cl = float(lowest_red[close_col])
+                retest_entry = round(red_lo, 2)
+                retest_zone_min = round(min(red_lo, red_cl), 2)
+                retest_zone_max = round(max(red_lo, red_cl) * 1.005, 2)
+                dt_str = lowest_red.name.strftime('%b %d') if hasattr(lowest_red.name, 'strftime') else 'Prior Wk'
+                retest_label = f"Prior Red Day Low ({dt_str})"
+            else:
+                pw_low = float(prior_week_df[lo_col].min())
+                retest_entry = round(pw_low, 2)
+                retest_zone_min = round(pw_low * 0.995, 2)
+                retest_zone_max = round(pw_low * 1.01, 2)
+                retest_label = "Prior Week Low (PWL)"
+        else:
+            green_days = prior_week_df[prior_week_df[close_col] > prior_week_df[open_col]]
+            if not green_days.empty:
+                highest_green = green_days.sort_values(hi_col, ascending=False).iloc[0]
+                gr_hi = float(highest_green[hi_col])
+                gr_cl = float(highest_green[close_col])
+                retest_entry = round(gr_hi, 2)
+                retest_zone_min = round(min(gr_hi, gr_cl) * 0.995, 2)
+                retest_zone_max = round(max(gr_hi, gr_cl), 2)
+                dt_str = highest_green.name.strftime('%b %d') if hasattr(highest_green.name, 'strftime') else 'Prior Wk'
+                retest_label = f"Prior Green Day High ({dt_str})"
+            else:
+                pw_hi = float(prior_week_df[hi_col].max())
+                retest_entry = round(pw_hi, 2)
+                retest_zone_min = round(pw_hi * 0.99, 2)
+                retest_zone_max = round(pw_hi * 1.005, 2)
+                retest_label = "Prior Week High (PWH)"
+
+    # Fallback if prior week was empty or not found
+    if retest_entry is None:
+        if direction == "LONG":
+            red_days = df_copy[df_copy[close_col] < df_copy[open_col]]
+            if len(red_days) >= 2:
+                lowest_red = red_days.iloc[-5:].sort_values(lo_col).iloc[0]
+                red_lo = float(lowest_red[lo_col])
+                red_cl = float(lowest_red[close_col])
+                retest_entry = round(red_lo, 2)
+                retest_zone_min = round(min(red_lo, red_cl), 2)
+                retest_zone_max = round(max(red_lo, red_cl) * 1.005, 2)
+                retest_label = "Recent Red Day Low"
+            else:
+                lo_val = float(df_copy[lo_col].iloc[-10:].min())
+                retest_entry = round(lo_val, 2)
+                retest_zone_min = round(lo_val * 0.995, 2)
+                retest_zone_max = round(lo_val * 1.01, 2)
+                retest_label = "Swing Low Retest"
+        else:
+            hi_val = float(df_copy[hi_col].iloc[-10:].max())
+            retest_entry = round(hi_val, 2)
+            retest_zone_min = round(hi_val * 0.99, 2)
+            retest_zone_max = round(hi_val * 1.005, 2)
+            retest_label = "Swing High Retest"
+
+    retest_diff_pct = round(((retest_entry - current_price) / current_price) * 100, 1) if current_price > 0 and retest_entry else 0.0
+
+    return {
+        "retest_entry": retest_entry,
+        "retest_zone_min": retest_zone_min,
+        "retest_zone_max": retest_zone_max,
+        "retest_label": retest_label,
+        "retest_diff_pct": retest_diff_pct,
+    }
+
+
 def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float) -> dict:
     atr = calc_atr(daily_df)
     close_col = _col(daily_df, "close")
@@ -451,9 +558,54 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             t2_days = max(1, round((entry - t2) / avg_daily_move)) if avg_daily_move > 0 else 10
 
     risk_pct = round(abs(risk / entry) * 100, 2) if entry > 0 else None
-    return {"entry": entry, "stop_loss": stop, "target1": t1, "target2": t2,
-            "risk_pct": risk_pct, "rr_t1": rr1, "rr_t2": rr2,
-            "t1_days": t1_days, "t2_days": t2_days, "atr": round(atr, 2)}
+
+    # Compute secondary Retest Entry Zone (Prior Week Red Day Low Retest)
+    retest_info = calc_retest_entry_zone(daily_df, verdict, current_price)
+    r_entry = retest_info.get("retest_entry")
+    r_risk_pct = None
+    r_rr1 = None
+    r_rr2 = None
+    r_t1_gain = None
+    r_t2_gain = None
+
+    if r_entry and r_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            r_risk = max(r_entry - stop, atr * 0.4, r_entry * 0.015)
+            r_risk_pct = round((r_risk / r_entry) * 100, 1)
+            r_rr1 = round((t1 - r_entry) / r_risk, 1) if r_risk > 0 else 2.5
+            r_rr2 = round((t2 - r_entry) / r_risk, 1) if r_risk > 0 else 3.5
+            r_t1_gain = round(((t1 - r_entry) / r_entry) * 100, 1)
+            r_t2_gain = round(((t2 - r_entry) / r_entry) * 100, 1)
+        else:
+            r_risk = max(stop - r_entry, atr * 0.4, r_entry * 0.015)
+            r_risk_pct = round((r_risk / r_entry) * 100, 1)
+            r_rr1 = round((r_entry - t1) / r_risk, 1) if r_risk > 0 else 2.5
+            r_rr2 = round((r_entry - t2) / r_risk, 1) if r_risk > 0 else 3.5
+            r_t1_gain = round(((r_entry - t1) / r_entry) * 100, 1)
+            r_t2_gain = round(((r_entry - t2) / r_entry) * 100, 1)
+
+    return {
+        "entry": entry,
+        "stop_loss": stop,
+        "target1": t1,
+        "target2": t2,
+        "risk_pct": risk_pct,
+        "rr_t1": rr1,
+        "rr_t2": rr2,
+        "t1_days": t1_days,
+        "t2_days": t2_days,
+        "atr": round(atr, 2),
+        "retest_entry": r_entry,
+        "retest_zone_min": retest_info.get("retest_zone_min"),
+        "retest_zone_max": retest_info.get("retest_zone_max"),
+        "retest_label": retest_info.get("retest_label"),
+        "retest_diff_pct": retest_info.get("retest_diff_pct"),
+        "retest_risk_pct": r_risk_pct,
+        "retest_rr_t1": r_rr1,
+        "retest_rr_t2": r_rr2,
+        "retest_t1_gain": r_t1_gain,
+        "retest_t2_gain": r_t2_gain,
+    }
 
 
 # ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
