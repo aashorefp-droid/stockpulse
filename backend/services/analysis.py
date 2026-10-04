@@ -598,6 +598,22 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
 
     retest_diff_pct = round(((retest_entry - current_price) / current_price) * 100, 1) if current_price > 0 and retest_entry else 0.0
 
+    pw_avg_low = None
+    pw_avg_diff_pct = None
+    pw_avg_zone_min = None
+    pw_avg_zone_max = None
+    if pw_low is not None and pw_latest_low is not None:
+        pw_avg_low = round((pw_low + pw_latest_low) / 2.0, 2)
+    elif pw_low is not None:
+        pw_avg_low = pw_low
+    elif pw_latest_low is not None:
+        pw_avg_low = pw_latest_low
+
+    if pw_avg_low is not None:
+        pw_avg_diff_pct = round(((pw_avg_low - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        pw_avg_zone_min = round(pw_avg_low * 0.995, 2)
+        pw_avg_zone_max = round(pw_avg_low * 1.01, 2)
+
     return {
         "retest_entry": retest_entry,
         "pw_low": pw_low,
@@ -608,6 +624,10 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
         "pw_latest_diff_pct": pw_latest_diff_pct,
         "pw_latest_zone_min": pw_latest_zone_min,
         "pw_latest_zone_max": pw_latest_zone_max,
+        "pw_avg_low": pw_avg_low,
+        "pw_avg_diff_pct": pw_avg_diff_pct,
+        "pw_avg_zone_min": pw_avg_zone_min,
+        "pw_avg_zone_max": pw_avg_zone_max,
         "pw_latest_red_low": pw_latest_red_low,
         "pw_latest_red_date": pw_latest_red_date,
         "pw_latest_red_day": pw_latest_red_day,
@@ -762,6 +782,29 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             red_t1_gain = round(((red_entry - t1) / red_entry) * 100, 1)
             red_t2_gain = round(((red_entry - t2) / red_entry) * 100, 1)
 
+    # Average Low Metrics (Midpoint of PWL and Latest Low)
+    avg_entry = retest_info.get("pw_avg_low")
+    avg_risk_pct = None
+    avg_rr1 = None
+    avg_rr2 = None
+    avg_t1_gain = None
+    avg_t2_gain = None
+    if avg_entry and avg_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            avg_risk = max(avg_entry - stop, atr * 0.4, avg_entry * 0.015)
+            avg_risk_pct = round((avg_risk / avg_entry) * 100, 1)
+            avg_rr1 = round((t1 - avg_entry) / avg_risk, 1) if avg_risk > 0 else 2.5
+            avg_rr2 = round((t2 - avg_entry) / avg_risk, 1) if avg_risk > 0 else 3.5
+            avg_t1_gain = round(((t1 - avg_entry) / avg_entry) * 100, 1)
+            avg_t2_gain = round(((t2 - avg_entry) / avg_entry) * 100, 1)
+        else:
+            avg_risk = max(stop - avg_entry, atr * 0.4, avg_entry * 0.015)
+            avg_risk_pct = round((avg_risk / avg_entry) * 100, 1)
+            avg_rr1 = round((avg_entry - t1) / avg_risk, 1) if avg_risk > 0 else 2.5
+            avg_rr2 = round((avg_entry - t2) / avg_risk, 1) if avg_risk > 0 else 3.5
+            avg_t1_gain = round(((avg_entry - t1) / avg_entry) * 100, 1)
+            avg_t2_gain = round(((avg_entry - t2) / avg_entry) * 100, 1)
+
     return {
         "entry": entry,
         "stop_loss": stop,
@@ -787,6 +830,15 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
         "pw_latest_rr_t2": lat_rr2,
         "pw_latest_t1_gain": lat_t1_gain,
         "pw_latest_t2_gain": lat_t2_gain,
+        "pw_avg_low": retest_info.get("pw_avg_low"),
+        "pw_avg_diff_pct": retest_info.get("pw_avg_diff_pct"),
+        "pw_avg_zone_min": retest_info.get("pw_avg_zone_min"),
+        "pw_avg_zone_max": retest_info.get("pw_avg_zone_max"),
+        "pw_avg_risk_pct": avg_risk_pct,
+        "pw_avg_rr_t1": avg_rr1,
+        "pw_avg_rr_t2": avg_rr2,
+        "pw_avg_t1_gain": avg_t1_gain,
+        "pw_avg_t2_gain": avg_t2_gain,
         "pw_latest_red_low": retest_info.get("pw_latest_red_low"),
         "pw_latest_red_date": retest_info.get("pw_latest_red_date"),
         "pw_latest_red_day": retest_info.get("pw_latest_red_day"),

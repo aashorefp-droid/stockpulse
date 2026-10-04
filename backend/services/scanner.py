@@ -362,6 +362,8 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
             "pw_latest_red_date": trade.get("pw_latest_red_date"),
             "pw_latest_red_day": trade.get("pw_latest_red_day"),
             "pw_latest_red_diff_pct": trade.get("pw_latest_red_diff_pct"),
+            "pw_avg_low": trade.get("pw_avg_low"),
+            "pw_avg_diff_pct": trade.get("pw_avg_diff_pct"),
             "pw_range_label": trade.get("pw_range_label"),
             "cpr_type":     strategy_sig.get("cpr_type", "Normal"),
             "sector":       sector,

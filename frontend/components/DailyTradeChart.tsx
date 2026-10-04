@@ -43,7 +43,7 @@ export default function DailyTradeChart({
   const [showSma, setShowSma] = useState(true);
   const [showFuture, setShowFuture] = useState(false);
   const [showRetestLine, setShowRetestLine] = useState(true);
-  const [entryMode, setEntryMode] = useState<"trigger" | "latest_low" | "retest">("trigger");
+  const [entryMode, setEntryMode] = useState<"trigger" | "latest_low" | "avg_low" | "retest">("trigger");
   const [selectedRedDay, setSelectedRedDay] = useState<any>(null);
   const [showAllRedDayLines, setShowAllRedDayLines] = useState(true);
 
@@ -269,12 +269,15 @@ export default function DailyTradeChart({
         t2Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target2 })));
       }
 
-      // Retest Entry Line(s) (Latest Low, PWL & Prior Week Red Day Lows)
+      // Retest Entry Line(s) (Latest Low, AVG Low, PWL & Prior Week Red Day Lows)
       const pwRedDays = data.levels?.pw_red_day_lows || [];
       const latestLowVal = data.levels?.pw_latest_low;
+      const avgLowVal = data.levels?.pw_avg_low;
       const pwlVal = data.levels?.retest_entry;
       const primaryRetestLevel = entryMode === "latest_low"
         ? (latestLowVal ?? pwlVal)
+        : entryMode === "avg_low"
+        ? (avgLowVal ?? pwlVal)
         : (selectedRedDay?.low ?? pwlVal);
 
       if (showRetestLine && lineBars.length > 0) {
@@ -308,8 +311,21 @@ export default function DailyTradeChart({
           latLine.setData(lineBars.map((b: any) => ({ time: b.time, value: latestLowVal })));
         }
 
-        // Draw PWL line if entryMode is latest_low (so trader sees both key prior week levels)
-        if (entryMode === "latest_low" && pwlVal && Math.abs(pwlVal - (latestLowVal || 0)) > 0.01) {
+        // Draw AVG Low line as dashed purple reference if not primary
+        if (avgLowVal && entryMode !== "avg_low" && Math.abs(avgLowVal - (primaryRetestLevel || 0)) > 0.01) {
+          const avgLine = chart.addLineSeries({
+            color: "rgba(168, 85, 247, 0.65)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            title: `AVG LOW $${avgLowVal}`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          avgLine.setData(lineBars.map((b: any) => ({ time: b.time, value: avgLowVal })));
+        }
+
+        // Draw PWL line if entryMode is latest_low or avg_low (so trader sees all key prior week levels)
+        if ((entryMode === "latest_low" || entryMode === "avg_low") && pwlVal && Math.abs(pwlVal - (primaryRetestLevel || 0)) > 0.01) {
           const pwlLine = chart.addLineSeries({
             color: "rgba(56, 189, 248, 0.65)",
             lineWidth: 1,
@@ -324,14 +340,19 @@ export default function DailyTradeChart({
         // Draw primary active retest level
         if (primaryRetestLevel) {
           const isLatest = entryMode === "latest_low";
-          const isPwl = selectedRedDay ? selectedRedDay.is_pwl : !isLatest;
+          const isAvg = entryMode === "avg_low";
+          const isPwl = selectedRedDay ? selectedRedDay.is_pwl : (!isLatest && !isAvg);
+          const lineColor = isLatest ? "#f5c842" : isAvg ? "#a855f7" : "#38bdf8";
+          const lineTitle = isLatest
+            ? `LATEST LOW $${primaryRetestLevel} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`
+            : isAvg
+            ? `AVG LOW $${primaryRetestLevel}`
+            : `${isPwl ? 'PWL' : 'RED LOW'} $${primaryRetestLevel}${selectedRedDay ? ` (${selectedRedDay.date_label})` : ''}`;
           const retestLine = chart.addLineSeries({
-            color: isLatest ? "#f5c842" : "#38bdf8",
+            color: lineColor,
             lineWidth: 2,
-            lineStyle: isLatest ? LineStyle.Solid : LineStyle.Dotted,
-            title: isLatest
-              ? `LATEST LOW $${primaryRetestLevel} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`
-              : `${isPwl ? 'PWL' : 'RED LOW'} $${primaryRetestLevel}${selectedRedDay ? ` (${selectedRedDay.date_label})` : ''}`,
+            lineStyle: (isLatest || isAvg) ? LineStyle.Solid : LineStyle.Dotted,
+            title: lineTitle,
             priceLineVisible: true,
             lastValueVisible: true,
           });
@@ -492,6 +513,17 @@ export default function DailyTradeChart({
     activeRetestRrT2 = levels.pw_latest_rr_t2;
     activeRetestT1Gain = levels.pw_latest_t1_gain;
     activeRetestT2Gain = levels.pw_latest_t2_gain;
+  } else if (entryMode === "avg_low" && levels.pw_avg_low != null) {
+    activeRetestEntry = levels.pw_avg_low;
+    activeRetestZoneMin = levels.pw_avg_zone_min;
+    activeRetestZoneMax = levels.pw_avg_zone_max;
+    activeRetestLabel = `Average of Lows (PWL $${levels.retest_entry?.toFixed(2)} + Latest $${levels.pw_latest_low?.toFixed(2)})`;
+    activeRetestDiffPct = levels.pw_avg_diff_pct ?? 0;
+    activeRetestRiskPct = levels.pw_avg_risk_pct;
+    activeRetestRrT1 = levels.pw_avg_rr_t1;
+    activeRetestRrT2 = levels.pw_avg_rr_t2;
+    activeRetestT1Gain = levels.pw_avg_t1_gain;
+    activeRetestT2Gain = levels.pw_avg_t2_gain;
   } else if (entryMode === "retest") {
     activeRetestEntry = selectedRedDayLow != null ? selectedRedDayLow : levels.retest_entry;
     activeRetestZoneMin = selectedRedDay?.zone_min != null ? selectedRedDay.zone_min : levels.retest_zone_min;
@@ -965,7 +997,7 @@ export default function DailyTradeChart({
             <div>
               <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
                 <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
-                {levels.retest_entry != null || levels.pw_latest_low != null ? (
+                {levels.retest_entry != null || levels.pw_latest_low != null || levels.pw_avg_low != null ? (
                   <div className="flex items-center gap-1 bg-[#0a0b14] p-0.5 rounded border border-[#1a1d2e]">
                     <button
                       type="button"
@@ -993,6 +1025,20 @@ export default function DailyTradeChart({
                         ⚡ Latest Low
                       </button>
                     )}
+                    {levels.pw_avg_low != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("avg_low"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "avg_low"
+                            ? "bg-[#a855f7] text-white shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#a855f7]"
+                        }`}
+                        title={`Retest Balanced Average Low: $${levels.pw_avg_low?.toFixed(2)} (Midpoint of PWL & Latest Low)`}
+                      >
+                        ⚖️ AVG Low
+                      </button>
+                    )}
                     {levels.retest_entry != null && (
                       <button
                         type="button"
@@ -1017,6 +1063,7 @@ export default function DailyTradeChart({
                 <div>
                   <div className={`text-2xl font-mono font-extrabold ${
                     entryMode === "latest_low" ? "text-[#f5c842]" :
+                    entryMode === "avg_low" ? "text-[#a855f7]" :
                     entryMode === "retest" ? "text-[#38bdf8]" : "text-[#00e5a0]"
                   }`}>
                     ${(entryMode !== "trigger" && activeRetestEntry != null ? activeRetestEntry : levels.entry)?.toFixed(2)}
@@ -1025,6 +1072,10 @@ export default function DailyTradeChart({
                     {entryMode === "latest_low" && activeRetestZoneMin != null ? (
                       <span className="text-[#f5c842]/90 font-medium">
                         Latest Low Zone: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
+                      </span>
+                    ) : entryMode === "avg_low" && activeRetestZoneMin != null ? (
+                      <span className="text-[#a855f7]/90 font-medium">
+                        AVG Low Zone: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
                       </span>
                     ) : entryMode === "retest" && activeRetestZoneMin != null ? (
                       <span className="text-[#38bdf8]/90 font-medium">
@@ -1042,6 +1093,10 @@ export default function DailyTradeChart({
                   {entryMode === "latest_low" ? (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#f5c842]/40 bg-[#f5c842]/20 text-[#f5c842] uppercase tracking-wider inline-flex items-center gap-0.5">
                       ⚡ Latest Low
+                    </span>
+                  ) : entryMode === "avg_low" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#a855f7]/40 bg-[#a855f7]/20 text-[#a855f7] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ⚖️ AVG Low
                     </span>
                   ) : entryMode === "retest" ? (
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#38bdf8]/40 bg-[#38bdf8]/20 text-[#38bdf8] uppercase tracking-wider inline-flex items-center gap-0.5">
@@ -1067,6 +1122,10 @@ export default function DailyTradeChart({
                   <span className="text-[#f5c842] font-bold">
                     ⚡ {activeRetestLabel} Active
                   </span>
+                ) : entryMode === "avg_low" ? (
+                  <span className="text-[#a855f7] font-bold">
+                    ⚖️ {activeRetestLabel} Active
+                  </span>
                 ) : entryMode === "retest" ? (
                   <span className="text-[#38bdf8] font-bold">
                     ★ {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Low Active` : "Prev Week Low Active"}
@@ -1077,10 +1136,13 @@ export default function DailyTradeChart({
                     {levels.pw_latest_low != null && (
                       <span className="ml-1.5 text-slate-400">· Latest: <b className="text-[#f5c842] font-mono">${levels.pw_latest_low?.toFixed(2)}</b></span>
                     )}
+                    {levels.pw_avg_low != null && (
+                      <span className="ml-1.5 text-slate-400">· AVG: <b className="text-[#a855f7] font-mono">${levels.pw_avg_low?.toFixed(2)}</b></span>
+                    )}
                   </span>
                 )}
               </span>
-              <span className={`text-[10px] font-semibold font-sans ${entryMode === "latest_low" ? "text-[#f5c842]" : entryMode === "retest" ? "text-[#38bdf8]" : "text-slate-400"}`}>
+              <span className={`text-[10px] font-semibold font-sans ${entryMode === "latest_low" ? "text-[#f5c842]" : entryMode === "avg_low" ? "text-[#a855f7]" : entryMode === "retest" ? "text-[#38bdf8]" : "text-slate-400"}`}>
                 {activeRetestDiffPct != null && activeRetestDiffPct !== 0 && `(${activeRetestDiffPct > 0 ? "+" : ""}${activeRetestDiffPct}%)`}
               </span>
             </div>
@@ -1102,7 +1164,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode !== "trigger" && activeRetestRiskPct != null && (
               <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
-                Tighter risk from {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL")} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
+                Tighter risk from {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL")} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
               </div>
             )}
           </div>
@@ -1123,7 +1185,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode !== "trigger" && activeRetestRrT1 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#1a2d24] text-[10px] text-emerald-400 font-sans flex items-center justify-between">
-                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
                 <span className="font-mono font-bold">1:{activeRetestRrT1?.toFixed(1)}</span>
               </div>
             )}
@@ -1145,7 +1207,7 @@ export default function DailyTradeChart({
             </div>
             {entryMode !== "trigger" && activeRetestRrT2 != null && (
               <div className="mt-2.5 pt-2 border-t border-[#152538] text-[10px] text-sky-400 font-sans flex items-center justify-between">
-                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
                 <span className="font-mono font-bold">1:{activeRetestRrT2?.toFixed(1)}</span>
               </div>
             )}
@@ -1154,7 +1216,7 @@ export default function DailyTradeChart({
       )}
 
       {/* ── Prior Week Lows Shelf (Latest Low, PWL & Red Days) ──────────── */}
-      {(levels.pw_latest_low != null || levels.retest_entry != null || (pwRedDays && pwRedDays.length > 0)) && (
+      {(levels.pw_latest_low != null || levels.pw_avg_low != null || levels.retest_entry != null || (pwRedDays && pwRedDays.length > 0)) && (
         <div className="bg-[#09111e] border-b border-[#1a2d3d] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="text-[#38bdf8] font-bold uppercase tracking-wider flex items-center gap-1.5 text-xs">
@@ -1187,6 +1249,35 @@ export default function DailyTradeChart({
                   )}
                   <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "latest_low" ? "bg-black text-[#f5c842]" : "bg-[#f5c842]/20 text-[#f5c842]"}`}>
                     LATEST
+                  </span>
+                </button>
+              )}
+
+              {/* 2. Balanced Average of Lows (PWL + Latest Midpoint) Pill */}
+              {levels.pw_avg_low != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("avg_low");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "avg_low"
+                      ? "bg-[#a855f7] text-white font-extrabold border-[#a855f7] shadow-md shadow-[#a855f7]/30 ring-1 ring-[#a855f7]"
+                      : "bg-[#181126] text-[#a855f7] hover:text-white border-[#3c1e5a] hover:border-[#a855f7]/60"
+                  }`}
+                  title={`Set entry to Balanced Average of Lows (PWL + Latest Midpoint): $${levels.pw_avg_low?.toFixed(2)}`}
+                >
+                  <span>⚖️</span>
+                  <span className="font-semibold">AVG Low:</span>
+                  <span className="font-bold">${levels.pw_avg_low?.toFixed(2)}</span>
+                  {levels.pw_avg_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "avg_low" ? "text-purple-100 font-bold" : "text-slate-400"}`}>
+                      ({levels.pw_avg_diff_pct > 0 ? "+" : ""}{levels.pw_avg_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "avg_low" ? "bg-white text-purple-900" : "bg-[#a855f7]/20 text-[#a855f7]"}`}>
+                    AVG
                   </span>
                 </button>
               )}
@@ -1324,6 +1415,15 @@ export default function DailyTradeChart({
                       </span>
                     </>
                   )}
+                  {levels.pw_avg_low != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#a855f7]">
+                        <span className="w-2.5 h-0.5 bg-[#a855f7] rounded border-b border-dashed"></span>
+                        <span>AVG Low: ${levels.pw_avg_low?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
                   {levels.retest_entry != null && (
                     <>
                       <span className="text-[#6b7099]">·</span>
@@ -1388,6 +1488,10 @@ export default function DailyTradeChart({
               <b className="text-[#f5c842] block mb-1">
                 1. Last Week Latest Low Entry ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""})
               </b>
+            ) : entryMode === "avg_low" ? (
+              <b className="text-[#a855f7] block mb-1">
+                1. Balanced Average Low Entry (PWL + Latest Midpoint)
+              </b>
             ) : entryMode === "retest" ? (
               <b className="text-[#38bdf8] block mb-1">
                 1. {selectedRedDay ? `${selectedRedDay.date_label} Red Day Low` : "Prev Week Low (PWL)"} Entry
@@ -1401,6 +1505,11 @@ export default function DailyTradeChart({
               <>
                 Buy shallow pullback near Last Week Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}) <span className="font-mono text-[#f5c842] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
                 Provides earlier retest support entry with tighter risk (-{activeRetestRiskPct?.toFixed(1)}%) vs breakout trigger.
+              </>
+            ) : entryMode === "avg_low" && activeRetestEntry != null ? (
+              <>
+                Buy balanced pullback near Average of Lows <span className="font-mono text-[#a855f7] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
+                Provides optimal midpoint between aggressive shallow entry and deep PWL with tighter risk (-{activeRetestRiskPct?.toFixed(1)}%).
               </>
             ) : entryMode === "retest" && activeRetestEntry != null ? (
               <>
