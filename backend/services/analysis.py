@@ -869,10 +869,47 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
 
 # ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
 
-def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: str, entry_grade: dict, current_price: float) -> dict:
+def get_fib_label_desc(label: str) -> str:
+    mapping = {
+        "R 0.0%": "52W High",
+        "R 23.6%": "Shallow Retrace",
+        "R 38.2%": "Key Retrace",
+        "R 50.0%": "52W Midpoint",
+        "R 61.8%": "Golden Ratio",
+        "R 78.6%": "Deep Retrace",
+        "R 100.0%": "52W Low",
+        "E 127.2%": "Breakout Ext",
+        "E 141.4%": "Breakout Ext",
+        "E 161.8%": "Golden Ext",
+        "E 200.0%": "2x Expansion",
+        "E 261.8%": "Max Ext",
+        "N -23.6%": "Breakdown Target",
+        "N -38.2%": "Breakdown Target",
+        "N -50.0%": "Breakdown Midpoint",
+        "N -61.8%": "Golden Breakdown",
+        "N -100.0%": "100% Breakdown",
+    }
+    if label in mapping:
+        return mapping[label]
+    if label.startswith("E "):
+        return "Expansion Target"
+    if label.startswith("N -"):
+        return "Breakdown Target"
+    return "Fib Level"
+
+
+def generate_final_judgement(
+    trade: dict,
+    vol_profile: Optional[dict],
+    verdict: str,
+    entry_grade: dict,
+    current_price: float,
+    fib_levels: Optional[dict] = None,
+    nearest_fib: Optional[str] = None,
+) -> dict:
     """
-    Synthesizes Entry Alert + Volume Profile Decision into a Final Trading Judgement.
-    Evaluates whether institutional volume confirms or conflicts with the price signal.
+    Synthesizes Entry Alert + Volume Profile Decision + 52W Fibonacci Level into a Final Trading Judgement.
+    Evaluates whether institutional volume and key range levels confirm or conflict with the price signal.
     """
     direction = "SHORT" if (verdict or "").upper() in ("BEARISH", "LEAN BEARISH") else "LONG"
     grade_letter = (entry_grade.get("entry_grade") if isinstance(entry_grade, dict) else str(entry_grade)) or "C"
@@ -894,6 +931,14 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
     is_bull_signal = direction == "LONG"
     is_bear_signal = direction == "SHORT"
 
+    fib_call = None
+    if fib_levels and nearest_fib and nearest_fib in fib_levels:
+        fib_val = fib_levels[nearest_fib]
+        desc = get_fib_label_desc(nearest_fib)
+        dist_pct = round(((fib_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        role = "At Level" if abs(dist_pct) < 0.5 else ("Resistance" if fib_val > current_price else "Support")
+        fib_call = f"{nearest_fib} ({desc}) ${fib_val:.2f} · {role}"
+
     if is_bull_signal:
         if above_vah and (vol_trend == "ACCUMULATING" or vol_surge):
             return {
@@ -905,6 +950,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Entry Alert ({grade_letter} Grade) aligns with institutional volume accumulation above fair value (${vah:.2f} VAH). Volume confirms breakout momentum.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
                 "vp_call": f"Above VAH (${vah:.2f}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
             }
         elif inside_va or (val is not None and current_price >= val and not below_val):
             val_str = f"${val:.2f}" if val is not None else "VAL"
@@ -919,6 +965,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Price holding institutional Value Area support ({val_str}–{vah_str}). High R/R dip accumulation with protective stop below VAL.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
                 "vp_call": f"Inside Value Area ({val_str}–{vah_str}) · POC {poc_str}",
+                "fib_call": fib_call,
             }
         elif below_val:
             val_str = f"${val:.2f}" if val is not None else "VAL"
@@ -931,6 +978,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Bullish entry alert conflict: Price is trading below Value Area Low ({val_str}) with distribution volume. High probability of false breakout. Wait for reclaim of {val_str} or reduce size.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
                 "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
             }
         else:
             stop_str = f"${trade.get('stop_loss', entry_price * 0.95):.2f}" if isinstance(trade, dict) and trade.get('stop_loss') else "defined stop"
@@ -943,6 +991,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Bullish entry setup with steady volume. Manage risk at {stop_str}.",
                 "entry_call": f"{grade_letter} Grade at ${entry_price:.2f}",
                 "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "fib_call": fib_call,
             }
     elif is_bear_signal:
         if below_val and (vol_trend == "ACCUMULATING" or vol_surge):
@@ -956,6 +1005,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Decisive breakdown below Value Area Low ({val_str}) confirmed by expanding volume surge. Institutional distribution favors aggressive short continuation.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) Short at ${entry_price:.2f}",
                 "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
             }
         elif inside_va:
             poc_str = f"${poc:.2f}" if poc is not None else "POC"
@@ -969,6 +1019,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Short signal active, but price is sitting near heavy Point of Control liquidity ({poc_str}). Expect choppy support; wait for breakdown below {val_str}.",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
                 "vp_call": f"Inside Value Area · Near POC {poc_str}",
+                "fib_call": fib_call,
             }
         else:
             vah_str = f"${vah:.2f}" if vah is not None else "VAH"
@@ -981,6 +1032,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
                 "summary": f"Bearish trajectory with institutional resistance at {vah_str} (VAH).",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
                 "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "fib_call": fib_call,
             }
     else:
         val_str = f"${val:.2f}" if val is not None else "VAL"
@@ -995,6 +1047,7 @@ def generate_final_judgement(trade: dict, vol_profile: Optional[dict], verdict: 
             "summary": f"Price oscillating within 70% Value Area ({val_str}–{vah_str}) with neutral volume. Wait for directional breakout expansion.",
             "entry_call": f"Neutral ({grade_letter} Grade)",
             "vp_call": f"POC {poc_str} · VA {val_str}–{vah_str}",
+            "fib_call": fib_call,
         }
 
 

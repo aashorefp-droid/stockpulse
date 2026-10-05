@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { getFibDescription } from "./FibTable";
 
 declare global {
   interface Window {
@@ -653,6 +654,18 @@ export default function DailyTradeChart({
     }
   })();
 
+  const fibLevels = data?.fib_levels || {};
+  const nearestFib = data?.nearest_fib;
+  const currentP = data?.current_price || levels.entry || 0;
+  let resolvedFibCall = finalJudgement?.fib_call;
+  if (!resolvedFibCall && nearestFib && fibLevels[nearestFib] != null) {
+    const fVal = fibLevels[nearestFib];
+    const desc = getFibDescription(nearestFib);
+    const distPct = currentP > 0 ? Math.round(((fVal - currentP) / currentP) * 1000) / 10 : 0;
+    const role = Math.abs(distPct) < 0.5 ? "At Level" : fVal > currentP ? "Resistance" : "Support";
+    resolvedFibCall = `${nearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
+  }
+
   return (
     <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl overflow-hidden shadow-lg mb-8">
       {/* ── Top Control Bar ─────────────────────────────────────────── */}
@@ -971,8 +984,8 @@ export default function DailyTradeChart({
             </div>
           </div>
 
-          {/* Confluence Dual Readout (Entry Alert + Volume Profile) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono bg-black/40 p-2.5 rounded-lg border border-border/40 mt-1">
+          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci) */}
+          <div className={`grid grid-cols-1 ${resolvedFibCall ? "md:grid-cols-3" : "md:grid-cols-2"} gap-2 text-xs font-mono bg-black/40 p-2.5 rounded-lg border border-border/40 mt-1`}>
             <div className="flex items-center gap-1.5 truncate">
               <span className="text-[#6b7099]">🔔 Entry Alert:</span>
               <span className="text-white font-semibold truncate">{finalJudgement.entry_call || "Evaluating..."}</span>
@@ -981,6 +994,12 @@ export default function DailyTradeChart({
               <span className="text-[#6b7099]">📊 Volume Profile:</span>
               <span className="text-[#4d9fff] font-semibold truncate">{finalJudgement.vp_call || "Calculating..."}</span>
             </div>
+            {resolvedFibCall && (
+              <div className="flex items-center gap-1.5 truncate">
+                <span className="text-[#6b7099]">📐 52W Fib:</span>
+                <span className="text-[#a855f7] font-semibold truncate" title={resolvedFibCall}>{resolvedFibCall}</span>
+              </div>
+            )}
           </div>
 
           <p className="text-xs text-slate-300 mt-2 leading-relaxed font-sans">

@@ -249,7 +249,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "entry_grade":   entry_grade,
         "trade":         trade_levels,
         "volume_profile": scored.get("vol_profile"),
-        "final_judgement": _safe(generate_final_judgement, {}, trade_levels, scored.get("vol_profile"), verdict, entry_grade, current_price),
+        "final_judgement": _safe(generate_final_judgement, {}, trade_levels, scored.get("vol_profile"), verdict, entry_grade, current_price, fib_levels, nearest_fib_label),
         "strategy_signals": scored.get("strategy_signals", {}),
         "bias": {
             "weekly": weekly_bias, "daily": daily_bias,
@@ -479,7 +479,15 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
 
         vol_profile = scored.get("vol_profile") or {}
         entry_grade = _safe(get_entry_grade, _EMPTY_GRADE, scored.get("score", 0), scored.get("confidence", "LOW"))
-        final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price)
+
+        hi_col = _col(df_hist, "high"); lo_col = _col(df_hist, "low")
+        lookback_52w = min(252, len(df_hist))
+        hi52 = float(df_hist[hi_col].tail(lookback_52w).max()) if lookback_52w > 0 else cur_price
+        lo52 = float(df_hist[lo_col].tail(lookback_52w).min()) if lookback_52w > 0 else cur_price
+        fib_levels = calc_fib_levels(lo52, hi52)
+        nearest_fib_label = min(fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0] if fib_levels else "N/A"
+
+        final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price, fib_levels, nearest_fib_label)
 
         bars = []
         volume_bars = []
@@ -681,6 +689,10 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "vol_profile": vol_profile,
             "entry_grade": entry_grade,
             "final_judgement": final_judgement,
+            "fib_levels": fib_levels,
+            "nearest_fib": nearest_fib_label,
+            "hi_52": hi52,
+            "lo_52": lo52,
         })
         _DAILY_CACHE[cache_key] = {"time": now, "data": res}
         return res
