@@ -646,6 +646,86 @@ def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: 
     }
 
 
+def detect_last_breakout(daily_df: pd.DataFrame, as_of: Optional[str] = None) -> Optional[dict]:
+    """
+    Scans backwards across historical daily bars to detect when the most recent
+    resistance/pivot breakout occurred.
+    
+    A breakout occurs when:
+    - Close > max(high of preceding 20 trading days) (or 50-day / 52-week high)
+    - Close >= Open (bullish candle closing strong)
+    """
+    if daily_df is None or len(daily_df) < 25:
+        return None
+    
+    df_copy = daily_df.copy()
+    if as_of:
+        try:
+            as_of_dt = pd.to_datetime(as_of)
+            if df_copy.index.tz is not None:
+                as_of_dt = as_of_dt.tz_localize(df_copy.index.tz)
+            df_copy = df_copy[df_copy.index <= as_of_dt]
+        except Exception:
+            pass
+
+    if len(df_copy) < 25:
+        return None
+
+    close_col = _col(df_copy, "close")
+    hi_col    = _col(df_copy, "high")
+    lo_col    = _col(df_copy, "low")
+    op_col    = _col(df_copy, "open")
+    vol_col   = _col(df_copy, "volume")
+
+    close = df_copy[close_col].values
+    high  = df_copy[hi_col].values
+    open_ = df_copy[op_col].values if op_col in df_copy.columns else close
+    vol   = df_copy[vol_col].values if vol_col in df_copy.columns else np.ones(len(df_copy))
+    
+    # Dates
+    if hasattr(df_copy.index, "strftime"):
+        dates = df_copy.index.strftime("%Y-%m-%d").tolist()
+        date_labels = df_copy.index.strftime("%b %d, %Y").tolist()
+    else:
+        dates = [str(i) for i in df_copy.index]
+        date_labels = dates
+
+    total_bars = len(df_copy)
+    # Search backwards from the most recent bar up to 120 bars back (approx 6 months)
+    min_idx = max(20, total_bars - 120)
+    for i in range(total_bars - 1, min_idx - 1, -1):
+        prior_20_hi = float(np.max(high[i-20:i]))
+        c = float(close[i])
+        o = float(open_[i])
+        v = float(vol[i])
+        prior_vol_avg = float(np.mean(vol[i-20:i])) if np.mean(vol[i-20:i]) > 0 else 1.0
+
+        if c > prior_20_hi and c >= o:
+            days_ago = total_bars - 1 - i
+            gain_pct = round((c - prior_20_hi) / prior_20_hi * 100, 1) if prior_20_hi > 0 else 0.0
+            vol_ratio = round(v / prior_vol_avg, 2) if prior_vol_avg > 0 else 1.0
+
+            # Classification
+            lookback_52 = min(i, 252)
+            is_52w = (lookback_52 >= 50 and c >= float(np.max(high[i-lookback_52:i])))
+            lookback_50 = min(i, 50)
+            is_50d = (lookback_50 >= 30 and c >= float(np.max(high[i-lookback_50:i])))
+
+            b_type = "52W High Breakout" if is_52w else ("50-Day High Breakout" if is_50d else "20-Day Pivot Breakout")
+            return {
+                "date": dates[i],
+                "date_label": date_labels[i],
+                "days_ago": days_ago,
+                "price": round(c, 2),
+                "breakout_level": round(prior_20_hi, 2),
+                "gain_pct": gain_pct,
+                "vol_ratio": vol_ratio,
+                "type": b_type,
+            }
+
+    return None
+
+
 def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float, as_of: Optional[str] = None) -> dict:
     atr = calc_atr(daily_df)
     close_col = _col(daily_df, "close")
@@ -805,6 +885,8 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             avg_t1_gain = round(((avg_entry - t1) / avg_entry) * 100, 1)
             avg_t2_gain = round(((avg_entry - t2) / avg_entry) * 100, 1)
 
+    last_breakout = detect_last_breakout(daily_df, as_of=as_of)
+
     return {
         "entry": entry,
         "stop_loss": stop,
@@ -864,31 +946,61 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
         "retest_t1_gain": r_t1_gain,
         "retest_t2_gain": r_t2_gain,
         "pw_range_label": retest_info.get("pw_range_label"),
+        "last_breakout": last_breakout,
+        "last_breakout_date": last_breakout.get("date") if last_breakout else None,
+        "last_breakout_date_label": last_breakout.get("date_label") if last_breakout else None,
+        "last_breakout_days_ago": last_breakout.get("days_ago") if last_breakout else None,
+        "last_breakout_price": last_breakout.get("price") if last_breakout else None,
+        "last_breakout_level": last_breakout.get("breakout_level") if last_breakout else None,
+        "last_breakout_gain_pct": last_breakout.get("gain_pct") if last_breakout else None,
+        "last_breakout_vol_ratio": last_breakout.get("vol_ratio") if last_breakout else None,
+        "last_breakout_type": last_breakout.get("type") if last_breakout else None,
     }
 
 
 # ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
 
-def get_fib_label_desc(label: str) -> str:
-    mapping = {
-        "R 0.0%": "52W High",
-        "R 23.6%": "Shallow Retrace",
-        "R 38.2%": "Key Retrace",
-        "R 50.0%": "52W Midpoint",
-        "R 61.8%": "Golden Ratio",
-        "R 78.6%": "Deep Retrace",
-        "R 100.0%": "52W Low",
-        "E 127.2%": "Breakout Ext",
-        "E 141.4%": "Breakout Ext",
-        "E 161.8%": "Golden Ext",
-        "E 200.0%": "2x Expansion",
-        "E 261.8%": "Max Ext",
-        "N -23.6%": "Breakdown Target",
-        "N -38.2%": "Breakdown Target",
-        "N -50.0%": "Breakdown Midpoint",
-        "N -61.8%": "Golden Breakdown",
-        "N -100.0%": "100% Breakdown",
-    }
+def get_fib_label_desc(label: str, mode: str = "52w") -> str:
+    if mode == "week":
+        mapping = {
+            "R 0.0%": "Week High (PWH)",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "Week Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "Week Low (PWL)",
+            "E 127.2%": "Bullish Expansion 1",
+            "E 141.4%": "Bullish Expansion 2",
+            "E 161.8%": "Golden Expansion",
+            "E 200.0%": "2x Week Expansion",
+            "E 261.8%": "Max Expansion",
+            "N -23.6%": "Bearish Breakdown 1",
+            "N -38.2%": "Bearish Breakdown 2",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
+    else:
+        mapping = {
+            "R 0.0%": "52W High",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "52W Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "52W Low",
+            "E 127.2%": "Breakout Ext",
+            "E 141.4%": "Breakout Ext",
+            "E 161.8%": "Golden Ext",
+            "E 200.0%": "2x Expansion",
+            "E 261.8%": "Max Ext",
+            "N -23.6%": "Breakdown Target",
+            "N -38.2%": "Breakdown Target",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
     if label in mapping:
         return mapping[label]
     if label.startswith("E "):

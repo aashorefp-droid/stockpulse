@@ -58,6 +58,13 @@ export interface StockAnalysis {
   signal:        Signal;
   fib_levels:    Record<string, number>;
   nearest_fib:   string;
+  weekly_fib_levels?:  Record<string, number>;
+  weekly_nearest_fib?: string;
+  week_high?:          number | null;
+  week_low?:           number | null;
+  week_range_label?:   string | null;
+  hi_52?:              number | null;
+  lo_52?:              number | null;
   support_resistance: {
     support:    number[];
     resistance: number[];

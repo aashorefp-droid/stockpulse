@@ -983,6 +983,27 @@ def eod_exceptional_scan_job() -> dict:
 exceptional_swing_digest_job = eod_exceptional_scan_job
 
 
+def breakout_digest_job() -> dict:
+    """
+    Scans Default 50 & Momentum 50 watchlists for breakout alerts and dispatches to Telegram.
+    """
+    try:
+        from backend.services.breakout_scanner import dispatch_breakout_telegram_alert
+        logger.info("[scheduler] Breakout Scan Job started (Default 50 + Momentum 50)...")
+        res = dispatch_breakout_telegram_alert(send_msg=True)
+        logger.info(
+            f"[scheduler] Breakout Scan Job completed: sent={res.get('sent')} "
+            f"scanned={res.get('total_scanned')} matches={res.get('total_matches')}"
+        )
+        return res
+    except Exception as e:
+        logger.error(f"[scheduler] Breakout Scan Job error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+breakout_alert_job = breakout_digest_job
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -1081,10 +1102,29 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # 9:00 AM CST (Mon-Fri) — Morning Market Open Breakouts Alert (Default 50 + Momentum 50)
+    scheduler.add_job(
+        breakout_digest_job,
+        CronTrigger(hour=9, minute=0, day_of_week="mon-fri", timezone=CST),
+        id="breakout_alert_morning",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # 3:35 PM CST (Mon-Fri) — Power Hour Breakouts Alert (Default 50 + Momentum 50)
+    scheduler.add_job(
+        breakout_digest_job,
+        CronTrigger(hour=15, minute=35, day_of_week="mon-fri", timezone=CST),
+        id="breakout_alert_power_hour",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     logger.info(
         "[scheduler] registered: default50_scan@8:00CST, "
         "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
-        "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST, "
+        "pre_earnings@8:30CST, momentum@8:45CST, breakout_morning@9:00CST, "
+        "breakout_power_hour@15:35CST, polling 15:00–18:00 CST, "
         "eod_exceptional_scan@16:15CST, tos_email_poll@19:15CST, "
         "triad_best_picks@19:30CST, eod_exceptional_evening@19:45CST"
     )

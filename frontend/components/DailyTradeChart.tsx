@@ -656,14 +656,25 @@ export default function DailyTradeChart({
 
   const fibLevels = data?.fib_levels || {};
   const nearestFib = data?.nearest_fib;
+  const weeklyFibLevels = data?.weekly_fib_levels || data?.levels?.weekly_fib_levels || {};
+  const weeklyNearestFib = data?.weekly_nearest_fib || data?.levels?.weekly_nearest_fib;
   const currentP = data?.current_price || levels.entry || 0;
   let resolvedFibCall = finalJudgement?.fib_call;
   if (!resolvedFibCall && nearestFib && fibLevels[nearestFib] != null) {
     const fVal = fibLevels[nearestFib];
-    const desc = getFibDescription(nearestFib);
+    const desc = getFibDescription(nearestFib, "52w");
     const distPct = currentP > 0 ? Math.round(((fVal - currentP) / currentP) * 1000) / 10 : 0;
     const role = Math.abs(distPct) < 0.5 ? "At Level" : fVal > currentP ? "Resistance" : "Support";
     resolvedFibCall = `${nearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
+  }
+
+  let resolvedWeeklyFibCall = "";
+  if (weeklyNearestFib && weeklyFibLevels[weeklyNearestFib] != null) {
+    const fVal = weeklyFibLevels[weeklyNearestFib];
+    const desc = getFibDescription(weeklyNearestFib, "week");
+    const distPct = currentP > 0 ? Math.round(((fVal - currentP) / currentP) * 1000) / 10 : 0;
+    const role = Math.abs(distPct) < 0.5 ? "At Level" : fVal > currentP ? "Resistance" : "Support";
+    resolvedWeeklyFibCall = `${weeklyNearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
   }
 
   return (
@@ -984,8 +995,8 @@ export default function DailyTradeChart({
             </div>
           </div>
 
-          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci) */}
-          <div className={`grid grid-cols-1 ${resolvedFibCall ? "lg:grid-cols-3 sm:grid-cols-2" : "sm:grid-cols-2"} gap-2 text-xs font-mono mt-2`}>
+          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci + Week Fibonacci) */}
+          <div className={`grid grid-cols-1 ${resolvedFibCall && resolvedWeeklyFibCall ? "sm:grid-cols-2 lg:grid-cols-4" : (resolvedFibCall || resolvedWeeklyFibCall) ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2"} gap-2 text-xs font-mono mt-2`}>
             <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
               <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
                 <span>🔔</span>
@@ -1007,13 +1018,25 @@ export default function DailyTradeChart({
             </div>
 
             {resolvedFibCall && (
-              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start sm:col-span-2 lg:col-span-1">
+              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
                 <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
                   <span>📐</span>
                   <span>52W Fibonacci</span>
                 </div>
                 <div className="text-[#c084fc] font-semibold text-xs leading-snug break-words">
                   {resolvedFibCall}
+                </div>
+              </div>
+            )}
+
+            {resolvedWeeklyFibCall && (
+              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+                <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📏</span>
+                  <span>Week Fibonacci</span>
+                </div>
+                <div className="text-[#38bdf8] font-semibold text-xs leading-snug break-words">
+                  {resolvedWeeklyFibCall}
                 </div>
               </div>
             )}
@@ -1121,6 +1144,14 @@ export default function DailyTradeChart({
                       <span className="text-[#00e5a0]/80">
                         Zone: ${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}
                       </span>
+                    )}
+                    {levels.last_breakout_date && (
+                      <div className="text-[10px] text-[#8e95bf] mt-0.5 flex items-center gap-1 font-mono">
+                        <span>⚡ Breakout:</span>
+                        <span className={levels.last_breakout_days_ago === 0 ? "text-[#00e5a0] font-bold" : "text-[#4d9fff]"}>
+                          {levels.last_breakout_days_ago === 0 ? "Today" : `${levels.last_breakout_days_ago}d ago`} ({levels.last_breakout_date})
+                        </span>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1558,6 +1589,46 @@ export default function DailyTradeChart({
                 Enter on intraday pullbacks or market open if holding above moving averages.
               </>
             )}
+
+            {/* Last Breakout Information */}
+            <div className="mt-3 pt-2.5 border-t border-[#1a1d2e] flex flex-col gap-1.5 text-[11px] font-mono">
+              <div className="flex items-center justify-between text-[#8b949e]">
+                <span className="flex items-center gap-1 font-semibold text-[#8e95bf]">
+                  <span>⚡</span> Last Breakout:
+                </span>
+                {levels.last_breakout_date ? (
+                  <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${
+                    levels.last_breakout_days_ago === 0
+                      ? "bg-[#00e5a0]/15 text-[#00e5a0] border border-[#00e5a0]/30"
+                      : levels.last_breakout_days_ago <= 3
+                      ? "bg-[#38bdf8]/15 text-[#38bdf8] border border-[#38bdf8]/30"
+                      : "bg-[#1f2438] text-slate-300 border border-border/40"
+                  }`}>
+                    {levels.last_breakout_days_ago === 0
+                      ? `Today (${levels.last_breakout_date_label || levels.last_breakout_date})`
+                      : levels.last_breakout_days_ago === 1
+                      ? `Yesterday (${levels.last_breakout_date_label || levels.last_breakout_date})`
+                      : `${levels.last_breakout_days_ago} sessions ago (${levels.last_breakout_date_label || levels.last_breakout_date})`}
+                  </span>
+                ) : (
+                  <span className="text-[#6b7099] italic">Consolidating below resistance</span>
+                )}
+              </div>
+              {levels.last_breakout_date && (
+                <div className="text-[10px] text-[#8b949e] flex flex-wrap items-center justify-between gap-1">
+                  <span>
+                    Pivot: <b className="text-white">${levels.last_breakout_level?.toFixed(2)}</b>{" "}
+                    <span className="text-[#6b7099]">({levels.last_breakout_type || "20D High"})</span>
+                  </span>
+                  <span>
+                    Gain: <b className="text-[#00e5a0]">+{levels.last_breakout_gain_pct}%</b>
+                    {levels.last_breakout_vol_ratio != null && (
+                      <> · <b className="text-[#f5c842]">{levels.last_breakout_vol_ratio}x Vol</b></>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
             <b className="text-[#34d399] block mb-1">2. Target 1 Exit (Scale Out 50%)</b>

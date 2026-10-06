@@ -164,6 +164,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
 
     # ── 6. Fibonacci levels ───────────────────────────────────────────────────
     fib_levels, nearest_fib_label = {}, "N/A"
+    hi52, lo52 = None, None
     if not _daily.empty and len(_daily) >= 20:
         try:
             hi_col = _col(_daily, "high"); lo_col = _col(_daily, "low")
@@ -179,6 +180,26 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
 
     # ── 8. Trade levels (uses derived direction via verdict) ──────────────────
     trade_levels = _safe(calc_trade_levels, _EMPTY_TRADE, _daily, verdict, current_price)
+
+    # ── 8b. Weekly Fibonacci levels (Week High and Low) ───────────────────────
+    weekly_fib_levels, weekly_nearest_fib_label = {}, "N/A"
+    wk_lo = trade_levels.get("pw_low")
+    wk_hi = trade_levels.get("pw_high")
+    wk_range_label = trade_levels.get("pw_range_label")
+
+    if (wk_lo is None or wk_hi is None or wk_hi <= wk_lo) and not _daily.empty and len(_daily) >= 5:
+        try:
+            hi_col = _col(_daily, "high"); lo_col = _col(_daily, "low")
+            wk_hi = round(float(_daily[hi_col].tail(5).max()), 2)
+            wk_lo = round(float(_daily[lo_col].tail(5).min()), 2)
+            if not wk_range_label:
+                wk_range_label = "5-Day Range"
+        except Exception:
+            pass
+
+    if wk_lo is not None and wk_hi is not None and wk_hi > wk_lo:
+        weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
+        weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(current_price - x[1]))[0]
 
     # ── 9. WTD Fib + RSI ─────────────────────────────────────────────────────
     weekly_fib_rsi = _safe(get_weekly_fib_and_rsi, {"weekly_fib": "N/A", "rsi_4h": "N/A"}, ticker, current_price)
@@ -258,6 +279,13 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "signal":             signal,
         "fib_levels":         fib_levels,
         "nearest_fib":        nearest_fib_label,
+        "weekly_fib_levels":  weekly_fib_levels,
+        "weekly_nearest_fib": weekly_nearest_fib_label,
+        "week_high":          wk_hi,
+        "week_low":           wk_lo,
+        "week_range_label":   wk_range_label,
+        "hi_52":              hi52,
+        "lo_52":              lo52,
         "support_resistance": sr,
         "weekly_fib_rsi":     weekly_fib_rsi,
         "fundamentals":       fundamentals,
@@ -487,6 +515,25 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         fib_levels = calc_fib_levels(lo52, hi52)
         nearest_fib_label = min(fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0] if fib_levels else "N/A"
 
+        # Weekly Fibonacci levels (Week High and Low)
+        weekly_fib_levels, weekly_nearest_fib_label = {}, "N/A"
+        wk_lo = trade.get("pw_low")
+        wk_hi = trade.get("pw_high")
+        wk_range_label = trade.get("pw_range_label")
+
+        if (wk_lo is None or wk_hi is None or wk_hi <= wk_lo) and not df_hist.empty and len(df_hist) >= 5:
+            try:
+                wk_hi = round(float(df_hist[hi_col].tail(5).max()), 2)
+                wk_lo = round(float(df_hist[lo_col].tail(5).min()), 2)
+                if not wk_range_label:
+                    wk_range_label = "5-Day Range"
+            except Exception:
+                pass
+
+        if wk_lo is not None and wk_hi is not None and wk_hi > wk_lo:
+            weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
+            weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0]
+
         final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price, fib_levels, nearest_fib_label)
 
         bars = []
@@ -683,6 +730,19 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "retest_t1_gain": trade.get("retest_t1_gain"),
                 "retest_t2_gain": trade.get("retest_t2_gain"),
                 "pw_range_label": trade.get("pw_range_label"),
+                "last_breakout": trade.get("last_breakout"),
+                "last_breakout_date": trade.get("last_breakout_date"),
+                "last_breakout_date_label": trade.get("last_breakout_date_label"),
+                "last_breakout_days_ago": trade.get("last_breakout_days_ago"),
+                "last_breakout_price": trade.get("last_breakout_price"),
+                "last_breakout_level": trade.get("last_breakout_level"),
+                "last_breakout_gain_pct": trade.get("last_breakout_gain_pct"),
+                "last_breakout_vol_ratio": trade.get("last_breakout_vol_ratio"),
+                "last_breakout_type": trade.get("last_breakout_type"),
+                "weekly_fib_levels": weekly_fib_levels,
+                "weekly_nearest_fib": weekly_nearest_fib_label,
+                "week_high": wk_hi,
+                "week_low": wk_lo,
             },
             "support_resistance": sr,
             "markers": markers,
@@ -691,6 +751,11 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "final_judgement": final_judgement,
             "fib_levels": fib_levels,
             "nearest_fib": nearest_fib_label,
+            "weekly_fib_levels": weekly_fib_levels,
+            "weekly_nearest_fib": weekly_nearest_fib_label,
+            "week_high": wk_hi,
+            "week_low": wk_lo,
+            "week_range_label": wk_range_label,
             "hi_52": hi52,
             "lo_52": lo52,
         })

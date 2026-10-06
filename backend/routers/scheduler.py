@@ -90,10 +90,10 @@ def trigger_sweep_digest():
 
 @router.post("/run-breakouts")
 def trigger_breakout_digest():
-    """Manually trigger the post-market exceptional/V3 scanner digest."""
+    """Manually trigger the Default 50 & Momentum 50 breakout scanner & Telegram alert."""
     from backend.services.scheduler import breakout_digest_job
-    breakout_digest_job()
-    return {"status": "exceptional/V3 digest completed"}
+    res = breakout_digest_job()
+    return {"status": "breakout alert completed", "result": res}
 
 
 @router.post("/run-exceptional")

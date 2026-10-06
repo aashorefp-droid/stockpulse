@@ -202,3 +202,12 @@ def get_telegram_watchlist(force: bool = False):
     except Exception as e:
         return {"ok": False, "tickers": [], "error": str(e)}
 
+
+@router.post("/breakout-alert")
+@router.post("/breakout-scan")
+def telegram_breakout_scan(send_telegram: bool = True):
+    from backend.services.breakout_scanner import dispatch_breakout_telegram_alert
+    res = dispatch_breakout_telegram_alert(send_msg=send_telegram)
+    return res
+
+
