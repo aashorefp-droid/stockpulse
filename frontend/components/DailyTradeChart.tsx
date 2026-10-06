@@ -985,19 +985,36 @@ export default function DailyTradeChart({
           </div>
 
           {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci) */}
-          <div className={`grid grid-cols-1 ${resolvedFibCall ? "md:grid-cols-3" : "md:grid-cols-2"} gap-2 text-xs font-mono bg-black/40 p-2.5 rounded-lg border border-border/40 mt-1`}>
-            <div className="flex items-center gap-1.5 truncate">
-              <span className="text-[#6b7099]">🔔 Entry Alert:</span>
-              <span className="text-white font-semibold truncate">{finalJudgement.entry_call || "Evaluating..."}</span>
+          <div className={`grid grid-cols-1 ${resolvedFibCall ? "lg:grid-cols-3 sm:grid-cols-2" : "sm:grid-cols-2"} gap-2 text-xs font-mono mt-2`}>
+            <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+              <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                <span>🔔</span>
+                <span>Entry Alert</span>
+              </div>
+              <div className="text-white font-semibold text-xs leading-snug break-words">
+                {finalJudgement.entry_call || "Evaluating..."}
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 truncate">
-              <span className="text-[#6b7099]">📊 Volume Profile:</span>
-              <span className="text-[#4d9fff] font-semibold truncate">{finalJudgement.vp_call || "Calculating..."}</span>
+
+            <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+              <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                <span>📊</span>
+                <span>Volume Profile</span>
+              </div>
+              <div className="text-[#4d9fff] font-semibold text-xs leading-snug break-words">
+                {finalJudgement.vp_call || "Calculating..."}
+              </div>
             </div>
+
             {resolvedFibCall && (
-              <div className="flex items-center gap-1.5 truncate">
-                <span className="text-[#6b7099]">📐 52W Fib:</span>
-                <span className="text-[#a855f7] font-semibold truncate" title={resolvedFibCall}>{resolvedFibCall}</span>
+              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start sm:col-span-2 lg:col-span-1">
+                <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📐</span>
+                  <span>52W Fibonacci</span>
+                </div>
+                <div className="text-[#c084fc] font-semibold text-xs leading-snug break-words">
+                  {resolvedFibCall}
+                </div>
               </div>
             )}
           </div>
