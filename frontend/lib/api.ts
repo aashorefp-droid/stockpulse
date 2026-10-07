@@ -65,6 +65,7 @@ export interface StockAnalysis {
   week_range_label?:   string | null;
   hi_52?:              number | null;
   lo_52?:              number | null;
+  earnings_fib?:       EarningsFibData | null;
   support_resistance: {
     support:    number[];
     resistance: number[];
@@ -75,6 +76,41 @@ export interface StockAnalysis {
   };
   fundamentals:  Fundamentals;
   stock_verdict?: StockVerdict | null;
+}
+
+export interface EarningsFibData {
+  has_earnings: boolean;
+  ticker?: string;
+  earnings_date?: string;
+  reaction_date?: string;
+  reaction_date_label?: string;
+  is_amc?: boolean;
+  days_since_earnings?: number;
+  earnings_high?: number;
+  earnings_low?: number;
+  earnings_open?: number;
+  earnings_close?: number;
+  earnings_midpoint?: number;
+  earnings_range?: number;
+  current_price?: number;
+  dist_from_high?: number;
+  dist_from_high_pct?: number;
+  dist_from_low?: number;
+  dist_from_low_pct?: number;
+  return_since_earnings_pct?: number;
+  post_cycle_high?: number;
+  post_cycle_low?: number;
+  status?: "EXPANSION" | "CONSOLIDATING" | "BREAKDOWN";
+  status_badge?: string;
+  status_label?: string;
+  status_color?: "emerald" | "amber" | "red";
+  fib_levels?: Record<string, number>;
+  nearest_fib?: string;
+  nearest_fib_val?: number;
+  nearest_fib_desc?: string;
+  nearest_fib_role?: string;
+  nearest_fib_dist_pct?: number;
+  reason?: string;
 }
 
 export interface StockVerdict {

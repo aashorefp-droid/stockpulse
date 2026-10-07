@@ -1111,11 +1111,11 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
-    # 3:35 PM CST (Mon-Fri) — Power Hour Breakouts Alert (Default 50 + Momentum 50)
+    # 3:30 PM CST (Mon-Fri) — Post-Market Close Breakout Alert (Default 50 + Momentum 50)
     scheduler.add_job(
         breakout_digest_job,
-        CronTrigger(hour=15, minute=35, day_of_week="mon-fri", timezone=CST),
-        id="breakout_alert_power_hour",
+        CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=CST),
+        id="breakout_alert_post_market",
         replace_existing=True,
         misfire_grace_time=3600,
     )
@@ -1124,7 +1124,7 @@ def setup_scheduler():
         "[scheduler] registered: default50_scan@8:00CST, "
         "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
         "pre_earnings@8:30CST, momentum@8:45CST, breakout_morning@9:00CST, "
-        "breakout_power_hour@15:35CST, polling 15:00–18:00 CST, "
+        "breakout_post_market@15:30CST, polling 15:00–18:00 CST, "
         "eod_exceptional_scan@16:15CST, tos_email_poll@19:15CST, "
         "triad_best_picks@19:30CST, eod_exceptional_evening@19:45CST"
     )

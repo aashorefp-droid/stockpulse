@@ -123,6 +123,7 @@ export default function StockPage({ params }: StockPageProps) {
     week_range_label = null,
     hi_52 = null,
     lo_52 = null,
+    earnings_fib = null,
     support_resistance = { support: [], resistance: [] },
     weekly_fib_rsi = { weekly_fib: "N/A", rsi_4h: "N/A" },
     fundamentals = {},
@@ -567,6 +568,7 @@ export default function StockPage({ params }: StockPageProps) {
             weekRangeLabel={week_range_label}
             hi52={hi_52}
             lo52={lo_52}
+            earningsFib={earnings_fib}
           />
         </div>
         <div className="space-y-4">

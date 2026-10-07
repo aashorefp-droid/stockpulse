@@ -14,7 +14,7 @@ from backend.services.analysis import (
     compute_weekly_bias, compute_daily_bias, compute_4h_bias,
     mtf_signal_action, get_multiframe_bias, get_entry_grade,
     calc_trade_levels, get_fundamentals, get_weekly_fib_and_rsi, _col,
-    generate_final_judgement,
+    generate_final_judgement, calc_earnings_fib_analysis,
 )
 from backend.services.options import get_options_bias, get_options_strategy
 from backend.services.market_data import (
@@ -201,6 +201,9 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
         weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(current_price - x[1]))[0]
 
+    # ── 8c. Last Earnings Fibonacci Analysis (E-High & E-Low + Where We Are Now) ──
+    earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, _daily, current_price, as_of)
+
     # ── 9. WTD Fib + RSI ─────────────────────────────────────────────────────
     weekly_fib_rsi = _safe(get_weekly_fib_and_rsi, {"weekly_fib": "N/A", "rsi_4h": "N/A"}, ticker, current_price)
 
@@ -286,6 +289,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "week_range_label":   wk_range_label,
         "hi_52":              hi52,
         "lo_52":              lo52,
+        "earnings_fib":       earnings_fib,
         "support_resistance": sr,
         "weekly_fib_rsi":     weekly_fib_rsi,
         "fundamentals":       fundamentals,
@@ -534,6 +538,9 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
             weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0]
 
+        # Last Earnings Fibonacci Analysis
+        earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, df_hist, cur_price, as_of)
+
         final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price, fib_levels, nearest_fib_label)
 
         bars = []
@@ -743,6 +750,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "weekly_nearest_fib": weekly_nearest_fib_label,
                 "week_high": wk_hi,
                 "week_low": wk_lo,
+                "earnings_fib": earnings_fib,
             },
             "support_resistance": sr,
             "markers": markers,
@@ -756,6 +764,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "week_high": wk_hi,
             "week_low": wk_lo,
             "week_range_label": wk_range_label,
+            "earnings_fib": earnings_fib,
             "hi_52": hi52,
             "lo_52": lo52,
         })

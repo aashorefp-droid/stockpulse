@@ -677,6 +677,17 @@ export default function DailyTradeChart({
     resolvedWeeklyFibCall = `${weeklyNearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
   }
 
+  const earningsFib = data?.earnings_fib || data?.levels?.earnings_fib;
+  let resolvedEarningsFibCall = "";
+  if (earningsFib && earningsFib.has_earnings && earningsFib.nearest_fib) {
+    const eVal = earningsFib.nearest_fib_val;
+    const eNear = earningsFib.nearest_fib;
+    const desc = earningsFib.nearest_fib_desc || getFibDescription(eNear, "earnings");
+    const role = earningsFib.nearest_fib_role || "At Level";
+    const statusShort = earningsFib.status_badge || earningsFib.status;
+    resolvedEarningsFibCall = `${eNear} (${desc}) $${eVal?.toFixed(2)} · ${role} [${statusShort}]`;
+  }
+
   return (
     <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl overflow-hidden shadow-lg mb-8">
       {/* ── Top Control Bar ─────────────────────────────────────────── */}
@@ -995,8 +1006,8 @@ export default function DailyTradeChart({
             </div>
           </div>
 
-          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci + Week Fibonacci) */}
-          <div className={`grid grid-cols-1 ${resolvedFibCall && resolvedWeeklyFibCall ? "sm:grid-cols-2 lg:grid-cols-4" : (resolvedFibCall || resolvedWeeklyFibCall) ? "sm:grid-cols-2 lg:grid-cols-3" : "sm:grid-cols-2"} gap-2 text-xs font-mono mt-2`}>
+          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci + Week Fibonacci + Earnings Fib) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-2 text-xs font-mono mt-2">
             <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
               <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
                 <span>🔔</span>
@@ -1037,6 +1048,18 @@ export default function DailyTradeChart({
                 </div>
                 <div className="text-[#38bdf8] font-semibold text-xs leading-snug break-words">
                   {resolvedWeeklyFibCall}
+                </div>
+              </div>
+            )}
+
+            {resolvedEarningsFibCall && (
+              <div className="bg-black/50 p-2.5 rounded-lg border border-amber-500/30 flex flex-col justify-start">
+                <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📈</span>
+                  <span>Earnings Fib</span>
+                </div>
+                <div className="text-amber-200 font-semibold text-xs leading-snug break-words">
+                  {resolvedEarningsFibCall}
                 </div>
               </div>
             )}

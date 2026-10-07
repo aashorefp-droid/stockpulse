@@ -82,6 +82,216 @@ def nearest_fib(price: float, fib_levels: dict) -> tuple[str, float]:
     return best_label, best_val
 
 
+def calc_earnings_fib_analysis(
+    ticker: str,
+    daily_df: Optional[pd.DataFrame] = None,
+    current_price: Optional[float] = None,
+    as_of: Optional[str] = None,
+) -> dict:
+    """
+    Computes Fibonacci levels and price action metrics based on the Last Earnings reaction:
+    - Finds the last earnings report date and reaction day bar (Open, High, Low, Close, Volume).
+    - Anchors Fibonacci levels to Last Earnings High (0.0%) and Last Earnings Low (100.0%).
+    - Evaluates 'Where We Are Now':
+      * Distance from Last Earnings High ($ and %)
+      * Distance from Last Earnings Low ($ and %)
+      * Return since Earnings Day Close (%)
+      * Position status: EXPANSION (Above E-High) | CONSOLIDATING (Inside E-Range) | BREAKDOWN (Below E-Low)
+      * Nearest Fibonacci level and role (Support / Resistance / At Level)
+      * Days elapsed since earnings and Post-Earnings Cycle High/Low.
+    """
+    import yfinance as yf
+    from datetime import date, datetime, timedelta
+
+    as_of_dt = None
+    if as_of:
+        try:
+            as_of_dt = datetime.strptime(as_of.strip(), "%Y-%m-%d").date()
+        except Exception:
+            as_of_dt = None
+
+    ref_date = as_of_dt or date.today()
+
+    tk = yf.Ticker(ticker)
+    earn_ts = None
+
+    # Method 1: earnings_dates table (fastest & most accurate timestamps)
+    try:
+        ed = tk.earnings_dates
+        if ed is not None and not ed.empty:
+            past_ed = [
+                ts for ts in ed.index
+                if (ts.date() if hasattr(ts, "date") else ts) <= ref_date
+            ]
+            if past_ed:
+                earn_ts = max(past_ed)
+    except Exception:
+        pass
+
+    # Method 2: earnings_history table fallback
+    if earn_ts is None:
+        try:
+            eh = tk.earnings_history
+            if eh is not None and not eh.empty:
+                past_eh = [
+                    ts for ts in eh.index
+                    if (ts.date() if hasattr(ts, "date") else ts) <= ref_date
+                ]
+                if past_eh:
+                    earn_ts = max(past_eh)
+        except Exception:
+            pass
+
+    # Method 3: calendar fallback
+    if earn_ts is None:
+        try:
+            from backend.services.earnings import get_earnings_dates_yf
+            ed_list = get_earnings_dates_yf(ticker)
+            past_list = [
+                e["date"] for e in ed_list
+                if datetime.strptime(e["date"], "%Y-%m-%d").date() <= ref_date
+            ]
+            if past_list:
+                latest_str = max(past_list)
+                earn_ts = datetime.strptime(latest_str, "%Y-%m-%d")
+        except Exception:
+            pass
+
+    if earn_ts is None:
+        return {"has_earnings": False, "reason": "No past earnings dates found"}
+
+    earn_date = earn_ts.date() if hasattr(earn_ts, "date") else earn_ts
+    is_amc = getattr(earn_ts, "hour", 16) >= 12
+
+    if daily_df is None or daily_df.empty:
+        try:
+            daily_df = tk.history(period="1y", interval="1d")
+            daily_df.index = pd.to_datetime(daily_df.index).tz_localize(None)
+            daily_df.columns = [c.lower() for c in daily_df.columns]
+        except Exception:
+            return {"has_earnings": False, "reason": "Could not fetch price history"}
+
+    df_copy = daily_df.copy()
+    if hasattr(df_copy.index, "tz_localize") and df_copy.index.tz is not None:
+        df_copy.index = df_copy.index.tz_localize(None)
+
+    hi_col = _col(df_copy, "high")
+    lo_col = _col(df_copy, "low")
+    close_col = _col(df_copy, "close")
+    open_col = _col(df_copy, "open")
+
+    e_dt = pd.Timestamp(earn_date)
+    hist_dates = sorted(df_copy.index)
+
+    # Reaction bar: if AMC, first trading day strictly AFTER earnings report; if BMO, on or after
+    if is_amc:
+        react_dates = [d for d in hist_dates if d > e_dt]
+    else:
+        react_dates = [d for d in hist_dates if d >= e_dt]
+
+    if not react_dates:
+        react_dates = [d for d in hist_dates if d >= e_dt - timedelta(days=3)]
+
+    if not react_dates:
+        return {"has_earnings": False, "reason": "No price data found around earnings date"}
+
+    r_date = react_dates[0]
+    bar = df_copy.loc[r_date]
+
+    e_high = round(float(bar[hi_col]), 2)
+    e_low = round(float(bar[lo_col]), 2)
+    e_open = round(float(bar[open_col]), 2)
+    e_close = round(float(bar[close_col]), 2)
+    e_midpoint = round((e_high + e_low) / 2.0, 2)
+    e_range = round(e_high - e_low, 2)
+
+    if current_price is None or current_price <= 0 or pd.isna(current_price):
+        valid_closes = df_copy[close_col].dropna()
+        current_price = round(float(valid_closes.iloc[-1]), 2) if not valid_closes.empty else e_close
+
+    post_df = df_copy[df_copy.index >= r_date]
+    days_since = len(post_df)
+    post_hi = round(float(post_df[hi_col].max()), 2) if not post_df.empty else e_high
+    post_lo = round(float(post_df[lo_col].min()), 2) if not post_df.empty else e_low
+
+    dist_high = round(current_price - e_high, 2)
+    dist_high_pct = round(((current_price - e_high) / e_high) * 100, 2) if e_high > 0 else 0.0
+
+    dist_low = round(current_price - e_low, 2)
+    dist_low_pct = round(((current_price - e_low) / e_low) * 100, 2) if e_low > 0 else 0.0
+
+    return_since_pct = round(((current_price - e_close) / e_close) * 100, 2) if e_close > 0 else 0.0
+
+    # Determine "Where We Are Now"
+    if current_price > e_high:
+        status = "EXPANSION"
+        status_badge = "BULLISH EXPANSION"
+        status_label = f"Trading Above Earnings High (+{dist_high_pct:.1f}%)"
+        status_color = "emerald"
+    elif current_price < e_low:
+        status = "BREAKDOWN"
+        status_badge = "BEARISH BREAKDOWN"
+        status_label = f"Trading Below Earnings Low ({dist_low_pct:.1f}%)"
+        status_color = "red"
+    else:
+        status = "CONSOLIDATING"
+        status_badge = "INSIDE EARNINGS RANGE"
+        pos_in_range = ((current_price - e_low) / e_range * 100) if e_range > 0 else 50.0
+        if current_price >= e_midpoint:
+            status_label = f"Consolidating in Upper Half ({pos_in_range:.0f}% of range)"
+        else:
+            status_label = f"Consolidating in Lower Half ({pos_in_range:.0f}% of range)"
+        status_color = "amber"
+
+    # Calculate Fibonacci Levels based on Last Earnings High & Low
+    fib_levels = calc_fib_levels(e_low, e_high) if e_high > e_low else {}
+    nearest_label, nearest_val = ("N/A", 0.0)
+    nearest_role = "At Level"
+    nearest_dist_pct = 0.0
+    nearest_desc = ""
+
+    if fib_levels:
+        nearest_label = min(fib_levels.items(), key=lambda x: abs(current_price - x[1]))[0]
+        nearest_val = fib_levels[nearest_label]
+        nearest_dist_pct = round(((nearest_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        nearest_role = "At Level" if abs(nearest_dist_pct) < 0.5 else ("Resistance" if nearest_val > current_price else "Support")
+        nearest_desc = get_fib_label_desc(nearest_label, mode="earnings")
+
+    return {
+        "has_earnings": True,
+        "ticker": ticker,
+        "earnings_date": str(earn_date),
+        "reaction_date": r_date.strftime("%Y-%m-%d"),
+        "reaction_date_label": r_date.strftime("%b %d, %Y"),
+        "is_amc": bool(is_amc),
+        "days_since_earnings": days_since,
+        "earnings_high": e_high,
+        "earnings_low": e_low,
+        "earnings_open": e_open,
+        "earnings_close": e_close,
+        "earnings_midpoint": e_midpoint,
+        "earnings_range": e_range,
+        "current_price": current_price,
+        "dist_from_high": dist_high,
+        "dist_from_high_pct": dist_high_pct,
+        "dist_from_low": dist_low,
+        "dist_from_low_pct": dist_low_pct,
+        "return_since_earnings_pct": return_since_pct,
+        "post_cycle_high": post_hi,
+        "post_cycle_low": post_lo,
+        "status": status,
+        "status_badge": status_badge,
+        "status_label": status_label,
+        "status_color": status_color,
+        "fib_levels": fib_levels,
+        "nearest_fib": nearest_label,
+        "nearest_fib_val": nearest_val,
+        "nearest_fib_desc": nearest_desc,
+        "nearest_fib_role": nearest_role,
+        "nearest_fib_dist_pct": nearest_dist_pct,
+    }
+
+
 # ── Support / Resistance ──────────────────────────────────────────────────────
 
 def calc_support_resistance(daily_df: pd.DataFrame, current_price: float, n_levels: int = 5) -> dict:
@@ -977,6 +1187,26 @@ def get_fib_label_desc(label: str, mode: str = "52w") -> str:
             "E 261.8%": "Max Expansion",
             "N -23.6%": "Bearish Breakdown 1",
             "N -38.2%": "Bearish Breakdown 2",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
+    elif mode == "earnings":
+        mapping = {
+            "R 0.0%": "Last Earnings High",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "Earnings Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "Last Earnings Low",
+            "E 127.2%": "Post-Earnings Ext 1",
+            "E 141.4%": "Post-Earnings Ext 2",
+            "E 161.8%": "Golden Earnings Ext",
+            "E 200.0%": "2x Earnings Expansion",
+            "E 261.8%": "Max Earnings Expansion",
+            "N -23.6%": "Earnings Breakdown 1",
+            "N -38.2%": "Earnings Breakdown 2",
             "N -50.0%": "Breakdown Midpoint",
             "N -61.8%": "Golden Breakdown",
             "N -100.0%": "100% Breakdown",
