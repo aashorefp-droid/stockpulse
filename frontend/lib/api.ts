@@ -66,6 +66,7 @@ export interface StockAnalysis {
   hi_52?:              number | null;
   lo_52?:              number | null;
   earnings_fib?:       EarningsFibData | null;
+  earnings_prediction?: EarningsPredictionData | null;
   support_resistance: {
     support:    number[];
     resistance: number[];
@@ -76,6 +77,68 @@ export interface StockAnalysis {
   };
   fundamentals:  Fundamentals;
   stock_verdict?: StockVerdict | null;
+}
+
+export interface EarningsPredictionData {
+  ticker: string;
+  prediction: string;
+  prediction_status: "ACTIVE" | "NA_NOT_TOMORROW" | string;
+  prediction_badge: string;
+  prediction_color: string;
+  prediction_note: string;
+  is_tomorrow: boolean;
+  days_until_earnings?: number | null;
+  market_cap: {
+    formatted: string;
+    raw?: number | null;
+    category: string;
+  };
+  helpful_earnings_data: {
+    next_earnings_date?: string | null;
+    next_earnings_date_label?: string;
+    next_earnings_time?: string;
+    days_until?: number | null;
+    is_tomorrow: boolean;
+    status_label: string;
+    next_eps_estimate?: number | null;
+    next_revenue_estimate?: string | null;
+    pe_ratio?: number | null;
+    forward_pe?: number | null;
+    last_earnings_eps_actual?: number | null;
+    last_earnings_eps_estimate?: number | null;
+    last_earnings_surprise_pct?: number | null;
+    last_earnings_beat_status?: string;
+    historical_beat_rate_pct?: number | null;
+    expected_move_pct?: number | null;
+  };
+  fib_confluence: {
+    fib_52w: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    fib_week: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    fib_earnings: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    total_confluence_score: number;
+    predicted_outcome: string;
+    outcome_bias: string;
+    outcome_color: string;
+    rationale: string;
+    upside_target?: number;
+    upside_target_label?: string;
+    upside_target_pct?: number;
+    downside_floor?: number;
+    downside_floor_label?: string;
+    downside_floor_pct?: number;
+  };
 }
 
 export interface EarningsFibData {

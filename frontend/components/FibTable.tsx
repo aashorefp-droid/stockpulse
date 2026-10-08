@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { EarningsFibData } from "@/lib/api";
+import type { EarningsFibData, EarningsPredictionData } from "@/lib/api";
 
 interface Props {
   levels: Record<string, number>;
@@ -15,6 +15,7 @@ interface Props {
   hi52?: number | null;
   lo52?: number | null;
   earningsFib?: EarningsFibData | null;
+  earningsPrediction?: EarningsPredictionData | null;
 }
 
 export function getFibDescription(label: string, mode: "52w" | "week" | "earnings" = "52w"): string {
@@ -159,10 +160,12 @@ export default function FibTable({
   hi52,
   lo52,
   earningsFib,
+  earningsPrediction,
 }: Props) {
   const hasWeekly = Boolean(weeklyLevels && Object.keys(weeklyLevels).length > 0);
   const hasEarnings = Boolean(earningsFib && earningsFib.has_earnings && earningsFib.fib_levels);
   const [activeTab, setActiveTab] = useState<"both" | "52w" | "week" | "earnings">(hasWeekly ? "both" : "52w");
+  const [showConfluencePreview, setShowConfluencePreview] = useState(false);
 
   const entries52w = Object.entries(levels || {}).sort((a, b) => b[1] - a[1]);
   const entriesWeek = Object.entries(weeklyLevels || {}).sort((a, b) => b[1] - a[1]);
@@ -234,6 +237,232 @@ export default function FibTable({
 
   return (
     <div className="card">
+      {/* ── 52W / WEEK / EARNINGS FIBS OUTCOME PREDICTION & HELPFUL DATA BANNER ── */}
+      {earningsPrediction && (
+        <div className="mb-4 rounded-xl bg-gradient-to-br from-[#121626] via-[#0d101d] to-[#080a13] border border-indigo-500/20 p-3.5 shadow-sm">
+          {/* Top Row: Title, Prediction Badge, Market Cap & Schedule */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-border/30">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl">🔮</span>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">
+                    Earnings Outcome Prediction
+                  </span>
+                  {/* Status Badge */}
+                  {earningsPrediction.is_tomorrow ? (
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border shadow-sm uppercase tracking-wider flex items-center gap-1.5 ${
+                        earningsPrediction.prediction_color === "emerald"
+                          ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/50"
+                          : earningsPrediction.prediction_color === "teal"
+                          ? "bg-teal-500/20 text-teal-300 border-teal-500/50"
+                          : earningsPrediction.prediction_color === "rose"
+                          ? "bg-rose-500/20 text-rose-300 border-rose-500/50"
+                          : "bg-amber-500/20 text-amber-300 border-amber-500/50"
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                      <span>PREDICTION: {earningsPrediction.prediction}</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-slate-800/80 text-slate-300 border border-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+                      <span>EARNINGS: N/A</span>
+                      <span className="text-[10px] text-slate-400 font-normal lowercase">(not tomorrow)</span>
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-300 font-sans mt-0.5">
+                  {earningsPrediction.prediction_note}
+                </div>
+              </div>
+            </div>
+
+            {/* Market Cap & Next Earnings Info */}
+            <div className="flex items-center gap-2.5 font-mono text-xs ml-auto">
+              {earningsPrediction.market_cap?.formatted && earningsPrediction.market_cap.formatted !== "N/A" && (
+                <div className="text-right bg-black/40 px-2.5 py-1 rounded border border-border/40">
+                  <span className="text-[10px] text-slate-400 block font-sans">Market Cap</span>
+                  <span className="font-bold text-sky-300">{earningsPrediction.market_cap.formatted}</span>
+                  <span className="text-[9px] text-slate-400 block font-sans">
+                    {earningsPrediction.market_cap.category}
+                  </span>
+                </div>
+              )}
+              {earningsPrediction.helpful_earnings_data?.next_earnings_date_label && (
+                <div className="text-right bg-black/40 px-2.5 py-1 rounded border border-border/40">
+                  <span className="text-[10px] text-slate-400 block font-sans">Next Earnings</span>
+                  <span className="font-bold text-amber-200">
+                    {earningsPrediction.helpful_earnings_data.next_earnings_date_label}
+                  </span>
+                  <span className="text-[9px] text-amber-400/90 block font-sans">
+                    {earningsPrediction.helpful_earnings_data.status_label}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Helpful Earnings Data Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono mt-2.5">
+            <div className="bg-black/30 p-2 rounded border border-border/30">
+              <span className="text-[10px] text-slate-400 block font-sans">Next Consensus Est.</span>
+              <span className="font-bold text-white">
+                EPS: {earningsPrediction.helpful_earnings_data?.next_eps_estimate != null ? `$${earningsPrediction.helpful_earnings_data.next_eps_estimate}` : "N/A"}
+              </span>
+              <span className="text-[10px] text-slate-400 block font-sans mt-0.5">
+                Rev: {earningsPrediction.helpful_earnings_data?.next_revenue_estimate || "N/A"}
+              </span>
+            </div>
+
+            <div className="bg-black/30 p-2 rounded border border-border/30">
+              <span className="text-[10px] text-slate-400 block font-sans">Valuation Multiples</span>
+              <span className="font-bold text-white">
+                P/E: {earningsPrediction.helpful_earnings_data?.pe_ratio != null ? earningsPrediction.helpful_earnings_data.pe_ratio : "N/A"}
+              </span>
+              <span className="text-[10px] text-slate-400 block font-sans mt-0.5">
+                Fwd P/E: {earningsPrediction.helpful_earnings_data?.forward_pe != null ? earningsPrediction.helpful_earnings_data.forward_pe : "N/A"}
+              </span>
+            </div>
+
+            <div className="bg-black/30 p-2 rounded border border-border/30">
+              <span className="text-[10px] text-slate-400 block font-sans">Last Report Beat/Miss</span>
+              <span
+                className={`font-bold ${
+                  earningsPrediction.helpful_earnings_data?.last_earnings_beat_status === "BEAT"
+                    ? "text-emerald-400"
+                    : earningsPrediction.helpful_earnings_data?.last_earnings_beat_status === "MISS"
+                    ? "text-rose-400"
+                    : "text-slate-300"
+                }`}
+              >
+                {earningsPrediction.helpful_earnings_data?.last_earnings_eps_actual != null ? `$${earningsPrediction.helpful_earnings_data.last_earnings_eps_actual}` : "N/A"}{" "}
+                <span className="text-[10px]">
+                  ({earningsPrediction.helpful_earnings_data?.last_earnings_surprise_pct != null ? `${earningsPrediction.helpful_earnings_data.last_earnings_surprise_pct >= 0 ? "+" : ""}${earningsPrediction.helpful_earnings_data.last_earnings_surprise_pct}%` : ""})
+                </span>
+              </span>
+              <span className="text-[10px] text-slate-400 block font-sans mt-0.5">
+                vs ${earningsPrediction.helpful_earnings_data?.last_earnings_eps_estimate ?? "N/A"} est
+              </span>
+            </div>
+
+            <div className="bg-black/30 p-2 rounded border border-border/30">
+              <span className="text-[10px] text-slate-400 block font-sans">Track Record & Move</span>
+              <span className="font-bold text-indigo-300">
+                {earningsPrediction.helpful_earnings_data?.historical_beat_rate_pct != null ? `${earningsPrediction.helpful_earnings_data.historical_beat_rate_pct}% Beats` : "N/A"}
+              </span>
+              <span className="text-[10px] text-amber-300/90 block font-sans mt-0.5">
+                Options Move: {earningsPrediction.helpful_earnings_data?.expected_move_pct != null ? `±${earningsPrediction.helpful_earnings_data.expected_move_pct}%` : "N/A"}
+              </span>
+            </div>
+          </div>
+
+          {/* Active Prediction Details OR Collapsible Confluence Preview */}
+          {(earningsPrediction.is_tomorrow || showConfluencePreview) && earningsPrediction.fib_confluence && (
+            <div className="mt-3 pt-3 border-t border-border/30 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-white font-sans flex items-center gap-1.5">
+                  <span>📐</span>
+                  <span>52W · Week · Earnings Fibs Confluence Model</span>
+                </span>
+                <span className="font-mono text-sky-300 bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/20">
+                  Confluence Score: {earningsPrediction.fib_confluence.total_confluence_score > 0 ? "+" : ""}{earningsPrediction.fib_confluence.total_confluence_score}/100 ({earningsPrediction.fib_confluence.outcome_bias})
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                {/* 52W Stance */}
+                <div className="bg-purple-950/20 border border-purple-500/30 p-2 rounded">
+                  <div className="flex items-center justify-between text-[10px] text-purple-300 font-bold uppercase">
+                    <span>52W Macro Fib</span>
+                    <span>{earningsPrediction.fib_confluence.fib_52w.score > 0 ? "+" : ""}{earningsPrediction.fib_confluence.fib_52w.score} pts</span>
+                  </div>
+                  <div className="font-semibold text-purple-200 mt-0.5">
+                    {earningsPrediction.fib_confluence.fib_52w.stance}
+                  </div>
+                  <div className="text-[10px] text-slate-300 mt-0.5 font-sans">
+                    {earningsPrediction.fib_confluence.fib_52w.description}
+                  </div>
+                </div>
+
+                {/* Weekly Stance */}
+                <div className="bg-blue-950/20 border border-blue-500/30 p-2 rounded">
+                  <div className="flex items-center justify-between text-[10px] text-blue-300 font-bold uppercase">
+                    <span>Weekly Swing Fib</span>
+                    <span>{earningsPrediction.fib_confluence.fib_week.score > 0 ? "+" : ""}{earningsPrediction.fib_confluence.fib_week.score} pts</span>
+                  </div>
+                  <div className="font-semibold text-blue-200 mt-0.5">
+                    {earningsPrediction.fib_confluence.fib_week.stance}
+                  </div>
+                  <div className="text-[10px] text-slate-300 mt-0.5 font-sans">
+                    {earningsPrediction.fib_confluence.fib_week.description}
+                  </div>
+                </div>
+
+                {/* Earnings Reaction Stance */}
+                <div className="bg-amber-950/20 border border-amber-500/30 p-2 rounded">
+                  <div className="flex items-center justify-between text-[10px] text-amber-300 font-bold uppercase">
+                    <span>Last Earnings Fib</span>
+                    <span>{earningsPrediction.fib_confluence.fib_earnings.score > 0 ? "+" : ""}{earningsPrediction.fib_confluence.fib_earnings.score} pts</span>
+                  </div>
+                  <div className="font-semibold text-amber-200 mt-0.5">
+                    {earningsPrediction.fib_confluence.fib_earnings.stance}
+                  </div>
+                  <div className="text-[10px] text-slate-300 mt-0.5 font-sans">
+                    {earningsPrediction.fib_confluence.fib_earnings.description}
+                  </div>
+                </div>
+              </div>
+
+              {/* Rationale & Target Levels */}
+              <div className="bg-black/40 p-2.5 rounded border border-border/40 text-xs space-y-1.5">
+                <p className="text-slate-300 font-sans leading-relaxed">
+                  <span className="font-bold text-white">Confluence Thesis: </span>
+                  {earningsPrediction.fib_confluence.rationale}
+                </p>
+                <div className="flex flex-wrap gap-4 pt-1 font-mono text-[11px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400">Predicted Upside Target:</span>
+                    <span className="font-bold text-emerald-300">
+                      {earningsPrediction.fib_confluence.upside_target_label}
+                    </span>
+                    <span className="text-slate-400">
+                      (+{earningsPrediction.fib_confluence.upside_target_pct}%)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-slate-400">Downside Support Floor:</span>
+                    <span className="font-bold text-rose-300">
+                      {earningsPrediction.fib_confluence.downside_floor_label}
+                    </span>
+                    <span className="text-slate-400">
+                      ({earningsPrediction.fib_confluence.downside_floor_pct}%)
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Toggle for non-tomorrow prospective preview */}
+          {!earningsPrediction.is_tomorrow && (
+            <div className="mt-2.5 pt-2 border-t border-border/20 flex justify-between items-center text-[11px]">
+              <span className="text-slate-400">
+                Want to see prospective Fibonacci alignment ahead of time?
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowConfluencePreview(!showConfluencePreview)}
+                className="text-sky-400 hover:text-sky-300 font-semibold underline underline-offset-2 transition-colors"
+              >
+                {showConfluencePreview ? "Hide Fib Confluence Model ▲" : "Preview 52W/Week/Earning Fibs Model ▼"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Header and View Selector */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-3 pb-2.5 border-b border-border/40">
         <div>

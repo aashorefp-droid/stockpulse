@@ -113,59 +113,12 @@ def calc_earnings_fib_analysis(
     ref_date = as_of_dt or date.today()
 
     tk = yf.Ticker(ticker)
-    earn_ts = None
 
-    # Method 1: earnings_dates table (fastest & most accurate timestamps)
-    try:
-        ed = tk.earnings_dates
-        if ed is not None and not ed.empty:
-            past_ed = [
-                ts for ts in ed.index
-                if (ts.date() if hasattr(ts, "date") else ts) <= ref_date
-            ]
-            if past_ed:
-                earn_ts = max(past_ed)
-    except Exception:
-        pass
-
-    # Method 2: earnings_history table fallback
-    if earn_ts is None:
-        try:
-            eh = tk.earnings_history
-            if eh is not None and not eh.empty:
-                past_eh = [
-                    ts for ts in eh.index
-                    if (ts.date() if hasattr(ts, "date") else ts) <= ref_date
-                ]
-                if past_eh:
-                    earn_ts = max(past_eh)
-        except Exception:
-            pass
-
-    # Method 3: calendar fallback
-    if earn_ts is None:
-        try:
-            from backend.services.earnings import get_earnings_dates_yf
-            ed_list = get_earnings_dates_yf(ticker)
-            past_list = [
-                e["date"] for e in ed_list
-                if datetime.strptime(e["date"], "%Y-%m-%d").date() <= ref_date
-            ]
-            if past_list:
-                latest_str = max(past_list)
-                earn_ts = datetime.strptime(latest_str, "%Y-%m-%d")
-        except Exception:
-            pass
-
-    if earn_ts is None:
-        return {"has_earnings": False, "reason": "No past earnings dates found"}
-
-    earn_date = earn_ts.date() if hasattr(earn_ts, "date") else earn_ts
-    is_amc = getattr(earn_ts, "hour", 16) >= 12
-
+    # 1. Fetch & slice price history up to ref_date (no future lookahead)
     if daily_df is None or daily_df.empty:
         try:
-            daily_df = tk.history(period="1y", interval="1d")
+            period_str = "3y" if as_of_dt else "1y"
+            daily_df = tk.history(period=period_str, interval="1d")
             daily_df.index = pd.to_datetime(daily_df.index).tz_localize(None)
             daily_df.columns = [c.lower() for c in daily_df.columns]
         except Exception:
@@ -175,27 +128,88 @@ def calc_earnings_fib_analysis(
     if hasattr(df_copy.index, "tz_localize") and df_copy.index.tz is not None:
         df_copy.index = df_copy.index.tz_localize(None)
 
+    # Strictly enforce cutoff as of target backdated date
+    if as_of_dt:
+        df_copy = df_copy[df_copy.index <= pd.Timestamp(as_of_dt)]
+
+    if df_copy.empty:
+        return {"has_earnings": False, "reason": "No price history available up to target date"}
+
     hi_col = _col(df_copy, "high")
     lo_col = _col(df_copy, "low")
     close_col = _col(df_copy, "close")
     open_col = _col(df_copy, "open")
-
-    e_dt = pd.Timestamp(earn_date)
     hist_dates = sorted(df_copy.index)
 
-    # Reaction bar: if AMC, first trading day strictly AFTER earnings report; if BMO, on or after
-    if is_amc:
-        react_dates = [d for d in hist_dates if d > e_dt]
-    else:
-        react_dates = [d for d in hist_dates if d >= e_dt]
+    # 2. Collect candidate earnings timestamps <= ref_date
+    candidates = []
 
-    if not react_dates:
-        react_dates = [d for d in hist_dates if d >= e_dt - timedelta(days=3)]
+    # Method 1: earnings_dates table (most accurate release times)
+    try:
+        ed = tk.earnings_dates
+        if ed is not None and not ed.empty:
+            for ts in ed.index:
+                t_date = ts.date() if hasattr(ts, "date") else ts
+                if t_date <= ref_date:
+                    candidates.append(ts)
+    except Exception:
+        pass
 
-    if not react_dates:
-        return {"has_earnings": False, "reason": "No price data found around earnings date"}
+    # Method 2: earnings_history table fallback
+    try:
+        eh = tk.earnings_history
+        if eh is not None and not eh.empty:
+            for ts in eh.index:
+                t_date = ts.date() if hasattr(ts, "date") else ts
+                if t_date <= ref_date:
+                    candidates.append(ts)
+    except Exception:
+        pass
 
-    r_date = react_dates[0]
+    # Method 3: calendar fallback
+    try:
+        from backend.services.earnings import get_earnings_dates_yf
+        ed_list = get_earnings_dates_yf(ticker)
+        for e in ed_list:
+            dt_val = datetime.strptime(e["date"], "%Y-%m-%d")
+            if dt_val.date() <= ref_date:
+                candidates.append(dt_val)
+    except Exception:
+        pass
+
+    # Deduplicate candidates by date
+    unique_candidates = {}
+    for c in candidates:
+        d_key = c.date() if hasattr(c, "date") else c
+        if d_key not in unique_candidates:
+            unique_candidates[d_key] = c
+    sorted_candidates = [unique_candidates[k] for k in sorted(unique_candidates.keys(), reverse=True)]
+
+    earn_ts = None
+    r_date = None
+    is_amc = True
+
+    # Find the latest earnings release that already HAS a completed reaction candle in our history
+    for cand_ts in sorted_candidates:
+        cand_date = cand_ts.date() if hasattr(cand_ts, "date") else cand_ts
+        cand_is_amc = getattr(cand_ts, "hour", 16) >= 12
+        cand_dt = pd.Timestamp(cand_date)
+
+        if cand_is_amc:
+            cand_react = [d for d in hist_dates if d > cand_dt]
+        else:
+            cand_react = [d for d in hist_dates if d >= cand_dt]
+
+        if cand_react:
+            earn_ts = cand_ts
+            r_date = cand_react[0]
+            is_amc = cand_is_amc
+            break
+
+    if earn_ts is None or r_date is None:
+        return {"has_earnings": False, "reason": "No completed earnings reaction found prior to target date"}
+
+    earn_date = earn_ts.date() if hasattr(earn_ts, "date") else earn_ts
     bar = df_copy.loc[r_date]
 
     e_high = round(float(bar[hi_col]), 2)

@@ -16,6 +16,7 @@ from backend.services.analysis import (
     calc_trade_levels, get_fundamentals, get_weekly_fib_and_rsi, _col,
     generate_final_judgement, calc_earnings_fib_analysis,
 )
+from backend.services.earnings_prediction import calc_fib_earnings_prediction
 from backend.services.options import get_options_bias, get_options_strategy
 from backend.services.market_data import (
     get_daily_bars_alpaca, get_hourly_bars_yfinance, get_ohlcv_for_chart,
@@ -204,6 +205,14 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
     # ── 8c. Last Earnings Fibonacci Analysis (E-High & E-Low + Where We Are Now) ──
     earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, _daily, current_price, as_of)
 
+    # ── 8d. Multi-Fib Earnings Outcome Prediction & Helpful Data (Tomorrow filter) ──
+    earnings_prediction = _safe(
+        calc_fib_earnings_prediction,
+        {"prediction": "N/A", "prediction_status": "N/A"},
+        ticker, current_price, fib_levels, weekly_fib_levels, earnings_fib,
+        hi52, lo52, wk_hi, wk_lo, as_of
+    )
+
     # ── 9. WTD Fib + RSI ─────────────────────────────────────────────────────
     weekly_fib_rsi = _safe(get_weekly_fib_and_rsi, {"weekly_fib": "N/A", "rsi_4h": "N/A"}, ticker, current_price)
 
@@ -290,6 +299,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "hi_52":              hi52,
         "lo_52":              lo52,
         "earnings_fib":       earnings_fib,
+        "earnings_prediction": earnings_prediction,
         "support_resistance": sr,
         "weekly_fib_rsi":     weekly_fib_rsi,
         "fundamentals":       fundamentals,
@@ -541,6 +551,14 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         # Last Earnings Fibonacci Analysis
         earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, df_hist, cur_price, as_of)
 
+        # Multi-Fib Earnings Outcome Prediction & Helpful Data
+        earnings_prediction = _safe(
+            calc_fib_earnings_prediction,
+            {"prediction": "N/A", "prediction_status": "N/A"},
+            ticker, cur_price, fib_levels, weekly_fib_levels, earnings_fib,
+            hi52, lo52, wk_hi, wk_lo, as_of
+        )
+
         final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price, fib_levels, nearest_fib_label)
 
         bars = []
@@ -751,6 +769,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "week_high": wk_hi,
                 "week_low": wk_lo,
                 "earnings_fib": earnings_fib,
+                "earnings_prediction": earnings_prediction,
             },
             "support_resistance": sr,
             "markers": markers,
@@ -765,6 +784,7 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "week_low": wk_lo,
             "week_range_label": wk_range_label,
             "earnings_fib": earnings_fib,
+            "earnings_prediction": earnings_prediction,
             "hi_52": hi52,
             "lo_52": lo52,
         })
