@@ -1879,3 +1879,110 @@ def analyze_institutional_control(weekly_df, lookback=26):
     except Exception:
         return "N/A", "N/A", "❓", 0
 
+
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def compute_btd(daily_df: pd.DataFrame, regime_ok: bool = True) -> dict:
+    """
+    EMA-only Buy-The-Dip state machine. The gamma/GEX gate from the paper
+    design is NOT implemented yet — `regime_ok` stands in for it.
+
+    Layered rule:
+      GATE     close > 200EMA  AND  50EMA flat-or-rising  AND  regime_ok
+      TREND    close > 50EMA
+      DIP      pullback toward 20EMA (shallow) … 50EMA (deep)
+      TRIGGER  close reclaims 20EMA after having dipped below it
+
+    regime_ok: index-level regime gate. For SPY this is a VIX proxy until a
+    real gamma-flip / GEX gate exists. For single names pass True — the badge
+    then reflects the stock's own structure and the trader combines it with
+    the market-level badge (see UI).
+
+    States: TRIGGER · ARMED · ARMED-DEEP · DISARMED · N/A
+    """
+    out = {
+        "btd_state": "N/A", "btd_zone": None, "btd_reason": None,
+        "btd_size": None,
+        "ema11": None, "ema20": None, "ema50": None, "ema200": None, "ema50_slope_pct": None,
+    }
+    try:
+        if daily_df is None or daily_df.empty:
+            return out
+        cc = _col(daily_df, "close")
+        close = pd.to_numeric(daily_df[cc], errors="coerce").dropna()
+        n = len(close)
+        if n < 60:
+            out["btd_reason"] = "insufficient history"
+            return out
+
+        ema11s  = _ema(close, 11)
+        ema20s  = _ema(close, 20)
+        ema50s  = _ema(close, 50)
+        ema200s = _ema(close, 200) if n >= 200 else None
+
+        c   = float(close.iloc[-1])
+        e11 = float(ema11s.iloc[-1])
+        e20 = float(ema20s.iloc[-1])
+        e50 = float(ema50s.iloc[-1])
+        e200 = float(ema200s.iloc[-1]) if ema200s is not None else None
+
+        lookback  = 10 if n >= 11 else 1
+        e50_prev  = float(ema50s.iloc[-1 - lookback])
+        e50_slope = (e50 - e50_prev) / e50_prev if e50_prev > 0 else 0.0
+        e50_rising = e50_slope >= -0.002  # flat-or-up tolerance
+
+        out.update({
+            "ema11": round(e11, 2),
+            "ema20": round(e20, 2),
+            "ema50": round(e50, 2),
+            "ema200": round(e200, 2) if e200 is not None else None,
+            "ema50_slope_pct": round(e50_slope * 100, 2),
+        })
+
+        if e200 is None:
+            out["btd_reason"] = "need 200+ bars for regime gate"
+            return out
+
+        # ── GATE ─────────────────────────────────────────────────────────
+        if not regime_ok:
+            out.update(btd_state="DISARMED", btd_reason="regime risk-off (gate)")
+            return out
+        if c <= e200:
+            out.update(btd_state="DISARMED", btd_reason="below 200EMA — regime hostile")
+            return out
+        if not e50_rising:
+            out.update(btd_state="DISARMED",
+                       btd_reason=f"50EMA flat/falling ({e50_slope * 100:+.1f}%)")
+            return out
+
+        # ── ARMED — classify dip depth + reclaim trigger ─────────────────
+        above50 = c > e50
+        above20 = c > e20
+        if above20:
+            recent     = close.iloc[-4:-1]
+            e20_recent = ema20s.iloc[-4:-1]
+            dipped = bool((recent < e20_recent).any())
+            if dipped:
+                out.update(btd_state="TRIGGER", btd_zone="reclaimed 20EMA",
+                           btd_reason="closed back above 20EMA after dip",
+                           btd_size="full")
+            else:
+                out.update(btd_state="ARMED", btd_zone="extended >20EMA",
+                           btd_reason="trend OK — wait for pullback to 20EMA",
+                           btd_size="full")
+        elif above50:
+            out.update(btd_state="ARMED", btd_zone="dip 20–50EMA",
+                       btd_reason="in buy zone — wait for 20EMA reclaim",
+                       btd_size="full")
+        else:  # below 50EMA but above 200EMA
+            out.update(btd_state="ARMED-DEEP", btd_zone="deep dip <50EMA",
+                       btd_reason="degraded — half size, needs confirmation",
+                       btd_size="half")
+        return out
+    except Exception as e:  # never break a scan over the BTD overlay
+        out["btd_reason"] = f"error: {str(e)[:60]}"
+        return out
+
+

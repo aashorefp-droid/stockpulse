@@ -28,7 +28,9 @@ ALPACA_DATA_BASE  = "https://data.alpaca.markets"
 # ── Telegram Watchlist & Alerts ──────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN  = _get_clean_env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID    = _get_clean_env("TELEGRAM_CHAT_ID", "")
+TELEGRAM_GROUP_CHAT_ID = _get_clean_env("TELEGRAM_GROUP_CHAT_ID", "")
 TELEGRAM_MESSAGE_THREAD_ID = _get_clean_env("TELEGRAM_MESSAGE_THREAD_ID", "")
+TELEGRAM_MACRO_MESSAGE_THREAD_ID = _get_clean_env("TELEGRAM_MACRO_MESSAGE_THREAD_ID", "")
 WATCHLIST_BOT_TOKEN = _get_clean_env("WATCHLIST_BOT_TOKEN", "")
 WATCHLIST_CHAT_ID   = _get_clean_env("WATCHLIST_CHAT_ID", "")
 
