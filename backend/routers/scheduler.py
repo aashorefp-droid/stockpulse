@@ -184,3 +184,21 @@ def trigger_tos_email_poll():
     res = tos_email_poll_job()
     return {"status": "tos_email_poll completed", "new_messages": res}
 
+
+@router.post("/run-macro-watch")
+def trigger_macro_regime_watch():
+    """Manually trigger the macro regime watch job."""
+    from backend.services.scheduler import macro_regime_watch_job
+    macro_regime_watch_job()
+    return {"status": "macro_regime_watch completed"}
+
+
+@router.post("/run-gamma")
+def trigger_gamma_jobs():
+    """Manually trigger SPY and sector gamma calculation jobs."""
+    from backend.services.scheduler import spy_gamma_job, sector_gamma_job
+    spy_gamma_job()
+    sector_gamma_job()
+    return {"status": "gamma jobs completed"}
+
+
