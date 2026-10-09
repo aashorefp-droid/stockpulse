@@ -211,3 +211,12 @@ def telegram_breakout_scan(send_telegram: bool = True):
     return res
 
 
+@router.post("/sweep-alert")
+def telegram_sweep_alert():
+    """Trigger the post-market/intraday sweep setups digest to Telegram."""
+    from backend.services.scheduler import sweep_digest_job
+    sweep_digest_job()
+    return {"ok": True, "message": "Sweep digest completed"}
+
+
+

@@ -117,6 +117,21 @@ def get_short_squeeze_tickers(min_short_pct: float = 10.0, limit: int = 40) -> l
 _V3_ALERT_LOG: dict[tuple[str, str], date] = {}
 
 
+def _v3_qualifying_tier(row: dict) -> Optional[str]:
+    """Map a row to Exceptional > Actionable > Rank 1 > None."""
+    if row.get("dt3_setup") in ("sweep_reclaim", "break_retest"):
+        if row.get("mtf_rank") == 1:
+            if row.get("w30ma_curl") or row.get("is_30w_curl"):
+                return "Exceptional"
+            if row.get("lre_status") in ("ACTIVE", "DISCOUNT"):
+                return "Actionable"
+            return "Rank 1"
+        return "Actionable"
+    if row.get("dt4_setup") in ("sweep_reclaim_long", "sweep_reject_short"):
+        return "Rank 1"
+    return None
+
+
 def _v3_alert_once(ticker: str, dt3: dict, tier: str = "Rank 1") -> None:
     """Send a Telegram alert for a newly detected V3 setup (deduped to 1/day)."""
     setup = dt3.get("dt3_setup")
@@ -137,7 +152,7 @@ def _v3_alert_once(ticker: str, dt3: dict, tier: str = "Rank 1") -> None:
 
         tok = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
         chat_id, thread_id = _telegram_target(
-            os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
+            os.getenv("TELEGRAM_SWEEP_MESSAGE_THREAD_ID") or os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
         )
         if not (tok and chat_id):
             return
@@ -529,6 +544,9 @@ def scan_single(
             **dt3_fields,
             "error":         None,
         }
+        _tier = _v3_qualifying_tier(out_row)
+        if _tier:
+            _v3_alert_once(ticker, out_row, tier=_tier)
         return out_row
     except Exception as e:
         return {"ticker": ticker, "error": str(e)[:120], "score": 0}

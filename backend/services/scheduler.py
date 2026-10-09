@@ -49,6 +49,7 @@ try:
         TELEGRAM_MACRO_MESSAGE_THREAD_ID,
         TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID,
         TELEGRAM_SWING_MESSAGE_THREAD_ID,
+        TELEGRAM_SWEEP_MESSAGE_THREAD_ID,
     )  # type: ignore
 except ImportError:
     try:
@@ -60,6 +61,7 @@ except ImportError:
             TELEGRAM_MACRO_MESSAGE_THREAD_ID,
             TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID,
             TELEGRAM_SWING_MESSAGE_THREAD_ID,
+            TELEGRAM_SWEEP_MESSAGE_THREAD_ID,
         )
     except ImportError:
         TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -69,6 +71,7 @@ except ImportError:
         TELEGRAM_MACRO_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_MACRO_MESSAGE_THREAD_ID", "")
         TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID", "")
         TELEGRAM_SWING_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
+        TELEGRAM_SWEEP_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SWEEP_MESSAGE_THREAD_ID", TELEGRAM_SWING_MESSAGE_THREAD_ID)
 
 # ── Scheduler instance ────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="America/Chicago")
@@ -96,10 +99,10 @@ _SCHEDULER_STATE_PATH = os.path.join(
 )
 _SPY_V4_SUMMARY_ENABLED = _env_enabled("SPY_V4_SUMMARY_ENABLED", "1")
 _SWEEP_DIGEST_ENABLED = _env_enabled("SWEEP_DIGEST_ENABLED", "1")
-_BACKEND_V3_REFRESH_ENABLED = _env_enabled("BACKEND_V3_REFRESH_ENABLED", "0")
+_BACKEND_V3_REFRESH_ENABLED = _env_enabled("BACKEND_V3_REFRESH_ENABLED", "1")
 _BACKEND_V3_REFRESH_WATCHLISTS = [
     w.strip().lower()
-    for w in os.getenv("BACKEND_V3_REFRESH_WATCHLISTS", "holdings,earnings").split(",")
+    for w in os.getenv("BACKEND_V3_REFRESH_WATCHLISTS", "default,momentum,holdings,earnings").split(",")
     if w.strip()
 ]
 _BACKEND_V3_REFRESH_MAX_WORKERS = max(1, int(os.getenv("BACKEND_V3_REFRESH_MAX_WORKERS", "6")))
@@ -1556,7 +1559,9 @@ def sweep_digest_job():
             f"{_block('Sweep Reclaim Long', longs)}\n\n"
             f"{_block('Sweep Reclaim Short', shorts)}"
         )
-        chat_id, thread_id = _telegram_target(TELEGRAM_SWING_MESSAGE_THREAD_ID)
+        chat_id, thread_id = _telegram_target(
+            TELEGRAM_SWEEP_MESSAGE_THREAD_ID or TELEGRAM_SWING_MESSAGE_THREAD_ID
+        )
         send_telegram(
             TELEGRAM_BOT_TOKEN,
             chat_id,
@@ -1668,7 +1673,9 @@ def backend_v3_refresh_job(force: bool = False):
         scanned = 0
         sent = 0
         workers = max(1, min(len(tickers), _BACKEND_V3_REFRESH_MAX_WORKERS))
-        chat_id, thread_id = _telegram_target(_BACKEND_V3_MESSAGE_THREAD_ID or TELEGRAM_SWING_MESSAGE_THREAD_ID)
+        chat_id, thread_id = _telegram_target(
+            TELEGRAM_SWEEP_MESSAGE_THREAD_ID or _BACKEND_V3_MESSAGE_THREAD_ID or TELEGRAM_SWING_MESSAGE_THREAD_ID
+        )
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {pool.submit(_one, ticker): ticker for ticker in tickers}
             for fut in as_completed(futures):

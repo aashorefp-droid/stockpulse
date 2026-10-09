@@ -17,7 +17,7 @@ const WATCHLISTS = [
   { key: "custom",        label: "Custom",           count: 0  },
 ];
 
-type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "below_va" | "rank1" | "exceptional" | "good_rr" | "high_short";
+type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "below_va" | "rank1" | "exceptional" | "good_rr" | "high_short" | "sweep_long" | "sweep_short";
 
 interface OptLeg {
   action:     string;
@@ -199,6 +199,8 @@ export default function ScannerPage() {
   const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
   const [breakoutSending, setBreakoutSending] = useState(false);
   const [breakoutSentMsg, setBreakoutSentMsg] = useState<string | null>(null);
+  const [sweepSending, setSweepSending] = useState(false);
+  const [sweepSentMsg, setSweepSentMsg] = useState<string | null>(null);
   const [curlSending, setCurlSending] = useState(false);
   const [curlSentMsg, setCurlSentMsg] = useState<string | null>(null);
   const [curlMatches, setCurlMatches] = useState<any[]>([]);
@@ -372,6 +374,27 @@ export default function ScannerPage() {
     } finally {
       setBreakoutSending(false);
       setTimeout(() => setBreakoutSentMsg(null), 6000);
+    }
+  }
+
+  async function sendSweepTelegram() {
+    setSweepSending(true);
+    setSweepSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scheduler/run-sweeps`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data && (data.status || data.ok)) {
+        setSweepSentMsg("✅ Sweep Digest Sent!");
+      } else {
+        setSweepSentMsg(`⚠️ ${data?.error || "Sweep scan triggered"}`);
+      }
+    } catch (err: any) {
+      setSweepSentMsg(`⚠️ ${err.message || "Failed"}`);
+    } finally {
+      setSweepSending(false);
+      setTimeout(() => setSweepSentMsg(null), 5000);
     }
   }
 
@@ -643,6 +666,13 @@ export default function ScannerPage() {
     }
   }
 
+  const isSweepReclaimLong = (r: ScanResult) =>
+    r.dt4_setup === "sweep_reclaim_long"
+    || (r.dt3_setup === "sweep_reclaim" && r.dt3_side === "long");
+  const isSweepReclaimShort = (r: ScanResult) =>
+    r.dt4_setup === "sweep_reject_short"
+    || (r.dt3_setup === "sweep_reclaim" && r.dt3_side === "short");
+
   const gradeRank: Record<string, number> = { S: 0, A: 1, B: 2, "B-": 3, C: 4, D: 5 };
 
   const filtered = results
@@ -677,6 +707,8 @@ export default function ScannerPage() {
       if (filter === "rank1")       return r.mtf_rank === 1;
       if (filter === "good_rr")     return (r.rr_t1 ?? 0) >= 1.5;
       if (filter === "high_short")  return (r.short_pct ?? 0) >= 10;
+      if (filter === "sweep_long")  return isSweepReclaimLong(r);
+      if (filter === "sweep_short") return isSweepReclaimShort(r);
       // Matches original: score≥4 + HIGH conf + grade A/S + rank1 + ACCUMULATING vol
       if (filter === "exceptional")
         return ["S", "A"].includes(r.entry_grade ?? "")
@@ -1347,6 +1379,15 @@ export default function ScannerPage() {
                       <span>{breakoutSending ? "Scanning..." : breakoutSentMsg || "Breakout Alert (Def 50 + Mom 50)"}</span>
                     </button>
                     <button
+                      onClick={sendSweepTelegram}
+                      disabled={sweepSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Dispatch Post-Market V4/V3 Sweep Reclaim & Reject Setups Digest to Telegram"
+                    >
+                      <span>{sweepSending ? "⏳" : "🎯"}</span>
+                      <span>{sweepSending ? "Sending Sweeps..." : sweepSentMsg || "Sweep Alert (Long & Short)"}</span>
+                    </button>
+                    <button
                       onClick={() => {
                         setShowCurlSection(true);
                         if (curlMatches.length === 0) load30wCurls(false);
@@ -1747,7 +1788,7 @@ export default function ScannerPage() {
       {results.length > 0 && (
         <div className="flex flex-wrap gap-4 items-center">
           <div className="flex flex-wrap gap-1 bg-card border border-border rounded-lg p-1">
-            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "below_va", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
+            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "below_va", "sweep_long", "sweep_short", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
               <button key={f} onClick={() => {
                 setFilter(f);
                 if (f === "good_rr") setSortBy("rr");
@@ -1762,6 +1803,8 @@ export default function ScannerPage() {
                 : f === "fresh_curl"? `🎉 Fresh Breakout (${results.filter(r => r.is_fresh_stage2 || r.stage2_status === "FRESH").length})`
                 : f === "curl_vol"  ? `🌀 30W Curl (${results.filter(r => r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0)).length})`
                 : f === "below_va"  ? `🔻 Below VA Surge (${results.filter(r => (r.below_va || (r.val != null && r.price != null && r.price < r.val)) && r.vol_trend === "ACCUMULATING" && (r.vol_surge || (r.vol_ratio != null && r.vol_ratio >= 1.5))).length})`
+                : f === "sweep_long"? `🎯 Sweep Long (${results.filter(isSweepReclaimLong).length})`
+                : f === "sweep_short"? `🛡️ Sweep Short (${results.filter(isSweepReclaimShort).length})`
                 : f === "rank1"     ? `Rank 1 (${results.filter(r => r.mtf_rank === 1).length})`
                 : f === "good_rr"   ? `🎯 Good R/R ≥1.5× (${results.filter(r => (r.rr_t1 ?? 0) >= 1.5).length})`
                 : f === "high_short"? `🔥 High Short (${results.filter(r => (r.short_pct ?? 0) >= 10).length})`
