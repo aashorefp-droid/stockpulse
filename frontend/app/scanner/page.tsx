@@ -10,7 +10,7 @@ const WATCHLISTS = [
   { key: "default",       label: "Default 50",      count: 50 },
   { key: "tech",          label: "Tech 30",          count: 30 },
   { key: "mega_cap",      label: "Mega Cap 20",      count: 20 },
-  { key: "momentum",      label: "Momentum 20",      count: 20 },
+  { key: "momentum",      label: "Momentum 50",      count: 50 },
   { key: "etfs",          label: "ETFs 20",          count: 20 },
   { key: "tos_email",     label: "📧 TOS Scan",      count: 25 },
   { key: "short_squeeze", label: "🔥 Short Squeeze", count: 40 },
@@ -197,6 +197,8 @@ export default function ScannerPage() {
   const [tosMsg, setTosMsg] = useState<string | null>(null);
   const [telegramSending, setTelegramSending] = useState(false);
   const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
+  const [breakoutSending, setBreakoutSending] = useState(false);
+  const [breakoutSentMsg, setBreakoutSentMsg] = useState<string | null>(null);
   const [curlSending, setCurlSending] = useState(false);
   const [curlSentMsg, setCurlSentMsg] = useState<string | null>(null);
   const [curlMatches, setCurlMatches] = useState<any[]>([]);
@@ -345,6 +347,31 @@ export default function ScannerPage() {
     } finally {
       setTelegramSending(false);
       setTimeout(() => setTelegramSentMsg(null), 5000);
+    }
+  }
+
+  async function sendBreakoutTelegram() {
+    setBreakoutSending(true);
+    setBreakoutSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/telegram/breakout-alert`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data && data.sent) {
+        setBreakoutSentMsg(`✅ Sent (${data.total_matches} Breakouts)!`);
+      } else if (data && data.total_matches === 0) {
+        setBreakoutSentMsg("ℹ️ 0 breakouts today");
+      } else if (data && data.errors && data.errors.length > 0) {
+        setBreakoutSentMsg(`⚠️ ${data.errors[0]}`);
+      } else {
+        setBreakoutSentMsg("✅ Breakout scan completed");
+      }
+    } catch (err: any) {
+      setBreakoutSentMsg(`⚠️ ${err.message || "Failed"}`);
+    } finally {
+      setBreakoutSending(false);
+      setTimeout(() => setBreakoutSentMsg(null), 6000);
     }
   }
 
@@ -1309,6 +1336,15 @@ export default function ScannerPage() {
                     >
                       <span>{telegramSending ? "⏳" : "✈️"}</span>
                       <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
+                    </button>
+                    <button
+                      onClick={sendBreakoutTelegram}
+                      disabled={breakoutSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Scan Default 50 & Momentum 50 for fresh breakouts and dispatch alert to Telegram"
+                    >
+                      <span>{breakoutSending ? "⏳" : "🚀"}</span>
+                      <span>{breakoutSending ? "Scanning..." : breakoutSentMsg || "Breakout Alert (Def 50 + Mom 50)"}</span>
                     </button>
                     <button
                       onClick={() => {

@@ -90,18 +90,19 @@ def trigger_sweep_digest():
 
 @router.post("/run-breakouts")
 def trigger_breakout_digest():
-    """Manually trigger the post-market exceptional/V3 scanner digest."""
+    """Manually trigger the Default 50 & Momentum 50 breakout scanner & Telegram alert."""
     from backend.services.scheduler import breakout_digest_job
-    breakout_digest_job()
-    return {"status": "exceptional/V3 digest completed"}
+    res = breakout_digest_job()
+    return {"status": "breakout alert completed", "result": res}
 
 
 @router.post("/run-exceptional")
+@router.post("/run-exceptional-scan")
 def trigger_exceptional_swing_digest():
-    """Manually trigger the post-market exceptional/V3 scanner digest."""
-    from backend.services.scheduler import exceptional_swing_digest_job
-    exceptional_swing_digest_job()
-    return {"status": "exceptional/V3 digest completed"}
+    """Manually trigger the EOD Multi-Timeframe Exceptional Scanner (Default + Momentum + Gmail TOS) alert."""
+    from backend.services.scheduler import eod_exceptional_scan_job
+    res = eod_exceptional_scan_job()
+    return {"status": "eod_exceptional_scan completed", "result": res}
 
 
 @router.post("/run-v3-refresh")
@@ -182,4 +183,22 @@ def trigger_tos_email_poll():
     from backend.services.scheduler import tos_email_poll_job
     res = tos_email_poll_job()
     return {"status": "tos_email_poll completed", "new_messages": res}
+
+
+@router.post("/run-macro-watch")
+def trigger_macro_regime_watch():
+    """Manually trigger the macro regime watch job."""
+    from backend.services.scheduler import macro_regime_watch_job
+    macro_regime_watch_job()
+    return {"status": "macro_regime_watch completed"}
+
+
+@router.post("/run-gamma")
+def trigger_gamma_jobs():
+    """Manually trigger SPY and sector gamma calculation jobs."""
+    from backend.services.scheduler import spy_gamma_job, sector_gamma_job
+    spy_gamma_job()
+    sector_gamma_job()
+    return {"status": "gamma jobs completed"}
+
 

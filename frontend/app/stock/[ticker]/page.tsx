@@ -116,6 +116,15 @@ export default function StockPage({ params }: StockPageProps) {
     signal = { rank: 5, signal: "N/A", action: "N/A", key: "N/N/N" },
     fib_levels = {},
     nearest_fib = "N/A",
+    weekly_fib_levels = {},
+    weekly_nearest_fib = "N/A",
+    week_high = null,
+    week_low = null,
+    week_range_label = null,
+    hi_52 = null,
+    lo_52 = null,
+    earnings_fib = null,
+    earnings_prediction = null,
     support_resistance = { support: [], resistance: [] },
     weekly_fib_rsi = { weekly_fib: "N/A", rsi_4h: "N/A" },
     fundamentals = {},
@@ -547,10 +556,27 @@ export default function StockPage({ params }: StockPageProps) {
       </div>
 
       {/* ── FIB + S/R + FUNDAMENTALS ─────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <FibTable levels={fib_levels} nearestFib={nearest_fib} currentPrice={current_price} />
-        <SRCard support={support_resistance.support} resistance={support_resistance.resistance} currentPrice={current_price} />
-        <FundamentalsCard f={fundamentals} />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <FibTable
+            levels={fib_levels}
+            nearestFib={nearest_fib}
+            currentPrice={current_price}
+            weeklyLevels={weekly_fib_levels}
+            weeklyNearestFib={weekly_nearest_fib}
+            weekHigh={week_high}
+            weekLow={week_low}
+            weekRangeLabel={week_range_label}
+            hi52={hi_52}
+            lo52={lo_52}
+            earningsFib={earnings_fib}
+            earningsPrediction={earnings_prediction}
+          />
+        </div>
+        <div className="space-y-4">
+          <SRCard support={support_resistance.support} resistance={support_resistance.resistance} currentPrice={current_price} />
+          <FundamentalsCard f={fundamentals} />
+        </div>
       </div>
 
       {/* ── OPTIONS ──────────────────────────────────────────────────────── */}

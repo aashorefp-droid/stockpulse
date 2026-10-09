@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { getFibDescription } from "./FibTable";
 
 declare global {
   interface Window {
@@ -42,6 +43,10 @@ export default function DailyTradeChart({
   const [viewMode, setViewMode] = useState<"levels" | "embed" | "finviz">("levels");
   const [showSma, setShowSma] = useState(true);
   const [showFuture, setShowFuture] = useState(false);
+  const [showRetestLine, setShowRetestLine] = useState(true);
+  const [entryMode, setEntryMode] = useState<"trigger" | "latest_low" | "avg_low" | "retest">("trigger");
+  const [selectedRedDay, setSelectedRedDay] = useState<any>(null);
+  const [showAllRedDayLines, setShowAllRedDayLines] = useState(true);
 
   // Backtest state
   const effectiveInitialDate = propAsOfDate || initialAsOfDate || "";
@@ -57,12 +62,14 @@ export default function DailyTradeChart({
     setAsOfDate(nextDate);
     setBacktestMode(Boolean(nextDate));
     setShowFuture(false);
+    setSelectedRedDay(null);
   }, [propAsOfDate, initialAsOfDate]);
 
   // Fetch daily chart data with calculated trade levels (and backtest outcome if asOfDate is active)
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
+    setSelectedRedDay(null);
 
     let url = `${API_BASE}/api/analysis/chart-daily/${ticker}`;
     if (backtestMode && asOfDate) {
@@ -263,6 +270,97 @@ export default function DailyTradeChart({
         t2Line.setData(lineBars.map((b: any) => ({ time: b.time, value: target2 })));
       }
 
+      // Retest Entry Line(s) (Latest Low, AVG Low, PWL & Prior Week Red Day Lows)
+      const pwRedDays = data.levels?.pw_red_day_lows || [];
+      const latestLowVal = data.levels?.pw_latest_low;
+      const avgLowVal = data.levels?.pw_avg_low;
+      const pwlVal = data.levels?.retest_entry;
+      const primaryRetestLevel = entryMode === "latest_low"
+        ? (latestLowVal ?? pwlVal)
+        : entryMode === "avg_low"
+        ? (avgLowVal ?? pwlVal)
+        : (selectedRedDay?.low ?? pwlVal);
+
+      if (showRetestLine && lineBars.length > 0) {
+        // Draw all other prior week red day lows as dashed coral support lines
+        if (showAllRedDayLines && pwRedDays.length > 0) {
+          pwRedDays.forEach((rd: any) => {
+            if (rd.low && Math.abs(rd.low - (primaryRetestLevel || 0)) > 0.01 && (!latestLowVal || Math.abs(rd.low - latestLowVal) > 0.01)) {
+              const rdLine = chart.addLineSeries({
+                color: "rgba(255, 77, 106, 0.45)",
+                lineWidth: 1,
+                lineStyle: LineStyle.Dashed,
+                title: `RED LOW $${rd.low} (${rd.date_label})`,
+                priceLineVisible: false,
+                lastValueVisible: true,
+              });
+              rdLine.setData(lineBars.map((b: any) => ({ time: b.time, value: rd.low })));
+            }
+          });
+        }
+
+        // Draw Latest Low line as dashed gold reference if not primary
+        if (latestLowVal && entryMode !== "latest_low" && Math.abs(latestLowVal - (primaryRetestLevel || 0)) > 0.01) {
+          const latLine = chart.addLineSeries({
+            color: "rgba(245, 200, 66, 0.65)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            title: `LATEST LOW $${latestLowVal} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          latLine.setData(lineBars.map((b: any) => ({ time: b.time, value: latestLowVal })));
+        }
+
+        // Draw AVG Low line as dashed purple reference if not primary
+        if (avgLowVal && entryMode !== "avg_low" && Math.abs(avgLowVal - (primaryRetestLevel || 0)) > 0.01) {
+          const avgLine = chart.addLineSeries({
+            color: "rgba(168, 85, 247, 0.65)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            title: `AVG LOW $${avgLowVal}`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          avgLine.setData(lineBars.map((b: any) => ({ time: b.time, value: avgLowVal })));
+        }
+
+        // Draw PWL line if entryMode is latest_low or avg_low (so trader sees all key prior week levels)
+        if ((entryMode === "latest_low" || entryMode === "avg_low") && pwlVal && Math.abs(pwlVal - (primaryRetestLevel || 0)) > 0.01) {
+          const pwlLine = chart.addLineSeries({
+            color: "rgba(56, 189, 248, 0.65)",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            title: `PWL $${pwlVal}`,
+            priceLineVisible: false,
+            lastValueVisible: true,
+          });
+          pwlLine.setData(lineBars.map((b: any) => ({ time: b.time, value: pwlVal })));
+        }
+
+        // Draw primary active retest level
+        if (primaryRetestLevel) {
+          const isLatest = entryMode === "latest_low";
+          const isAvg = entryMode === "avg_low";
+          const isPwl = selectedRedDay ? selectedRedDay.is_pwl : (!isLatest && !isAvg);
+          const lineColor = isLatest ? "#f5c842" : isAvg ? "#a855f7" : "#38bdf8";
+          const lineTitle = isLatest
+            ? `LATEST LOW $${primaryRetestLevel} (${data.levels?.pw_latest_date ?? "Prior Wk"}${data.levels?.pw_latest_day ? ` ${data.levels?.pw_latest_day}` : ""})`
+            : isAvg
+            ? `AVG LOW $${primaryRetestLevel}`
+            : `${isPwl ? 'PWL' : 'RED LOW'} $${primaryRetestLevel}${selectedRedDay ? ` (${selectedRedDay.date_label})` : ''}`;
+          const retestLine = chart.addLineSeries({
+            color: lineColor,
+            lineWidth: 2,
+            lineStyle: (isLatest || isAvg) ? LineStyle.Solid : LineStyle.Dotted,
+            title: lineTitle,
+            priceLineVisible: true,
+            lastValueVisible: true,
+          });
+          retestLine.setData(lineBars.map((b: any) => ({ time: b.time, value: primaryRetestLevel })));
+        }
+      }
+
       // 5. Markers (Entry trigger + Exit outcome marker)
       if (data.markers && data.markers.length > 0) {
         const activeMarkers = (isBacktest && !showFuture)
@@ -315,7 +413,7 @@ export default function DailyTradeChart({
       isMounted = false;
       chart?.remove();
     };
-  }, [viewMode, data, showSma, showFuture]);
+  }, [viewMode, data, showSma, showFuture, showRetestLine, selectedRedDay, showAllRedDayLines, entryMode]);
 
   // Render TradingView Embed widget when selected
   useEffect(() => {
@@ -390,6 +488,67 @@ export default function DailyTradeChart({
   const levels = data?.levels || {};
   const isBull = data?.direction === "LONG";
   const bt = data?.backtest;
+
+  const pwRedDays: any[] = levels.pw_red_day_lows || [];
+  const selectedRedDayLow = selectedRedDay?.low;
+
+  let activeRetestEntry = levels.entry;
+  let activeRetestZoneMin = levels.entry_zone_min;
+  let activeRetestZoneMax = levels.entry_zone_max;
+  let activeRetestLabel = "Breakout Trigger Entry";
+  let activeRetestDiffPct = 0;
+  let activeRetestRiskPct = levels.risk_pct;
+  let activeRetestRrT1 = levels.rr_t1;
+  let activeRetestRrT2 = levels.rr_t2;
+  let activeRetestT1Gain = levels.target1_gain_pct;
+  let activeRetestT2Gain = levels.target2_gain_pct;
+
+  if (entryMode === "latest_low" && levels.pw_latest_low != null) {
+    activeRetestEntry = levels.pw_latest_low;
+    activeRetestZoneMin = levels.pw_latest_zone_min;
+    activeRetestZoneMax = levels.pw_latest_zone_max;
+    activeRetestLabel = `Last Week Latest Low (${levels.pw_latest_date ?? "Prior Wk"}${levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""})`;
+    activeRetestDiffPct = levels.pw_latest_diff_pct ?? 0;
+    activeRetestRiskPct = levels.pw_latest_risk_pct;
+    activeRetestRrT1 = levels.pw_latest_rr_t1;
+    activeRetestRrT2 = levels.pw_latest_rr_t2;
+    activeRetestT1Gain = levels.pw_latest_t1_gain;
+    activeRetestT2Gain = levels.pw_latest_t2_gain;
+  } else if (entryMode === "avg_low" && levels.pw_avg_low != null) {
+    activeRetestEntry = levels.pw_avg_low;
+    activeRetestZoneMin = levels.pw_avg_zone_min;
+    activeRetestZoneMax = levels.pw_avg_zone_max;
+    activeRetestLabel = `Average of Lows (PWL $${levels.retest_entry?.toFixed(2)} + Latest $${levels.pw_latest_low?.toFixed(2)})`;
+    activeRetestDiffPct = levels.pw_avg_diff_pct ?? 0;
+    activeRetestRiskPct = levels.pw_avg_risk_pct;
+    activeRetestRrT1 = levels.pw_avg_rr_t1;
+    activeRetestRrT2 = levels.pw_avg_rr_t2;
+    activeRetestT1Gain = levels.pw_avg_t1_gain;
+    activeRetestT2Gain = levels.pw_avg_t2_gain;
+  } else if (entryMode === "retest") {
+    activeRetestEntry = selectedRedDayLow != null ? selectedRedDayLow : levels.retest_entry;
+    activeRetestZoneMin = selectedRedDay?.zone_min != null ? selectedRedDay.zone_min : levels.retest_zone_min;
+    activeRetestZoneMax = selectedRedDay?.zone_max != null ? selectedRedDay.zone_max : levels.retest_zone_max;
+    activeRetestLabel = selectedRedDay
+      ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Day Low`
+      : levels.retest_label;
+    activeRetestDiffPct = selectedRedDay ? selectedRedDay.diff_pct : (levels.retest_diff_pct ?? 0);
+    activeRetestRiskPct = levels.retest_risk_pct;
+    activeRetestRrT1 = levels.retest_rr_t1;
+    activeRetestRrT2 = levels.retest_rr_t2;
+    activeRetestT1Gain = levels.retest_t1_gain;
+    activeRetestT2Gain = levels.retest_t2_gain;
+  }
+
+  if (activeRetestEntry && levels.stop_loss && levels.target1 && levels.target2 && entryMode !== "trigger") {
+    const atrBuffer = (levels.atr || 1) * 0.4;
+    const rRisk = Math.max(activeRetestEntry - levels.stop_loss, atrBuffer, activeRetestEntry * 0.015);
+    activeRetestRiskPct = Math.round((rRisk / activeRetestEntry) * 1000) / 10;
+    activeRetestRrT1 = rRisk > 0 ? Math.round(((levels.target1 - activeRetestEntry) / rRisk) * 10) / 10 : 2.5;
+    activeRetestRrT2 = rRisk > 0 ? Math.round(((levels.target2 - activeRetestEntry) / rRisk) * 10) / 10 : 3.5;
+    activeRetestT1Gain = Math.round(((levels.target1 - activeRetestEntry) / activeRetestEntry) * 1000) / 10;
+    activeRetestT2Gain = Math.round(((levels.target2 - activeRetestEntry) / activeRetestEntry) * 1000) / 10;
+  }
 
   const latestSma20 = data?.sma20 && data.sma20.length > 0 ? data.sma20[data.sma20.length - 1]?.value : null;
   const latestSma50 = data?.sma50 && data.sma50.length > 0 ? data.sma50[data.sma50.length - 1]?.value : null;
@@ -495,6 +654,40 @@ export default function DailyTradeChart({
     }
   })();
 
+  const fibLevels = data?.fib_levels || {};
+  const nearestFib = data?.nearest_fib;
+  const weeklyFibLevels = data?.weekly_fib_levels || data?.levels?.weekly_fib_levels || {};
+  const weeklyNearestFib = data?.weekly_nearest_fib || data?.levels?.weekly_nearest_fib;
+  const currentP = data?.current_price || levels.entry || 0;
+  let resolvedFibCall = finalJudgement?.fib_call;
+  if (!resolvedFibCall && nearestFib && fibLevels[nearestFib] != null) {
+    const fVal = fibLevels[nearestFib];
+    const desc = getFibDescription(nearestFib, "52w");
+    const distPct = currentP > 0 ? Math.round(((fVal - currentP) / currentP) * 1000) / 10 : 0;
+    const role = Math.abs(distPct) < 0.5 ? "At Level" : fVal > currentP ? "Resistance" : "Support";
+    resolvedFibCall = `${nearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
+  }
+
+  let resolvedWeeklyFibCall = "";
+  if (weeklyNearestFib && weeklyFibLevels[weeklyNearestFib] != null) {
+    const fVal = weeklyFibLevels[weeklyNearestFib];
+    const desc = getFibDescription(weeklyNearestFib, "week");
+    const distPct = currentP > 0 ? Math.round(((fVal - currentP) / currentP) * 1000) / 10 : 0;
+    const role = Math.abs(distPct) < 0.5 ? "At Level" : fVal > currentP ? "Resistance" : "Support";
+    resolvedWeeklyFibCall = `${weeklyNearestFib} (${desc}) $${fVal.toFixed(2)} · ${role}`;
+  }
+
+  const earningsFib = data?.earnings_fib || data?.levels?.earnings_fib;
+  let resolvedEarningsFibCall = "";
+  if (earningsFib && earningsFib.has_earnings && earningsFib.nearest_fib) {
+    const eVal = earningsFib.nearest_fib_val;
+    const eNear = earningsFib.nearest_fib;
+    const desc = earningsFib.nearest_fib_desc || getFibDescription(eNear, "earnings");
+    const role = earningsFib.nearest_fib_role || "At Level";
+    const statusShort = earningsFib.status_badge || earningsFib.status;
+    resolvedEarningsFibCall = `${eNear} (${desc}) $${eVal?.toFixed(2)} · ${role} [${statusShort}]`;
+  }
+
   return (
     <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl overflow-hidden shadow-lg mb-8">
       {/* ── Top Control Bar ─────────────────────────────────────────── */}
@@ -595,16 +788,34 @@ export default function DailyTradeChart({
           </button>
 
           {viewMode === "levels" && (
-            <button
-              onClick={() => setShowSma(!showSma)}
-              className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${
-                showSma
-                  ? "bg-[#1a2d3d] text-[#4d9fff] border-[#4d9fff]/40"
-                  : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
-              }`}
-            >
-              MAs (20/50/200)
-            </button>
+            <>
+              <button
+                onClick={() => setShowSma(!showSma)}
+                className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all ${
+                  showSma
+                    ? "bg-[#1a2d3d] text-[#4d9fff] border-[#4d9fff]/40"
+                    : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                }`}
+              >
+                MAs (20/50/200)
+              </button>
+
+              {levels.retest_entry != null && (
+                <button
+                  type="button"
+                  onClick={() => setShowRetestLine(!showRetestLine)}
+                  className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 ${
+                    showRetestLine
+                      ? "bg-[#0c2838] text-[#38bdf8] border-[#38bdf8]/40 shadow-sm"
+                      : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                  }`}
+                  title="Toggle Previous Week Low (PWL) Support Line"
+                >
+                  <span>🔄</span>
+                  <span>PWL ${levels.retest_entry?.toFixed(2)}</span>
+                </button>
+              )}
+            </>
           )}
 
           <div className="flex items-center bg-[#131625] p-1 rounded-lg border border-[#1a1d2e]">
@@ -795,16 +1006,63 @@ export default function DailyTradeChart({
             </div>
           </div>
 
-          {/* Confluence Dual Readout (Entry Alert + Volume Profile) */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs font-mono bg-black/40 p-2.5 rounded-lg border border-border/40 mt-1">
-            <div className="flex items-center gap-1.5 truncate">
-              <span className="text-[#6b7099]">🔔 Entry Alert:</span>
-              <span className="text-white font-semibold truncate">{finalJudgement.entry_call || "Evaluating..."}</span>
+          {/* Confluence Readout (Entry Alert + Volume Profile + 52W Fibonacci + Week Fibonacci + Earnings Fib) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-2 text-xs font-mono mt-2">
+            <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+              <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                <span>🔔</span>
+                <span>Entry Alert</span>
+              </div>
+              <div className="text-white font-semibold text-xs leading-snug break-words">
+                {finalJudgement.entry_call || "Evaluating..."}
+              </div>
             </div>
-            <div className="flex items-center gap-1.5 truncate">
-              <span className="text-[#6b7099]">📊 Volume Profile:</span>
-              <span className="text-[#4d9fff] font-semibold truncate">{finalJudgement.vp_call || "Calculating..."}</span>
+
+            <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+              <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                <span>📊</span>
+                <span>Volume Profile</span>
+              </div>
+              <div className="text-[#4d9fff] font-semibold text-xs leading-snug break-words">
+                {finalJudgement.vp_call || "Calculating..."}
+              </div>
             </div>
+
+            {resolvedFibCall && (
+              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+                <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📐</span>
+                  <span>52W Fibonacci</span>
+                </div>
+                <div className="text-[#c084fc] font-semibold text-xs leading-snug break-words">
+                  {resolvedFibCall}
+                </div>
+              </div>
+            )}
+
+            {resolvedWeeklyFibCall && (
+              <div className="bg-black/50 p-2.5 rounded-lg border border-border/40 flex flex-col justify-start">
+                <div className="text-[10px] text-[#8e95bf] font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📏</span>
+                  <span>Week Fibonacci</span>
+                </div>
+                <div className="text-[#38bdf8] font-semibold text-xs leading-snug break-words">
+                  {resolvedWeeklyFibCall}
+                </div>
+              </div>
+            )}
+
+            {resolvedEarningsFibCall && (
+              <div className="bg-black/50 p-2.5 rounded-lg border border-amber-500/30 flex flex-col justify-start">
+                <div className="text-[10px] text-amber-300 font-bold uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                  <span>📈</span>
+                  <span>Earnings Fib</span>
+                </div>
+                <div className="text-amber-200 font-semibold text-xs leading-snug break-words">
+                  {resolvedEarningsFibCall}
+                </div>
+              </div>
+            )}
           </div>
 
           <p className="text-xs text-slate-300 mt-2 leading-relaxed font-sans">
@@ -816,60 +1074,390 @@ export default function DailyTradeChart({
       {/* ── Key Trade Levels Summary Cards ──────────────────────────── */}
       {levels.entry != null && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-[#0a0b14] border-b border-[#1a1d2e]">
-          {/* Best Entry Point */}
-          <div className="bg-[#0f1d18] border border-[#00e5a0]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
-              <span className="text-[#00e5a0]">🟢 TRIGGER</span>
+          {/* Best Entry Point Card */}
+          <div className="bg-[#0f1d18] border border-[#00e5a0]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>{backtestMode ? "Simulated Entry" : "Best Entry Point"}</span>
+                {levels.retest_entry != null || levels.pw_latest_low != null || levels.pw_avg_low != null ? (
+                  <div className="flex items-center gap-1 bg-[#0a0b14] p-0.5 rounded border border-[#1a1d2e]">
+                    <button
+                      type="button"
+                      onClick={() => { setEntryMode("trigger"); setSelectedRedDay(null); }}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                        entryMode === "trigger"
+                          ? "bg-[#00e5a0] text-black shadow-sm font-extrabold"
+                          : "text-[#6b7099] hover:text-white"
+                      }`}
+                      title="Trigger entry at current breakout price"
+                    >
+                      Trigger
+                    </button>
+                    {levels.pw_latest_low != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("latest_low"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "latest_low"
+                            ? "bg-[#f5c842] text-black shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#f5c842]"
+                        }`}
+                        title={`Retest Last Week Latest Day Low: $${levels.pw_latest_low?.toFixed(2)} (${levels.pw_latest_date} ${levels.pw_latest_day})`}
+                      >
+                        ⚡ Latest Low
+                      </button>
+                    )}
+                    {levels.pw_avg_low != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("avg_low"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "avg_low"
+                            ? "bg-[#a855f7] text-white shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#a855f7]"
+                        }`}
+                        title={`Retest Balanced Average Low: $${levels.pw_avg_low?.toFixed(2)} (Midpoint of PWL & Latest Low)`}
+                      >
+                        ⚖️ AVG Low
+                      </button>
+                    )}
+                    {levels.retest_entry != null && (
+                      <button
+                        type="button"
+                        onClick={() => { setEntryMode("retest"); setSelectedRedDay(null); }}
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                          entryMode === "retest" && !selectedRedDay
+                            ? "bg-[#38bdf8] text-black shadow-sm font-extrabold"
+                            : "text-[#6b7099] hover:text-[#38bdf8]"
+                        }`}
+                        title="Retest dip entry at Previous Week Low (PWL)"
+                      >
+                        ★ PWL Low
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-[#00e5a0]">🟢 TRIGGER</span>
+                )}
+              </div>
+
+              <div className="flex items-baseline justify-between">
+                <div>
+                  <div className={`text-2xl font-mono font-extrabold ${
+                    entryMode === "latest_low" ? "text-[#f5c842]" :
+                    entryMode === "avg_low" ? "text-[#a855f7]" :
+                    entryMode === "retest" ? "text-[#38bdf8]" : "text-[#00e5a0]"
+                  }`}>
+                    ${(entryMode !== "trigger" && activeRetestEntry != null ? activeRetestEntry : levels.entry)?.toFixed(2)}
+                  </div>
+                  <div className="text-[11px] font-mono mt-0.5">
+                    {entryMode === "latest_low" && activeRetestZoneMin != null ? (
+                      <span className="text-[#f5c842]/90 font-medium">
+                        Latest Low Zone: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
+                      </span>
+                    ) : entryMode === "avg_low" && activeRetestZoneMin != null ? (
+                      <span className="text-[#a855f7]/90 font-medium">
+                        AVG Low Zone: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
+                      </span>
+                    ) : entryMode === "retest" && activeRetestZoneMin != null ? (
+                      <span className="text-[#38bdf8]/90 font-medium">
+                        {selectedRedDay ? `${selectedRedDay.date_label} Zone` : "PWL Zone"}: ${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}
+                      </span>
+                    ) : (
+                      <span className="text-[#00e5a0]/80">
+                        Zone: ${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}
+                      </span>
+                    )}
+                    {levels.last_breakout_date && (
+                      <div className="text-[10px] text-[#8e95bf] mt-0.5 flex items-center gap-1 font-mono">
+                        <span>⚡ Breakout:</span>
+                        <span className={levels.last_breakout_days_ago === 0 ? "text-[#00e5a0] font-bold" : "text-[#4d9fff]"}>
+                          {levels.last_breakout_days_ago === 0 ? "Today" : `${levels.last_breakout_days_ago}d ago`} ({levels.last_breakout_date})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  {entryMode === "latest_low" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#f5c842]/40 bg-[#f5c842]/20 text-[#f5c842] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ⚡ Latest Low
+                    </span>
+                  ) : entryMode === "avg_low" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#a855f7]/40 bg-[#a855f7]/20 text-[#a855f7] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ⚖️ AVG Low
+                    </span>
+                  ) : entryMode === "retest" ? (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#38bdf8]/40 bg-[#38bdf8]/20 text-[#38bdf8] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      ★ {selectedRedDay ? "Red Low" : "PWL Low"}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-[#00e5a0]/40 bg-[#00e5a0]/20 text-[#00e5a0] uppercase tracking-wider inline-flex items-center gap-0.5">
+                      🟢 Trigger
+                    </span>
+                  )}
+                  <div className="text-[11px] font-mono font-bold mt-1 text-slate-400">
+                    {entryMode === "trigger"
+                      ? (levels.pw_latest_low ? `Lat: $${levels.pw_latest_low?.toFixed(2)}` : (levels.retest_entry ? `PWL: $${levels.retest_entry?.toFixed(2)}` : ""))
+                      : `Trig: $${levels.entry?.toFixed(2)}`}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#00e5a0]">
-              ${levels.entry?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#00e5a0]/80 mt-1 font-mono">
-              Zone: ${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}
+
+            <div className="mt-2.5 pt-2 border-t border-[#1a2d26] text-[11px] font-mono flex flex-wrap items-center justify-between gap-1">
+              <span className="text-slate-300">
+                {entryMode === "latest_low" ? (
+                  <span className="text-[#f5c842] font-bold">
+                    ⚡ {activeRetestLabel} Active
+                  </span>
+                ) : entryMode === "avg_low" ? (
+                  <span className="text-[#a855f7] font-bold">
+                    ⚖️ {activeRetestLabel} Active
+                  </span>
+                ) : entryMode === "retest" ? (
+                  <span className="text-[#38bdf8] font-bold">
+                    ★ {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Low Active` : "Prev Week Low Active"}
+                  </span>
+                ) : (
+                  <span>
+                    PWL: <b className="text-[#38bdf8] font-mono">${levels.retest_entry?.toFixed(2)}</b>
+                    {levels.pw_latest_low != null && (
+                      <span className="ml-1.5 text-slate-400">· Latest: <b className="text-[#f5c842] font-mono">${levels.pw_latest_low?.toFixed(2)}</b></span>
+                    )}
+                    {levels.pw_avg_low != null && (
+                      <span className="ml-1.5 text-slate-400">· AVG: <b className="text-[#a855f7] font-mono">${levels.pw_avg_low?.toFixed(2)}</b></span>
+                    )}
+                  </span>
+                )}
+              </span>
+              <span className={`text-[10px] font-semibold font-sans ${entryMode === "latest_low" ? "text-[#f5c842]" : entryMode === "avg_low" ? "text-[#a855f7]" : entryMode === "retest" ? "text-[#38bdf8]" : "text-slate-400"}`}>
+                {activeRetestDiffPct != null && activeRetestDiffPct !== 0 && `(${activeRetestDiffPct > 0 ? "+" : ""}${activeRetestDiffPct}%)`}
+              </span>
             </div>
           </div>
 
           {/* Protective Stop Loss */}
-          <div className="bg-[#1f0f14] border border-[#ff4d6a]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Stop Loss</span>
-              <span className="text-[#ff4d6a]">🔴 RISK</span>
+          <div className="bg-[#1f0f14] border border-[#ff4d6a]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Stop Loss</span>
+                <span className="text-[#ff4d6a]">🔴 RISK</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#ff4d6a]">
+                ${levels.stop_loss?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#ff4d6a]/80 mt-1 font-mono">
+                Risk: -{(entryMode !== "trigger" && activeRetestRiskPct != null ? activeRetestRiskPct : levels.risk_pct)?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#ff4d6a]">
-              ${levels.stop_loss?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#ff4d6a]/80 mt-1 font-mono">
-              Risk: -{levels.risk_pct?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
-            </div>
+            {entryMode !== "trigger" && activeRetestRiskPct != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
+                Tighter risk from {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL")} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
+              </div>
+            )}
           </div>
 
           {/* Target 1 Exit Point */}
-          <div className="bg-[#0f1d1f] border border-[#34d399]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Target 1 (Primary Exit)</span>
-              <span className="text-[#34d399]">🎯 {levels.rr_t1?.toFixed(1)}R</span>
+          <div className="bg-[#0f1d1f] border border-[#34d399]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Target 1 (Primary Exit)</span>
+                <span className="text-[#34d399]">🎯 {(entryMode !== "trigger" && activeRetestRrT1 != null ? activeRetestRrT1 : levels.rr_t1)?.toFixed(1)}R</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#34d399]">
+                ${levels.target1?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#34d399]/80 mt-1 font-mono">
+                +{(entryMode !== "trigger" && activeRetestT1Gain != null ? activeRetestT1Gain : levels.target1_gain_pct)?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#34d399]">
-              ${levels.target1?.toFixed(2)}
-            </div>
-            <div className="text-[11px] text-[#34d399]/80 mt-1 font-mono">
-              +{levels.target1_gain_pct?.toFixed(1)}% gain · ~{levels.t1_days ?? 5} trading days
-            </div>
+            {entryMode !== "trigger" && activeRetestRrT1 != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#1a2d24] text-[10px] text-emerald-400 font-sans flex items-center justify-between">
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
+                <span className="font-mono font-bold">1:{activeRetestRrT1?.toFixed(1)}</span>
+              </div>
+            )}
           </div>
 
           {/* Target 2 Exit Point */}
-          <div className="bg-[#0f172a] border border-[#38bdf8]/30 rounded-xl p-3 shadow-sm">
-            <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
-              <span>Target 2 (Runner Exit)</span>
-              <span className="text-[#38bdf8]">🚀 {levels.rr_t2?.toFixed(1)}R</span>
+          <div className="bg-[#0f172a] border border-[#38bdf8]/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-xs text-[#6b7099] mb-1 font-semibold uppercase tracking-wider">
+                <span>Target 2 (Runner Exit)</span>
+                <span className="text-[#38bdf8]">🚀 {(entryMode !== "trigger" && activeRetestRrT2 != null ? activeRetestRrT2 : levels.rr_t2)?.toFixed(1)}R</span>
+              </div>
+              <div className="text-2xl font-mono font-extrabold text-[#38bdf8]">
+                ${levels.target2?.toFixed(2)}
+              </div>
+              <div className="text-[11px] text-[#38bdf8]/80 mt-1 font-mono">
+                +{(entryMode !== "trigger" && activeRetestT2Gain != null ? activeRetestT2Gain : levels.target2_gain_pct)?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
+              </div>
             </div>
-            <div className="text-2xl font-mono font-extrabold text-[#38bdf8]">
-              ${levels.target2?.toFixed(2)}
+            {entryMode !== "trigger" && activeRetestRrT2 != null && (
+              <div className="mt-2.5 pt-2 border-t border-[#152538] text-[10px] text-sky-400 font-sans flex items-center justify-between">
+                <span>Expanded {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? "Red Low" : "PWL")} R/R:</span>
+                <span className="font-mono font-bold">1:{activeRetestRrT2?.toFixed(1)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Prior Week Lows Shelf (Latest Low, PWL & Red Days) ──────────── */}
+      {(levels.pw_latest_low != null || levels.pw_avg_low != null || levels.retest_entry != null || (pwRedDays && pwRedDays.length > 0)) && (
+        <div className="bg-[#09111e] border-b border-[#1a2d3d] px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className="text-[#38bdf8] font-bold uppercase tracking-wider flex items-center gap-1.5 text-xs">
+              <span>📅</span>
+              <span>Prior Week Lows{levels.pw_range_label ? ` (${levels.pw_range_label})` : ""}:</span>
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* 1. Last Week Latest Day Low Pill */}
+              {levels.pw_latest_low != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("latest_low");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "latest_low"
+                      ? "bg-[#f5c842] text-black font-extrabold border-[#f5c842] shadow-md shadow-[#f5c842]/30 ring-1 ring-[#f5c842]"
+                      : "bg-[#1f1a0e] text-[#f5c842] hover:text-white border-[#4d3e14] hover:border-[#f5c842]/60"
+                  }`}
+                  title={`Set entry to Last Week Latest Day Low: $${levels.pw_latest_low?.toFixed(2)} (${levels.pw_latest_date} ${levels.pw_latest_day})`}
+                >
+                  <span>⚡</span>
+                  <span className="font-semibold">Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}):</span>
+                  <span className="font-bold">${levels.pw_latest_low?.toFixed(2)}</span>
+                  {levels.pw_latest_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "latest_low" ? "text-slate-900 font-bold" : "text-slate-400"}`}>
+                      ({levels.pw_latest_diff_pct > 0 ? "+" : ""}{levels.pw_latest_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "latest_low" ? "bg-black text-[#f5c842]" : "bg-[#f5c842]/20 text-[#f5c842]"}`}>
+                    LATEST
+                  </span>
+                </button>
+              )}
+
+              {/* 2. Balanced Average of Lows (PWL + Latest Midpoint) Pill */}
+              {levels.pw_avg_low != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("avg_low");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "avg_low"
+                      ? "bg-[#a855f7] text-white font-extrabold border-[#a855f7] shadow-md shadow-[#a855f7]/30 ring-1 ring-[#a855f7]"
+                      : "bg-[#181126] text-[#a855f7] hover:text-white border-[#3c1e5a] hover:border-[#a855f7]/60"
+                  }`}
+                  title={`Set entry to Balanced Average of Lows (PWL + Latest Midpoint): $${levels.pw_avg_low?.toFixed(2)}`}
+                >
+                  <span>⚖️</span>
+                  <span className="font-semibold">AVG Low:</span>
+                  <span className="font-bold">${levels.pw_avg_low?.toFixed(2)}</span>
+                  {levels.pw_avg_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "avg_low" ? "text-purple-100 font-bold" : "text-slate-400"}`}>
+                      ({levels.pw_avg_diff_pct > 0 ? "+" : ""}{levels.pw_avg_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "avg_low" ? "bg-white text-purple-900" : "bg-[#a855f7]/20 text-[#a855f7]"}`}>
+                    AVG
+                  </span>
+                </button>
+              )}
+
+              {/* 2. Absolute Lowest Low (PWL) Pill */}
+              {levels.retest_entry != null && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEntryMode("retest");
+                    setSelectedRedDay(null);
+                  }}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                    entryMode === "retest" && !selectedRedDay
+                      ? "bg-[#38bdf8] text-black font-extrabold border-[#38bdf8] shadow-md shadow-[#38bdf8]/30 ring-1 ring-[#38bdf8]"
+                      : "bg-[#131d2e] text-[#38bdf8] hover:text-white border-[#1e344d] hover:border-[#38bdf8]/60"
+                  }`}
+                  title={`Set entry to Absolute Lowest Low of Prior Week (PWL): $${levels.retest_entry?.toFixed(2)}`}
+                >
+                  <span>★</span>
+                  <span className="font-semibold">PWL (Lowest):</span>
+                  <span className="font-bold">${levels.retest_entry?.toFixed(2)}</span>
+                  {levels.retest_diff_pct != null && (
+                    <span className={`text-[10px] ${entryMode === "retest" && !selectedRedDay ? "text-slate-900 font-bold" : "text-slate-400"}`}>
+                      ({levels.retest_diff_pct > 0 ? "+" : ""}{levels.retest_diff_pct}%)
+                    </span>
+                  )}
+                  <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${entryMode === "retest" && !selectedRedDay ? "bg-black text-[#38bdf8]" : "bg-[#38bdf8]/30 text-[#38bdf8]"}`}>
+                    PWL
+                  </span>
+                </button>
+              )}
+
+              {/* 3. Individual Prior Week Red Day Lows */}
+              {pwRedDays.map((rd: any) => {
+                const isSelected = entryMode === "retest" && selectedRedDay && selectedRedDay.date === rd.date;
+                return (
+                  <button
+                    key={rd.date}
+                    type="button"
+                    onClick={() => {
+                      setSelectedRedDay(rd);
+                      setEntryMode("retest");
+                    }}
+                    className={`px-2.5 py-1 rounded text-xs font-mono transition-all flex items-center gap-1.5 border ${
+                      isSelected
+                        ? "bg-[#ff4d6a] text-white font-extrabold border-[#ff4d6a] shadow-md shadow-[#ff4d6a]/30 ring-1 ring-[#ff4d6a]"
+                        : "bg-[#1a1215] text-slate-200 hover:text-white border-[#381a20] hover:border-[#ff4d6a]/60"
+                    }`}
+                    title={`Click to set entry to ${rd.date_label} (${rd.day_name}) Red Day Low: $${rd.low?.toFixed(2)}`}
+                  >
+                    <span className={isSelected ? "text-white" : "text-[#ff4d6a]"}>🔴</span>
+                    <span className="font-semibold">{rd.date_label} ({rd.day_name}):</span>
+                    <span className="font-bold">${rd.low?.toFixed(2)}</span>
+                    <span className={`text-[10px] ${isSelected ? "text-slate-100 font-bold" : "text-slate-400"}`}>
+                      ({rd.diff_pct > 0 ? "+" : ""}{rd.diff_pct}%)
+                    </span>
+                    {rd.is_pwl && (
+                      <span className={`px-1 py-0.2 rounded text-[9px] font-extrabold uppercase ${isSelected ? "bg-white text-black" : "bg-[#38bdf8]/30 text-[#38bdf8]"}`}>
+                        PWL
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-            <div className="text-[11px] text-[#38bdf8]/80 mt-1 font-mono">
-              +{levels.target2_gain_pct?.toFixed(1)}% gain · ~{levels.t2_days ?? 10} trading days
-            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-[11px]">
+            <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white select-none">
+              <input
+                type="checkbox"
+                checked={showAllRedDayLines}
+                onChange={(e) => setShowAllRedDayLines(e.target.checked)}
+                className="rounded border-[#1a2d3d] bg-black text-[#38bdf8] focus:ring-0 w-3.5 h-3.5"
+              />
+              <span>Show all on chart</span>
+            </label>
+            {(selectedRedDay || entryMode !== "trigger") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRedDay(null);
+                  setEntryMode("trigger");
+                }}
+                className="text-[#6b7099] hover:text-[#00e5a0] underline"
+              >
+                Reset to Trigger
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -906,6 +1494,37 @@ export default function DailyTradeChart({
                 <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dashed"></span>
                 <span>Target 2: ${levels.target2?.toFixed(2) ?? "—"}</span>
               </span>
+              {showRetestLine && (
+                <>
+                  {levels.pw_latest_low != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#f5c842]">
+                        <span className="w-2.5 h-0.5 bg-[#f5c842] rounded border-b border-dashed"></span>
+                        <span>Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}): ${levels.pw_latest_low?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
+                  {levels.pw_avg_low != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#a855f7]">
+                        <span className="w-2.5 h-0.5 bg-[#a855f7] rounded border-b border-dashed"></span>
+                        <span>AVG Low: ${levels.pw_avg_low?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
+                  {levels.retest_entry != null && (
+                    <>
+                      <span className="text-[#6b7099]">·</span>
+                      <span className="flex items-center gap-1.5 text-[#38bdf8]">
+                        <span className="w-2.5 h-0.5 bg-[#38bdf8] rounded border-b border-dotted"></span>
+                        <span>{selectedRedDay ? (selectedRedDay.is_pwl ? "PWL" : `Red Low (${selectedRedDay.date_label})`) : "PWL"}: ${(selectedRedDay?.low ?? levels.retest_entry)?.toFixed(2)}</span>
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
               {showSma && (
                 <>
                   <span className="text-[#6b7099]">·</span>
@@ -955,9 +1574,84 @@ export default function DailyTradeChart({
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-[#8b949e]">
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
-            <b className="text-[#00e5a0] block mb-1">1. Entry Execution</b>
-            Buy in the zone <span className="font-mono text-white">${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}</span>.
-            Enter on intraday pullbacks or market open if holding above moving averages.
+            {entryMode === "latest_low" ? (
+              <b className="text-[#f5c842] block mb-1">
+                1. Last Week Latest Low Entry ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""})
+              </b>
+            ) : entryMode === "avg_low" ? (
+              <b className="text-[#a855f7] block mb-1">
+                1. Balanced Average Low Entry (PWL + Latest Midpoint)
+              </b>
+            ) : entryMode === "retest" ? (
+              <b className="text-[#38bdf8] block mb-1">
+                1. {selectedRedDay ? `${selectedRedDay.date_label} Red Day Low` : "Prev Week Low (PWL)"} Entry
+              </b>
+            ) : (
+              <b className="text-[#00e5a0] block mb-1">
+                1. Breakout Trigger Entry
+              </b>
+            )}
+            {entryMode === "latest_low" && activeRetestEntry != null ? (
+              <>
+                Buy shallow pullback near Last Week Latest Low ({levels.pw_latest_date ?? "Prior Wk"}{levels.pw_latest_day ? ` ${levels.pw_latest_day}` : ""}) <span className="font-mono text-[#f5c842] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
+                Provides earlier retest support entry with tighter risk (-{activeRetestRiskPct?.toFixed(1)}%) vs breakout trigger.
+              </>
+            ) : entryMode === "avg_low" && activeRetestEntry != null ? (
+              <>
+                Buy balanced pullback near Average of Lows <span className="font-mono text-[#a855f7] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
+                Provides optimal midpoint between aggressive shallow entry and deep PWL with tighter risk (-{activeRetestRiskPct?.toFixed(1)}%).
+              </>
+            ) : entryMode === "retest" && activeRetestEntry != null ? (
+              <>
+                Buy retest dip near {selectedRedDay ? `${selectedRedDay.date_label} (${selectedRedDay.day_name}) Red Day Low` : "PWL"} <span className="font-mono text-[#38bdf8] font-bold">${activeRetestEntry?.toFixed(2)}</span> (Zone: <span className="font-mono text-white">${activeRetestZoneMin?.toFixed(2)} – ${activeRetestZoneMax?.toFixed(2)}</span>).
+                Provides tighter risk (-{activeRetestRiskPct?.toFixed(1)}%) vs breakout trigger.
+              </>
+            ) : (
+              <>
+                Buy in the zone <span className="font-mono text-white">${levels.entry_zone_min?.toFixed(2)} – ${levels.entry_zone_max?.toFixed(2)}</span>.
+                Enter on intraday pullbacks or market open if holding above moving averages.
+              </>
+            )}
+
+            {/* Last Breakout Information */}
+            <div className="mt-3 pt-2.5 border-t border-[#1a1d2e] flex flex-col gap-1.5 text-[11px] font-mono">
+              <div className="flex items-center justify-between text-[#8b949e]">
+                <span className="flex items-center gap-1 font-semibold text-[#8e95bf]">
+                  <span>⚡</span> Last Breakout:
+                </span>
+                {levels.last_breakout_date ? (
+                  <span className={`font-bold px-1.5 py-0.5 rounded text-[10px] ${
+                    levels.last_breakout_days_ago === 0
+                      ? "bg-[#00e5a0]/15 text-[#00e5a0] border border-[#00e5a0]/30"
+                      : levels.last_breakout_days_ago <= 3
+                      ? "bg-[#38bdf8]/15 text-[#38bdf8] border border-[#38bdf8]/30"
+                      : "bg-[#1f2438] text-slate-300 border border-border/40"
+                  }`}>
+                    {levels.last_breakout_days_ago === 0
+                      ? `Today (${levels.last_breakout_date_label || levels.last_breakout_date})`
+                      : levels.last_breakout_days_ago === 1
+                      ? `Yesterday (${levels.last_breakout_date_label || levels.last_breakout_date})`
+                      : `${levels.last_breakout_days_ago} sessions ago (${levels.last_breakout_date_label || levels.last_breakout_date})`}
+                  </span>
+                ) : (
+                  <span className="text-[#6b7099] italic">Consolidating below resistance</span>
+                )}
+              </div>
+              {levels.last_breakout_date && (
+                <div className="text-[10px] text-[#8b949e] flex flex-wrap items-center justify-between gap-1">
+                  <span>
+                    Pivot: <b className="text-white">${levels.last_breakout_level?.toFixed(2)}</b>{" "}
+                    <span className="text-[#6b7099]">({levels.last_breakout_type || "20D High"})</span>
+                  </span>
+                  <span>
+                    Gain: <b className="text-[#00e5a0]">+{levels.last_breakout_gain_pct}%</b>
+                    {levels.last_breakout_vol_ratio != null && (
+                      <> · <b className="text-[#f5c842]">{levels.last_breakout_vol_ratio}x Vol</b></>
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
           <div className="bg-[#131625] p-3 rounded-lg border border-[#1a1d2e]">
             <b className="text-[#34d399] block mb-1">2. Target 1 Exit (Scale Out 50%)</b>

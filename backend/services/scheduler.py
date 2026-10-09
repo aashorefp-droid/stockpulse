@@ -41,13 +41,49 @@ CST = ZoneInfo("America/Chicago")
 try:
     _ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
     sys.path.insert(0, os.path.abspath(_ROOT))
-    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  # type: ignore
+    from config import (
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
+        TELEGRAM_GROUP_CHAT_ID,
+        TELEGRAM_MESSAGE_THREAD_ID,
+        TELEGRAM_MACRO_MESSAGE_THREAD_ID,
+    )  # type: ignore
 except ImportError:
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+    try:
+        from backend.config import (
+            TELEGRAM_BOT_TOKEN,
+            TELEGRAM_CHAT_ID,
+            TELEGRAM_GROUP_CHAT_ID,
+            TELEGRAM_MESSAGE_THREAD_ID,
+            TELEGRAM_MACRO_MESSAGE_THREAD_ID,
+        )
+    except ImportError:
+        TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+        TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
+        TELEGRAM_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_MESSAGE_THREAD_ID", "")
+        TELEGRAM_MACRO_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_MACRO_MESSAGE_THREAD_ID", "")
 
 # ── Scheduler instance ────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="America/Chicago")
+
+
+def _telegram_target(thread_id: str | None = None) -> tuple[str, str | None]:
+    target_chat = TELEGRAM_GROUP_CHAT_ID or TELEGRAM_CHAT_ID
+    if thread_id and str(thread_id).strip():
+        return target_chat, str(thread_id).strip()
+    return target_chat, str(TELEGRAM_MESSAGE_THREAD_ID).strip() or None
+
+
+def _env_enabled(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+_MACRO_ALERTS_ENABLED = _env_enabled("MACRO_ALERTS_ENABLED", "1")
+_MACRO_STATE_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "db", "macro_state.json",
+)
+_MACRO_ALERT_COOLDOWN_SEC = 300  # 5 min between alerts of any kind
 
 
 # ── Message formatters ────────────────────────────────────────────────────────
@@ -956,6 +992,286 @@ def triad_best_picks_alert_job() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def eod_exceptional_scan_job() -> dict:
+    """
+    4:15 PM CST (Mon-Fri) — Dispatch the End-of-Day Multi-Timeframe Strategy Exceptional Scans to Telegram.
+    Scans the complete combined universe: Default 50 + Momentum + ThinkOrSwim (TOS) Gmail alerts.
+    Filters and formats Grade S/A setups, 30W Stage 2 Curls, Volume Profile confluence, and Options.
+    """
+    try:
+        from backend.services.exceptional_scanner import dispatch_exceptional_telegram_alert
+        logger.info("[scheduler] End-of-Day Exceptional Scan Job started (Default 50 + Momentum + Gmail TOS)...")
+        res = dispatch_exceptional_telegram_alert(send_msg=True)
+        bull_cnt = res.get("exceptional_bull_count", 0)
+        bear_cnt = res.get("exceptional_bear_count", 0)
+        curl_cnt = res.get("stage2_curl_count", 0)
+        logger.info(
+            f"[scheduler] EOD Exceptional Scan Job completed: sent={res.get('sent')} "
+            f"scanned={res.get('total_scanned')} bull={bull_cnt} bear={bear_cnt} curls={curl_cnt}"
+        )
+        return res
+    except Exception as e:
+        logger.error(f"[scheduler] EOD Exceptional Scan Job error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+# Alias for backwards compatibility with scheduler router
+exceptional_swing_digest_job = eod_exceptional_scan_job
+
+
+def breakout_digest_job() -> dict:
+    """
+    Scans Default 50 & Momentum 50 watchlists for breakout alerts and dispatches to Telegram.
+    """
+    try:
+        from backend.services.breakout_scanner import dispatch_breakout_telegram_alert
+        logger.info("[scheduler] Breakout Scan Job started (Default 50 + Momentum 50)...")
+        res = dispatch_breakout_telegram_alert(send_msg=True)
+        logger.info(
+            f"[scheduler] Breakout Scan Job completed: sent={res.get('sent')} "
+            f"scanned={res.get('total_scanned')} matches={res.get('total_matches')}"
+        )
+        return res
+    except Exception as e:
+        logger.error(f"[scheduler] Breakout Scan Job error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+breakout_alert_job = breakout_digest_job
+
+
+# ── Macro & Gamma scheduler jobs ──────────────────────────────────────────────
+
+def sector_gamma_job():
+    """After open/close on trading days: recompute all sector GEX so the
+    per-sector daily streak is recorded even when no one has the UI open."""
+    try:
+        from backend.services.gex import compute_sector_gex
+        res = compute_sector_gex()
+        secs = res.get("sectors", [])
+        avail = [s for s in secs if s.get("available")]
+        longg = sum(1 for s in avail if s.get("regime") == "Long Gamma")
+        shortg = sum(1 for s in avail if s.get("regime") == "Short Gamma")
+        logger.info(
+            f"[scheduler] sector gamma: {len(avail)}/{len(secs)} available "
+            f"({longg} long, {shortg} short) — streaks recorded"
+        )
+    except Exception as e:
+        logger.error(f"[scheduler] sector gamma job failed: {e}")
+
+
+def spy_gamma_job():
+    """After open/close on trading days: recompute SPY GEX so the daily sign is
+    recorded (and the consecutive-day streak advances) even when nobody has
+    the UI open. Without this, SPY's streak pins at ±1 because its sign is
+    only written opportunistically on UI hits."""
+    try:
+        from backend.services.gex import compute_spy_gex
+        g = compute_spy_gex()
+        if g.get("available"):
+            logger.info(
+                f"[scheduler] SPY gamma: {g.get('regime')} "
+                f"net={g.get('net_gex')} streak={g.get('streak')} "
+                f"store={g.get('store')} — sign recorded"
+            )
+        else:
+            logger.warning(
+                f"[scheduler] SPY gamma unavailable: "
+                f"{g.get('reason', 'unknown')} — sign NOT recorded today"
+            )
+    except Exception as e:
+        logger.error(f"[scheduler] SPY gamma job failed: {e}")
+
+
+def _compute_day_verdict(gex_regime, btd_state, btd_zone, risk_score):
+    """Return (label, reason). Exact mirror of MarketRisk.tsx dayVerdict()."""
+    # Sell triggers — any single warning sign wins
+    sell_reasons: list[str] = []
+    if gex_regime in ("Short Gamma", "Near Flip"):
+        sell_reasons.append(f"γ {gex_regime}")
+    if btd_state == "DISARMED":
+        sell_reasons.append("BTD DISARMED")
+    if (risk_score or 0) >= 3:
+        sell_reasons.append(f"Risk {risk_score} (HIGH)")
+    if sell_reasons:
+        return "Day to Sell", "Sell bias — " + " · ".join(sell_reasons)
+
+    pullback_or_trigger = (
+        btd_state == "TRIGGER"
+        or (btd_state == "ARMED"      and btd_zone == "dip 20–50EMA")
+        or (btd_state == "ARMED-DEEP" and btd_zone == "deep dip <50EMA")
+    )
+    is_extended = btd_state == "ARMED" and btd_zone == "extended >20EMA"
+
+    if gex_regime == "Long Gamma" and pullback_or_trigger and (risk_score or 0) <= 2:
+        suffix = " · half size — deeper risk" if btd_state == "ARMED-DEEP" else ""
+        return "Day to Buy", (
+            f"Buy bias — γ Long Gamma · BTD {btd_state}/{btd_zone or '?'} "
+            f"· Risk {risk_score}/MOD or better{suffix}"
+        )
+    if gex_regime == "Long Gamma" and is_extended and (risk_score or 0) <= 2:
+        return "Wait for pullback", (
+            f"Environment OK (γ Long Gamma · Risk {risk_score}) but BTD ARMED "
+            "· extended >20EMA — no entry trigger. Wait for price to pull "
+            "back to 20EMA."
+        )
+    return "Sideline", (
+        f"Mixed — γ:{gex_regime or '?'} · BTD:{btd_state or '?'} "
+        f"· Risk:{risk_score}"
+    )
+
+
+def _load_macro_state() -> dict:
+    try:
+        if os.path.exists(_MACRO_STATE_PATH):
+            import json
+            with open(_MACRO_STATE_PATH, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+    except Exception as e:
+        logger.warning(f"[macro_watch] state read failed: {e}")
+    return {}
+
+
+def _save_macro_state(state: dict) -> None:
+    try:
+        import json
+        os.makedirs(os.path.dirname(_MACRO_STATE_PATH), exist_ok=True)
+        with open(_MACRO_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+    except Exception as e:
+        logger.warning(f"[macro_watch] state write failed: {e}")
+
+
+def _verdict_emoji(label: str) -> str:
+    return {
+        "Day to Buy": "📈",
+        "Wait for pullback": "⏳",
+        "Sideline": "⏸",
+        "Day to Sell": "📉",
+    }.get(label, "📊")
+
+
+def macro_regime_watch_job():
+    """Poll the macro snapshot every 5 min during market hours; Telegram on
+    verdict transitions and γ regime flips. State persisted across restarts."""
+    if not _MACRO_ALERTS_ENABLED:
+        return
+    import html
+    from datetime import datetime, timezone
+
+    try:
+        from backend.routers.macro import macro_snapshot
+        snap = macro_snapshot()
+    except Exception as e:
+        logger.warning(f"[macro_watch] snapshot failed: {e}")
+        return
+
+    gex   = snap.get("gex") or {}
+    btd   = snap.get("btd") or {}
+    risk  = snap.get("risk") or {}
+    gex_avail   = gex.get("available") is True
+    gex_regime  = gex.get("regime") if gex_avail else None
+    btd_state   = btd.get("btd_state")
+    btd_zone    = btd.get("btd_zone")
+    risk_score  = int(risk.get("score") or 0)
+    risk_label  = risk.get("label") or "?"
+    verdict, reason = _compute_day_verdict(
+        gex_regime, btd_state, btd_zone, risk_score
+    )
+
+    state = _load_macro_state()
+    prev_verdict = state.get("verdict")
+    prev_gamma   = state.get("gex_regime")
+    now_iso      = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Detect transitions
+    transitions: list[tuple[str, str, str]] = []
+    if prev_verdict and verdict != prev_verdict:
+        transitions.append(("Verdict", prev_verdict, verdict))
+    if prev_gamma and gex_regime and gex_regime != prev_gamma:
+        transitions.append(("γ regime", prev_gamma, gex_regime))
+
+    if not transitions:
+        # First run — seed state without alerting
+        if not prev_verdict:
+            state.update(
+                verdict=verdict, gex_regime=gex_regime,
+                btd_state=btd_state, btd_zone=btd_zone,
+                risk_score=risk_score, last_changed_at=now_iso,
+            )
+            _save_macro_state(state)
+        return
+
+    # Cooldown — avoid whipsaw storms on Near-Flip boundaries
+    last_alert_iso = state.get("last_alerted_at")
+    if last_alert_iso:
+        try:
+            last = datetime.fromisoformat(last_alert_iso)
+            age_s = (datetime.now(timezone.utc) - last).total_seconds()
+            if age_s < _MACRO_ALERT_COOLDOWN_SEC:
+                logger.info(
+                    f"[macro_watch] transition detected but within "
+                    f"{int(age_s)}s cooldown — suppressing"
+                )
+                state.update(
+                    verdict=verdict, gex_regime=gex_regime,
+                    btd_state=btd_state, btd_zone=btd_zone,
+                    risk_score=risk_score, last_changed_at=now_iso,
+                )
+                _save_macro_state(state)
+                return
+        except Exception:
+            pass
+
+    # Build alert
+    spy_chg_1d = ""
+    vix_now    = ""
+    for it in snap.get("items", []):
+        if it.get("ticker") == "SPY":
+            spy_chg_1d = f"SPY {it.get('chg_1d', 0):+.1f}% 1d · 5d {it.get('chg_5d', 0):+.1f}%"
+        elif it.get("ticker") == "^VIX":
+            vix_now = f"VIX {it.get('price', 0):.1f} ({it.get('chg_1d', 0):+.1f}% 1d)"
+
+    e_prev = _verdict_emoji(prev_verdict or "")
+    e_curr = _verdict_emoji(verdict)
+    lines = [f"<b>🚨 MARKET REGIME CHANGE</b>"]
+    for kind, before, after in transitions:
+        lines.append(
+            f"<b>{html.escape(kind)}:</b> {html.escape(before)} → "
+            f"<b>{html.escape(after)}</b>"
+        )
+    lines.append("")
+    lines.append(f"{e_curr} <b>{html.escape(verdict)}</b>")
+    lines.append(f"<i>{html.escape(reason)}</i>")
+    if spy_chg_1d or vix_now:
+        ctx = " · ".join(x for x in (spy_chg_1d, vix_now, risk_label) if x)
+        lines.append(f"\n{html.escape(ctx)}")
+    msg = "\n".join(lines)
+
+    try:
+        chat_id, thread_id = _telegram_target(TELEGRAM_MACRO_MESSAGE_THREAD_ID)
+        send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info(
+            f"[macro_watch] alerted: {prev_verdict} → {verdict} "
+            f"(γ {prev_gamma} → {gex_regime})"
+        )
+    except Exception as e:
+        logger.warning(f"[macro_watch] telegram send failed: {e}")
+
+    state.update(
+        verdict=verdict, gex_regime=gex_regime,
+        btd_state=btd_state, btd_zone=btd_zone,
+        risk_score=risk_score,
+        last_changed_at=now_iso, last_alerted_at=now_iso,
+    )
+    _save_macro_state(state)
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -1036,9 +1352,90 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # 4:15 PM CST (Mon-Fri) — EOD Market Close Exceptional Scans (Default + Momentum + Gmail TOS)
+    scheduler.add_job(
+        eod_exceptional_scan_job,
+        CronTrigger(hour=16, minute=15, day_of_week="mon-fri", timezone=CST),
+        id="eod_exceptional_scan",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # 7:45 PM CST (Mon-Fri) — Evening Post-TOS Exceptional Scans
+    scheduler.add_job(
+        eod_exceptional_scan_job,
+        CronTrigger(hour=19, minute=45, day_of_week="mon-fri", timezone=CST),
+        id="eod_exceptional_scan_evening",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # 9:00 AM CST (Mon-Fri) — Morning Market Open Breakouts Alert (Default 50 + Momentum 50)
+    scheduler.add_job(
+        breakout_digest_job,
+        CronTrigger(hour=9, minute=0, day_of_week="mon-fri", timezone=CST),
+        id="breakout_alert_morning",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # 3:30 PM CST (Mon-Fri) — Post-Market Close Breakout Alert (Default 50 + Momentum 50)
+    scheduler.add_job(
+        breakout_digest_job,
+        CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=CST),
+        id="breakout_alert_post_market",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    # Macro regime watcher — poll every 5m during market hours, alert on verdict/gamma transitions
+    if _MACRO_ALERTS_ENABLED:
+        scheduler.add_job(
+            macro_regime_watch_job,
+            CronTrigger(day_of_week="mon-fri", hour="8-15", minute="*/5", timezone=CST),
+            id="macro_regime_watch",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+
+    # Gamma refreshes twice on trading days: after open and after close.
+    # SPY runs a few minutes before sectors so provider calls are staggered.
+    scheduler.add_job(
+        sector_gamma_job,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=40, timezone=CST),
+        id="sector_gamma_open",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        sector_gamma_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=10, timezone=CST),
+        id="sector_gamma_close",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        spy_gamma_job,
+        CronTrigger(day_of_week="mon-fri", hour=8, minute=37, timezone=CST),
+        id="spy_gamma_open",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        spy_gamma_job,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=7, timezone=CST),
+        id="spy_gamma_close",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    _macro_w = "macro_regime_watch every 5m Mon-Fri 8-15:55CST" if _MACRO_ALERTS_ENABLED else "macro_regime_watch DISABLED"
     logger.info(
-        "[scheduler] registered: default50_scan@8:00CST, "
-        "default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
-        "pre_earnings@8:30CST, momentum@8:45CST, polling 15:00–18:00 CST, "
-        "tos_email_poll@19:15CST, triad_best_picks@19:30CST"
+        f"[scheduler] registered: default50_scan@8:00CST, "
+        f"default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
+        f"pre_earnings@8:30CST, momentum@8:45CST, breakout_morning@9:00CST, "
+        f"breakout_post_market@15:30CST, polling 15:00–18:00 CST, "
+        f"eod_exceptional_scan@16:15CST, tos_email_poll@19:15CST, "
+        f"triad_best_picks@19:30CST, eod_exceptional_evening@19:45CST, "
+        f"spy_gamma + sector_gamma after open and close, {_macro_w}"
     )

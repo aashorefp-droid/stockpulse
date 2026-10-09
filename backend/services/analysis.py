@@ -82,6 +82,230 @@ def nearest_fib(price: float, fib_levels: dict) -> tuple[str, float]:
     return best_label, best_val
 
 
+def calc_earnings_fib_analysis(
+    ticker: str,
+    daily_df: Optional[pd.DataFrame] = None,
+    current_price: Optional[float] = None,
+    as_of: Optional[str] = None,
+) -> dict:
+    """
+    Computes Fibonacci levels and price action metrics based on the Last Earnings reaction:
+    - Finds the last earnings report date and reaction day bar (Open, High, Low, Close, Volume).
+    - Anchors Fibonacci levels to Last Earnings High (0.0%) and Last Earnings Low (100.0%).
+    - Evaluates 'Where We Are Now':
+      * Distance from Last Earnings High ($ and %)
+      * Distance from Last Earnings Low ($ and %)
+      * Return since Earnings Day Close (%)
+      * Position status: EXPANSION (Above E-High) | CONSOLIDATING (Inside E-Range) | BREAKDOWN (Below E-Low)
+      * Nearest Fibonacci level and role (Support / Resistance / At Level)
+      * Days elapsed since earnings and Post-Earnings Cycle High/Low.
+    """
+    import yfinance as yf
+    from datetime import date, datetime, timedelta
+
+    as_of_dt = None
+    if as_of:
+        try:
+            as_of_dt = datetime.strptime(as_of.strip(), "%Y-%m-%d").date()
+        except Exception:
+            as_of_dt = None
+
+    ref_date = as_of_dt or date.today()
+
+    tk = yf.Ticker(ticker)
+
+    # 1. Fetch & slice price history up to ref_date (no future lookahead)
+    if daily_df is None or daily_df.empty:
+        try:
+            period_str = "3y" if as_of_dt else "1y"
+            daily_df = tk.history(period=period_str, interval="1d")
+            daily_df.index = pd.to_datetime(daily_df.index).tz_localize(None)
+            daily_df.columns = [c.lower() for c in daily_df.columns]
+        except Exception:
+            return {"has_earnings": False, "reason": "Could not fetch price history"}
+
+    df_copy = daily_df.copy()
+    if hasattr(df_copy.index, "tz_localize") and df_copy.index.tz is not None:
+        df_copy.index = df_copy.index.tz_localize(None)
+
+    # Strictly enforce cutoff as of target backdated date
+    if as_of_dt:
+        df_copy = df_copy[df_copy.index <= pd.Timestamp(as_of_dt)]
+
+    if df_copy.empty:
+        return {"has_earnings": False, "reason": "No price history available up to target date"}
+
+    hi_col = _col(df_copy, "high")
+    lo_col = _col(df_copy, "low")
+    close_col = _col(df_copy, "close")
+    open_col = _col(df_copy, "open")
+    hist_dates = sorted(df_copy.index)
+
+    # 2. Collect candidate earnings timestamps <= ref_date
+    candidates = []
+
+    # Method 1: earnings_dates table (most accurate release times)
+    try:
+        ed = tk.earnings_dates
+        if ed is not None and not ed.empty:
+            for ts in ed.index:
+                t_date = ts.date() if hasattr(ts, "date") else ts
+                if t_date <= ref_date:
+                    candidates.append(ts)
+    except Exception:
+        pass
+
+    # Method 2: earnings_history table fallback
+    try:
+        eh = tk.earnings_history
+        if eh is not None and not eh.empty:
+            for ts in eh.index:
+                t_date = ts.date() if hasattr(ts, "date") else ts
+                if t_date <= ref_date:
+                    candidates.append(ts)
+    except Exception:
+        pass
+
+    # Method 3: calendar fallback
+    try:
+        from backend.services.earnings import get_earnings_dates_yf
+        ed_list = get_earnings_dates_yf(ticker)
+        for e in ed_list:
+            dt_val = datetime.strptime(e["date"], "%Y-%m-%d")
+            if dt_val.date() <= ref_date:
+                candidates.append(dt_val)
+    except Exception:
+        pass
+
+    # Deduplicate candidates by date
+    unique_candidates = {}
+    for c in candidates:
+        d_key = c.date() if hasattr(c, "date") else c
+        if d_key not in unique_candidates:
+            unique_candidates[d_key] = c
+    sorted_candidates = [unique_candidates[k] for k in sorted(unique_candidates.keys(), reverse=True)]
+
+    earn_ts = None
+    r_date = None
+    is_amc = True
+
+    # Find the latest earnings release that already HAS a completed reaction candle in our history
+    for cand_ts in sorted_candidates:
+        cand_date = cand_ts.date() if hasattr(cand_ts, "date") else cand_ts
+        cand_is_amc = getattr(cand_ts, "hour", 16) >= 12
+        cand_dt = pd.Timestamp(cand_date)
+
+        if cand_is_amc:
+            cand_react = [d for d in hist_dates if d > cand_dt]
+        else:
+            cand_react = [d for d in hist_dates if d >= cand_dt]
+
+        if cand_react:
+            earn_ts = cand_ts
+            r_date = cand_react[0]
+            is_amc = cand_is_amc
+            break
+
+    if earn_ts is None or r_date is None:
+        return {"has_earnings": False, "reason": "No completed earnings reaction found prior to target date"}
+
+    earn_date = earn_ts.date() if hasattr(earn_ts, "date") else earn_ts
+    bar = df_copy.loc[r_date]
+
+    e_high = round(float(bar[hi_col]), 2)
+    e_low = round(float(bar[lo_col]), 2)
+    e_open = round(float(bar[open_col]), 2)
+    e_close = round(float(bar[close_col]), 2)
+    e_midpoint = round((e_high + e_low) / 2.0, 2)
+    e_range = round(e_high - e_low, 2)
+
+    if current_price is None or current_price <= 0 or pd.isna(current_price):
+        valid_closes = df_copy[close_col].dropna()
+        current_price = round(float(valid_closes.iloc[-1]), 2) if not valid_closes.empty else e_close
+
+    post_df = df_copy[df_copy.index >= r_date]
+    days_since = len(post_df)
+    post_hi = round(float(post_df[hi_col].max()), 2) if not post_df.empty else e_high
+    post_lo = round(float(post_df[lo_col].min()), 2) if not post_df.empty else e_low
+
+    dist_high = round(current_price - e_high, 2)
+    dist_high_pct = round(((current_price - e_high) / e_high) * 100, 2) if e_high > 0 else 0.0
+
+    dist_low = round(current_price - e_low, 2)
+    dist_low_pct = round(((current_price - e_low) / e_low) * 100, 2) if e_low > 0 else 0.0
+
+    return_since_pct = round(((current_price - e_close) / e_close) * 100, 2) if e_close > 0 else 0.0
+
+    # Determine "Where We Are Now"
+    if current_price > e_high:
+        status = "EXPANSION"
+        status_badge = "BULLISH EXPANSION"
+        status_label = f"Trading Above Earnings High (+{dist_high_pct:.1f}%)"
+        status_color = "emerald"
+    elif current_price < e_low:
+        status = "BREAKDOWN"
+        status_badge = "BEARISH BREAKDOWN"
+        status_label = f"Trading Below Earnings Low ({dist_low_pct:.1f}%)"
+        status_color = "red"
+    else:
+        status = "CONSOLIDATING"
+        status_badge = "INSIDE EARNINGS RANGE"
+        pos_in_range = ((current_price - e_low) / e_range * 100) if e_range > 0 else 50.0
+        if current_price >= e_midpoint:
+            status_label = f"Consolidating in Upper Half ({pos_in_range:.0f}% of range)"
+        else:
+            status_label = f"Consolidating in Lower Half ({pos_in_range:.0f}% of range)"
+        status_color = "amber"
+
+    # Calculate Fibonacci Levels based on Last Earnings High & Low
+    fib_levels = calc_fib_levels(e_low, e_high) if e_high > e_low else {}
+    nearest_label, nearest_val = ("N/A", 0.0)
+    nearest_role = "At Level"
+    nearest_dist_pct = 0.0
+    nearest_desc = ""
+
+    if fib_levels:
+        nearest_label = min(fib_levels.items(), key=lambda x: abs(current_price - x[1]))[0]
+        nearest_val = fib_levels[nearest_label]
+        nearest_dist_pct = round(((nearest_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        nearest_role = "At Level" if abs(nearest_dist_pct) < 0.5 else ("Resistance" if nearest_val > current_price else "Support")
+        nearest_desc = get_fib_label_desc(nearest_label, mode="earnings")
+
+    return {
+        "has_earnings": True,
+        "ticker": ticker,
+        "earnings_date": str(earn_date),
+        "reaction_date": r_date.strftime("%Y-%m-%d"),
+        "reaction_date_label": r_date.strftime("%b %d, %Y"),
+        "is_amc": bool(is_amc),
+        "days_since_earnings": days_since,
+        "earnings_high": e_high,
+        "earnings_low": e_low,
+        "earnings_open": e_open,
+        "earnings_close": e_close,
+        "earnings_midpoint": e_midpoint,
+        "earnings_range": e_range,
+        "current_price": current_price,
+        "dist_from_high": dist_high,
+        "dist_from_high_pct": dist_high_pct,
+        "dist_from_low": dist_low,
+        "dist_from_low_pct": dist_low_pct,
+        "return_since_earnings_pct": return_since_pct,
+        "post_cycle_high": post_hi,
+        "post_cycle_low": post_lo,
+        "status": status,
+        "status_badge": status_badge,
+        "status_label": status_label,
+        "status_color": status_color,
+        "fib_levels": fib_levels,
+        "nearest_fib": nearest_label,
+        "nearest_fib_val": nearest_val,
+        "nearest_fib_desc": nearest_desc,
+        "nearest_fib_role": nearest_role,
+        "nearest_fib_dist_pct": nearest_dist_pct,
+    }
+
+
 # ── Support / Resistance ──────────────────────────────────────────────────────
 
 def calc_support_resistance(daily_df: pd.DataFrame, current_price: float, n_levels: int = 5) -> dict:
@@ -387,7 +611,346 @@ def get_entry_grade(score: int, confidence: str) -> dict:
 
 # ── Entry / Stop / Target levels ──────────────────────────────────────────────
 
-def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float) -> dict:
+def calc_retest_entry_zone(daily_df: pd.DataFrame, verdict: str, current_price: float, as_of: Optional[str] = None) -> dict:
+    """
+    Computes the Retest Entry Zone based on Prior Week Red Day Low (for longs)
+    or Prior Week Green Day High (for shorts), as well as multi-day swing pivot retest levels.
+    """
+    if daily_df is None or len(daily_df) < 5:
+        return {}
+    close_col = _col(daily_df, "close")
+    open_col  = _col(daily_df, "open")
+    hi_col    = _col(daily_df, "high")
+    lo_col    = _col(daily_df, "low")
+
+    df_copy = daily_df.copy()
+    if hasattr(df_copy.index, "isocalendar"):
+        try:
+            iso = df_copy.index.isocalendar()
+            df_copy["week"] = iso.week.values
+            df_copy["year"] = iso.year.values
+        except Exception:
+            df_copy["week"] = [i // 5 for i in range(len(df_copy))]
+            df_copy["year"] = 1
+    else:
+        df_copy["week"] = [i // 5 for i in range(len(df_copy))]
+        df_copy["year"] = 1
+
+    weeks = df_copy[["year", "week"]].drop_duplicates().values.tolist()
+    direction = "SHORT" if verdict in ("BEARISH", "LEAN BEARISH") else "LONG"
+
+    retest_entry = None
+    retest_zone_min = None
+    retest_zone_max = None
+    retest_label = "Previous Week Low"
+    pw_low = None
+    pw_hi = None
+    pw_latest_low = None
+    pw_latest_date = None
+    pw_latest_day = None
+    pw_latest_diff_pct = None
+    pw_latest_zone_min = None
+    pw_latest_zone_max = None
+    pw_latest_high = None
+    pw_latest_red_low = None
+    pw_latest_red_date = None
+    pw_latest_red_day = None
+    pw_latest_red_diff_pct = None
+    pw_latest_red_zone_min = None
+    pw_latest_red_zone_max = None
+    pw_latest_green_high = None
+    pw_range_label = None
+    red_day_lows = []
+    green_day_highs = []
+
+    if len(weeks) >= 1:
+        # Determine whether the last week in daily_df is a completed week or an ongoing active week.
+        ref_dt = None
+        if as_of:
+            try:
+                ref_dt = pd.Timestamp(as_of)
+                if getattr(ref_dt, "tz", None) is not None:
+                    ref_dt = ref_dt.tz_localize(None)
+            except Exception:
+                ref_dt = None
+        if ref_dt is None:
+            last_bar_dt = pd.Timestamp(df_copy.index[-1])
+            if getattr(last_bar_dt, "tz", None) is not None:
+                last_bar_dt = last_bar_dt.tz_localize(None)
+            now_dt = pd.Timestamp.now()
+            # If last bar is within the last 5 days, reference is now; otherwise use last bar date (e.g. backtest slice)
+            if (now_dt - last_bar_dt).days <= 5:
+                ref_dt = now_dt
+            else:
+                ref_dt = last_bar_dt
+
+        # Check if ref_dt is weekend (Saturday=5, Sunday=6) or Friday post-market close (after 16:00 EST / 4 PM)
+        ref_weekday = ref_dt.weekday()
+        is_weekend_or_post_market = (ref_weekday in (5, 6)) or (ref_weekday == 4 and getattr(ref_dt, 'hour', 0) >= 16)
+
+        last_yw = weeks[-1]
+        try:
+            ref_iso = ref_dt.isocalendar()
+            ref_yw = [int(ref_iso.year), int(ref_iso.week)]
+        except Exception:
+            ref_yw = last_yw
+
+        if is_weekend_or_post_market:
+            # On the weekend or Friday post-market, the trading week that just concluded IS the prior week!
+            if last_yw == ref_yw or len(weeks) < 2:
+                prior_yw = last_yw
+            else:
+                prior_yw = weeks[-1]
+        else:
+            # During an active trading week (Mon-Fri pre-close):
+            # If the current active week already has bars in df_copy, take the previous completed week (weeks[-2])
+            if last_yw == ref_yw and len(weeks) >= 2:
+                prior_yw = weeks[-2]
+            else:
+                # Monday pre-market before any bars for current week exist: last week in df is the completed prior week
+                prior_yw = weeks[-1]
+
+        prior_week_df = df_copy[(df_copy["year"] == prior_yw[0]) & (df_copy["week"] == prior_yw[1])]
+        if not prior_week_df.empty:
+            pw_range_label = f"{prior_week_df.index[0].strftime('%b %d')} – {prior_week_df.index[-1].strftime('%b %d')}"
+            lowest_row = prior_week_df.sort_values(lo_col).iloc[0]
+            pw_low = round(float(lowest_row[lo_col]), 2)
+            highest_row = prior_week_df.sort_values(hi_col, ascending=False).iloc[0]
+            pw_hi = round(float(highest_row[hi_col]), 2)
+
+            latest_row = prior_week_df.iloc[-1]
+            pw_latest_low = round(float(latest_row[lo_col]), 2)
+            pw_latest_cl = float(latest_row[close_col])
+            pw_latest_date = latest_row.name.strftime('%b %d') if hasattr(latest_row.name, 'strftime') else 'Prior Wk'
+            pw_latest_day = latest_row.name.strftime('%a') if hasattr(latest_row.name, 'strftime') else ''
+            pw_latest_diff_pct = round(((pw_latest_low - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+            pw_latest_zone_min = round(pw_latest_low * 0.995, 2)
+            pw_latest_zone_max = round(max(pw_latest_low * 1.01, min(pw_latest_cl, pw_latest_low * 1.015)), 2)
+            pw_latest_high = round(float(latest_row[hi_col]), 2)
+
+            for dt, row in prior_week_df.iterrows():
+                o_val = float(row[open_col])
+                c_val = float(row[close_col])
+                h_val = float(row[hi_col])
+                l_val = float(row[lo_col])
+                dt_str = dt.strftime('%b %d') if hasattr(dt, 'strftime') else str(dt)
+                day_name = dt.strftime('%a') if hasattr(dt, 'strftime') else ''
+                date_iso = dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt)
+
+                if c_val < o_val:
+                    diff = round(((l_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+                    red_day_lows.append({
+                        "date": date_iso,
+                        "date_label": dt_str,
+                        "day_name": day_name,
+                        "low": round(l_val, 2),
+                        "open": round(o_val, 2),
+                        "close": round(c_val, 2),
+                        "high": round(h_val, 2),
+                        "diff_pct": diff,
+                        "is_pwl": abs(round(l_val, 2) - pw_low) < 0.01,
+                        "zone_min": round(l_val * 0.995, 2),
+                        "zone_max": round(max(l_val * 1.01, min(c_val, l_val * 1.015)), 2),
+                    })
+                elif c_val > o_val:
+                    diff = round(((h_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+                    green_day_highs.append({
+                        "date": date_iso,
+                        "date_label": dt_str,
+                        "day_name": day_name,
+                        "high": round(h_val, 2),
+                        "open": round(o_val, 2),
+                        "close": round(c_val, 2),
+                        "low": round(l_val, 2),
+                        "diff_pct": diff,
+                        "is_pwh": abs(round(h_val, 2) - pw_hi) < 0.01,
+                        "zone_min": round(min(h_val * 0.99, max(c_val, h_val * 0.985)), 2),
+                        "zone_max": round(h_val * 1.005, 2),
+                    })
+
+            latest_red = red_day_lows[-1] if red_day_lows else None
+            if latest_red:
+                pw_latest_red_low = latest_red["low"]
+                pw_latest_red_date = latest_red["date_label"]
+                pw_latest_red_day = latest_red["day_name"]
+                pw_latest_red_diff_pct = latest_red["diff_pct"]
+                pw_latest_red_zone_min = latest_red["zone_min"]
+                pw_latest_red_zone_max = latest_red["zone_max"]
+
+            latest_green = green_day_highs[-1] if green_day_highs else None
+            if latest_green:
+                pw_latest_green_high = latest_green["high"]
+
+            if direction == "LONG":
+                pw_cl = float(lowest_row[close_col])
+                dt_str = lowest_row.name.strftime('%b %d') if hasattr(lowest_row.name, 'strftime') else 'Prior Wk'
+                retest_entry = pw_low
+                retest_zone_min = round(pw_low * 0.995, 2)
+                retest_zone_max = round(max(pw_low * 1.01, min(pw_cl, pw_low * 1.015)), 2)
+                retest_label = f"Previous Week Low ({dt_str})"
+            else:
+                pw_cl = float(highest_row[close_col])
+                dt_str = highest_row.name.strftime('%b %d') if hasattr(highest_row.name, 'strftime') else 'Prior Wk'
+                retest_entry = pw_hi
+                retest_zone_min = round(min(pw_hi * 0.99, max(pw_cl, pw_hi * 0.985)), 2)
+                retest_zone_max = round(pw_hi * 1.005, 2)
+                retest_label = f"Previous Week High ({dt_str})"
+
+    # Fallback if prior week was empty or not found
+    if retest_entry is None:
+        if direction == "LONG":
+            lo_val = float(df_copy[lo_col].iloc[-10:].min())
+            retest_entry = round(lo_val, 2)
+            pw_low = retest_entry
+            pw_latest_low = retest_entry
+            pw_latest_date = "Prior Wk"
+            pw_latest_day = ""
+            pw_latest_diff_pct = 0.0
+            pw_latest_zone_min = round(lo_val * 0.995, 2)
+            pw_latest_zone_max = round(lo_val * 1.01, 2)
+            retest_zone_min = round(lo_val * 0.995, 2)
+            retest_zone_max = round(lo_val * 1.01, 2)
+            retest_label = "Previous Low (PWL)"
+        else:
+            hi_val = float(df_copy[hi_col].iloc[-10:].max())
+            retest_entry = round(hi_val, 2)
+            pw_hi = retest_entry
+            pw_latest_high = retest_entry
+            retest_zone_min = round(hi_val * 0.99, 2)
+            retest_zone_max = round(hi_val * 1.005, 2)
+            retest_label = "Previous High (PWH)"
+
+    retest_diff_pct = round(((retest_entry - current_price) / current_price) * 100, 1) if current_price > 0 and retest_entry else 0.0
+
+    pw_avg_low = None
+    pw_avg_diff_pct = None
+    pw_avg_zone_min = None
+    pw_avg_zone_max = None
+    if pw_low is not None and pw_latest_low is not None:
+        pw_avg_low = round((pw_low + pw_latest_low) / 2.0, 2)
+    elif pw_low is not None:
+        pw_avg_low = pw_low
+    elif pw_latest_low is not None:
+        pw_avg_low = pw_latest_low
+
+    if pw_avg_low is not None:
+        pw_avg_diff_pct = round(((pw_avg_low - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        pw_avg_zone_min = round(pw_avg_low * 0.995, 2)
+        pw_avg_zone_max = round(pw_avg_low * 1.01, 2)
+
+    return {
+        "retest_entry": retest_entry,
+        "pw_low": pw_low,
+        "pw_high": pw_hi,
+        "pw_latest_low": pw_latest_low,
+        "pw_latest_date": pw_latest_date,
+        "pw_latest_day": pw_latest_day,
+        "pw_latest_diff_pct": pw_latest_diff_pct,
+        "pw_latest_zone_min": pw_latest_zone_min,
+        "pw_latest_zone_max": pw_latest_zone_max,
+        "pw_avg_low": pw_avg_low,
+        "pw_avg_diff_pct": pw_avg_diff_pct,
+        "pw_avg_zone_min": pw_avg_zone_min,
+        "pw_avg_zone_max": pw_avg_zone_max,
+        "pw_latest_red_low": pw_latest_red_low,
+        "pw_latest_red_date": pw_latest_red_date,
+        "pw_latest_red_day": pw_latest_red_day,
+        "pw_latest_red_diff_pct": pw_latest_red_diff_pct,
+        "pw_latest_red_zone_min": pw_latest_red_zone_min,
+        "pw_latest_red_zone_max": pw_latest_red_zone_max,
+        "pw_latest_high": pw_latest_high,
+        "pw_latest_green_high": pw_latest_green_high,
+        "pw_red_day_lows": red_day_lows,
+        "pw_green_day_highs": green_day_highs,
+        "retest_zone_min": retest_zone_min,
+        "retest_zone_max": retest_zone_max,
+        "retest_label": retest_label,
+        "retest_diff_pct": retest_diff_pct,
+        "pw_range_label": pw_range_label,
+    }
+
+
+def detect_last_breakout(daily_df: pd.DataFrame, as_of: Optional[str] = None) -> Optional[dict]:
+    """
+    Scans backwards across historical daily bars to detect when the most recent
+    resistance/pivot breakout occurred.
+    
+    A breakout occurs when:
+    - Close > max(high of preceding 20 trading days) (or 50-day / 52-week high)
+    - Close >= Open (bullish candle closing strong)
+    """
+    if daily_df is None or len(daily_df) < 25:
+        return None
+    
+    df_copy = daily_df.copy()
+    if as_of:
+        try:
+            as_of_dt = pd.to_datetime(as_of)
+            if df_copy.index.tz is not None:
+                as_of_dt = as_of_dt.tz_localize(df_copy.index.tz)
+            df_copy = df_copy[df_copy.index <= as_of_dt]
+        except Exception:
+            pass
+
+    if len(df_copy) < 25:
+        return None
+
+    close_col = _col(df_copy, "close")
+    hi_col    = _col(df_copy, "high")
+    lo_col    = _col(df_copy, "low")
+    op_col    = _col(df_copy, "open")
+    vol_col   = _col(df_copy, "volume")
+
+    close = df_copy[close_col].values
+    high  = df_copy[hi_col].values
+    open_ = df_copy[op_col].values if op_col in df_copy.columns else close
+    vol   = df_copy[vol_col].values if vol_col in df_copy.columns else np.ones(len(df_copy))
+    
+    # Dates
+    if hasattr(df_copy.index, "strftime"):
+        dates = df_copy.index.strftime("%Y-%m-%d").tolist()
+        date_labels = df_copy.index.strftime("%b %d, %Y").tolist()
+    else:
+        dates = [str(i) for i in df_copy.index]
+        date_labels = dates
+
+    total_bars = len(df_copy)
+    # Search backwards from the most recent bar up to 120 bars back (approx 6 months)
+    min_idx = max(20, total_bars - 120)
+    for i in range(total_bars - 1, min_idx - 1, -1):
+        prior_20_hi = float(np.max(high[i-20:i]))
+        c = float(close[i])
+        o = float(open_[i])
+        v = float(vol[i])
+        prior_vol_avg = float(np.mean(vol[i-20:i])) if np.mean(vol[i-20:i]) > 0 else 1.0
+
+        if c > prior_20_hi and c >= o:
+            days_ago = total_bars - 1 - i
+            gain_pct = round((c - prior_20_hi) / prior_20_hi * 100, 1) if prior_20_hi > 0 else 0.0
+            vol_ratio = round(v / prior_vol_avg, 2) if prior_vol_avg > 0 else 1.0
+
+            # Classification
+            lookback_52 = min(i, 252)
+            is_52w = (lookback_52 >= 50 and c >= float(np.max(high[i-lookback_52:i])))
+            lookback_50 = min(i, 50)
+            is_50d = (lookback_50 >= 30 and c >= float(np.max(high[i-lookback_50:i])))
+
+            b_type = "52W High Breakout" if is_52w else ("50-Day High Breakout" if is_50d else "20-Day Pivot Breakout")
+            return {
+                "date": dates[i],
+                "date_label": date_labels[i],
+                "days_ago": days_ago,
+                "price": round(c, 2),
+                "breakout_level": round(prior_20_hi, 2),
+                "gain_pct": gain_pct,
+                "vol_ratio": vol_ratio,
+                "type": b_type,
+            }
+
+    return None
+
+
+def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float, as_of: Optional[str] = None) -> dict:
     atr = calc_atr(daily_df)
     close_col = _col(daily_df, "close")
     hi_col    = _col(daily_df, "high")
@@ -451,10 +1014,397 @@ def calc_trade_levels(daily_df: pd.DataFrame, verdict: str, current_price: float
             t2_days = max(1, round((entry - t2) / avg_daily_move)) if avg_daily_move > 0 else 10
 
     risk_pct = round(abs(risk / entry) * 100, 2) if entry > 0 else None
-    return {"entry": entry, "stop_loss": stop, "target1": t1, "target2": t2,
-            "risk_pct": risk_pct, "rr_t1": rr1, "rr_t2": rr2,
-            "t1_days": t1_days, "t2_days": t2_days, "atr": round(atr, 2)}
 
+    # Compute secondary Retest Entry Zone (Prior Week Red Day Low Retest)
+    retest_info = calc_retest_entry_zone(daily_df, verdict, current_price, as_of=as_of)
+    r_entry = retest_info.get("retest_entry")
+    r_risk_pct = None
+    r_rr1 = None
+    r_rr2 = None
+    r_t1_gain = None
+    r_t2_gain = None
+
+    if r_entry and r_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            r_risk = max(r_entry - stop, atr * 0.4, r_entry * 0.015)
+            r_risk_pct = round((r_risk / r_entry) * 100, 1)
+            r_rr1 = round((t1 - r_entry) / r_risk, 1) if r_risk > 0 else 2.5
+            r_rr2 = round((t2 - r_entry) / r_risk, 1) if r_risk > 0 else 3.5
+            r_t1_gain = round(((t1 - r_entry) / r_entry) * 100, 1)
+            r_t2_gain = round(((t2 - r_entry) / r_entry) * 100, 1)
+        else:
+            r_risk = max(stop - r_entry, atr * 0.4, r_entry * 0.015)
+            r_risk_pct = round((r_risk / r_entry) * 100, 1)
+            r_rr1 = round((r_entry - t1) / r_risk, 1) if r_risk > 0 else 2.5
+            r_rr2 = round((r_entry - t2) / r_risk, 1) if r_risk > 0 else 3.5
+            r_t1_gain = round(((r_entry - t1) / r_entry) * 100, 1)
+            r_t2_gain = round(((r_entry - t2) / r_entry) * 100, 1)
+
+    # Latest Low Metrics (Last week's most recent trading day low, e.g. Friday low)
+    lat_entry = retest_info.get("pw_latest_low")
+    lat_risk_pct = None
+    lat_rr1 = None
+    lat_rr2 = None
+    lat_t1_gain = None
+    lat_t2_gain = None
+    if lat_entry and lat_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            lat_risk = max(lat_entry - stop, atr * 0.4, lat_entry * 0.015)
+            lat_risk_pct = round((lat_risk / lat_entry) * 100, 1)
+            lat_rr1 = round((t1 - lat_entry) / lat_risk, 1) if lat_risk > 0 else 2.5
+            lat_rr2 = round((t2 - lat_entry) / lat_risk, 1) if lat_risk > 0 else 3.5
+            lat_t1_gain = round(((t1 - lat_entry) / lat_entry) * 100, 1)
+            lat_t2_gain = round(((t2 - lat_entry) / lat_entry) * 100, 1)
+        else:
+            lat_risk = max(stop - lat_entry, atr * 0.4, lat_entry * 0.015)
+            lat_risk_pct = round((lat_risk / lat_entry) * 100, 1)
+            lat_rr1 = round((lat_entry - t1) / lat_risk, 1) if lat_risk > 0 else 2.5
+            lat_rr2 = round((lat_entry - t2) / lat_risk, 1) if lat_risk > 0 else 3.5
+            lat_t1_gain = round(((lat_entry - t1) / lat_entry) * 100, 1)
+            lat_t2_gain = round(((lat_entry - t2) / lat_entry) * 100, 1)
+
+    # Latest Red Day Low Metrics (Most recent red day low of prior week)
+    red_entry = retest_info.get("pw_latest_red_low")
+    red_risk_pct = None
+    red_rr1 = None
+    red_rr2 = None
+    red_t1_gain = None
+    red_t2_gain = None
+    if red_entry and red_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            red_risk = max(red_entry - stop, atr * 0.4, red_entry * 0.015)
+            red_risk_pct = round((red_risk / red_entry) * 100, 1)
+            red_rr1 = round((t1 - red_entry) / red_risk, 1) if red_risk > 0 else 2.5
+            red_rr2 = round((t2 - red_entry) / red_risk, 1) if red_risk > 0 else 3.5
+            red_t1_gain = round(((t1 - red_entry) / red_entry) * 100, 1)
+            red_t2_gain = round(((t2 - red_entry) / red_entry) * 100, 1)
+        else:
+            red_risk = max(stop - red_entry, atr * 0.4, red_entry * 0.015)
+            red_risk_pct = round((red_risk / red_entry) * 100, 1)
+            red_rr1 = round((red_entry - t1) / red_risk, 1) if red_risk > 0 else 2.5
+            red_rr2 = round((red_entry - t2) / red_risk, 1) if red_risk > 0 else 3.5
+            red_t1_gain = round(((red_entry - t1) / red_entry) * 100, 1)
+            red_t2_gain = round(((red_entry - t2) / red_entry) * 100, 1)
+
+    # Average Low Metrics (Midpoint of PWL and Latest Low)
+    avg_entry = retest_info.get("pw_avg_low")
+    avg_risk_pct = None
+    avg_rr1 = None
+    avg_rr2 = None
+    avg_t1_gain = None
+    avg_t2_gain = None
+    if avg_entry and avg_entry > 0:
+        if verdict in ("BULLISH", "LEAN BULLISH"):
+            avg_risk = max(avg_entry - stop, atr * 0.4, avg_entry * 0.015)
+            avg_risk_pct = round((avg_risk / avg_entry) * 100, 1)
+            avg_rr1 = round((t1 - avg_entry) / avg_risk, 1) if avg_risk > 0 else 2.5
+            avg_rr2 = round((t2 - avg_entry) / avg_risk, 1) if avg_risk > 0 else 3.5
+            avg_t1_gain = round(((t1 - avg_entry) / avg_entry) * 100, 1)
+            avg_t2_gain = round(((t2 - avg_entry) / avg_entry) * 100, 1)
+        else:
+            avg_risk = max(stop - avg_entry, atr * 0.4, avg_entry * 0.015)
+            avg_risk_pct = round((avg_risk / avg_entry) * 100, 1)
+            avg_rr1 = round((avg_entry - t1) / avg_risk, 1) if avg_risk > 0 else 2.5
+            avg_rr2 = round((avg_entry - t2) / avg_risk, 1) if avg_risk > 0 else 3.5
+            avg_t1_gain = round(((avg_entry - t1) / avg_entry) * 100, 1)
+            avg_t2_gain = round(((avg_entry - t2) / avg_entry) * 100, 1)
+
+    last_breakout = detect_last_breakout(daily_df, as_of=as_of)
+
+    return {
+        "entry": entry,
+        "stop_loss": stop,
+        "target1": t1,
+        "target2": t2,
+        "risk_pct": risk_pct,
+        "rr_t1": rr1,
+        "rr_t2": rr2,
+        "t1_days": t1_days,
+        "t2_days": t2_days,
+        "atr": round(atr, 2),
+        "retest_entry": r_entry,
+        "pw_low": retest_info.get("pw_low"),
+        "pw_high": retest_info.get("pw_high"),
+        "pw_latest_low": retest_info.get("pw_latest_low"),
+        "pw_latest_date": retest_info.get("pw_latest_date"),
+        "pw_latest_day": retest_info.get("pw_latest_day"),
+        "pw_latest_diff_pct": retest_info.get("pw_latest_diff_pct"),
+        "pw_latest_zone_min": retest_info.get("pw_latest_zone_min"),
+        "pw_latest_zone_max": retest_info.get("pw_latest_zone_max"),
+        "pw_latest_risk_pct": lat_risk_pct,
+        "pw_latest_rr_t1": lat_rr1,
+        "pw_latest_rr_t2": lat_rr2,
+        "pw_latest_t1_gain": lat_t1_gain,
+        "pw_latest_t2_gain": lat_t2_gain,
+        "pw_avg_low": retest_info.get("pw_avg_low"),
+        "pw_avg_diff_pct": retest_info.get("pw_avg_diff_pct"),
+        "pw_avg_zone_min": retest_info.get("pw_avg_zone_min"),
+        "pw_avg_zone_max": retest_info.get("pw_avg_zone_max"),
+        "pw_avg_risk_pct": avg_risk_pct,
+        "pw_avg_rr_t1": avg_rr1,
+        "pw_avg_rr_t2": avg_rr2,
+        "pw_avg_t1_gain": avg_t1_gain,
+        "pw_avg_t2_gain": avg_t2_gain,
+        "pw_latest_red_low": retest_info.get("pw_latest_red_low"),
+        "pw_latest_red_date": retest_info.get("pw_latest_red_date"),
+        "pw_latest_red_day": retest_info.get("pw_latest_red_day"),
+        "pw_latest_red_diff_pct": retest_info.get("pw_latest_red_diff_pct"),
+        "pw_latest_red_zone_min": retest_info.get("pw_latest_red_zone_min"),
+        "pw_latest_red_zone_max": retest_info.get("pw_latest_red_zone_max"),
+        "pw_latest_red_risk_pct": red_risk_pct,
+        "pw_latest_red_rr_t1": red_rr1,
+        "pw_latest_red_rr_t2": red_rr2,
+        "pw_latest_red_t1_gain": red_t1_gain,
+        "pw_latest_red_t2_gain": red_t2_gain,
+        "pw_latest_high": retest_info.get("pw_latest_high"),
+        "pw_latest_green_high": retest_info.get("pw_latest_green_high"),
+        "pw_red_day_lows": retest_info.get("pw_red_day_lows", []),
+        "pw_green_day_highs": retest_info.get("pw_green_day_highs", []),
+        "retest_zone_min": retest_info.get("retest_zone_min"),
+        "retest_zone_max": retest_info.get("retest_zone_max"),
+        "retest_label": retest_info.get("retest_label"),
+        "retest_diff_pct": retest_info.get("retest_diff_pct"),
+        "retest_risk_pct": r_risk_pct,
+        "retest_rr_t1": r_rr1,
+        "retest_rr_t2": r_rr2,
+        "retest_t1_gain": r_t1_gain,
+        "retest_t2_gain": r_t2_gain,
+        "pw_range_label": retest_info.get("pw_range_label"),
+        "last_breakout": last_breakout,
+        "last_breakout_date": last_breakout.get("date") if last_breakout else None,
+        "last_breakout_date_label": last_breakout.get("date_label") if last_breakout else None,
+        "last_breakout_days_ago": last_breakout.get("days_ago") if last_breakout else None,
+        "last_breakout_price": last_breakout.get("price") if last_breakout else None,
+        "last_breakout_level": last_breakout.get("breakout_level") if last_breakout else None,
+        "last_breakout_gain_pct": last_breakout.get("gain_pct") if last_breakout else None,
+        "last_breakout_vol_ratio": last_breakout.get("vol_ratio") if last_breakout else None,
+        "last_breakout_type": last_breakout.get("type") if last_breakout else None,
+    }
+
+
+# ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
+
+def get_fib_label_desc(label: str, mode: str = "52w") -> str:
+    if mode == "week":
+        mapping = {
+            "R 0.0%": "Week High (PWH)",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "Week Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "Week Low (PWL)",
+            "E 127.2%": "Bullish Expansion 1",
+            "E 141.4%": "Bullish Expansion 2",
+            "E 161.8%": "Golden Expansion",
+            "E 200.0%": "2x Week Expansion",
+            "E 261.8%": "Max Expansion",
+            "N -23.6%": "Bearish Breakdown 1",
+            "N -38.2%": "Bearish Breakdown 2",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
+    elif mode == "earnings":
+        mapping = {
+            "R 0.0%": "Last Earnings High",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "Earnings Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "Last Earnings Low",
+            "E 127.2%": "Post-Earnings Ext 1",
+            "E 141.4%": "Post-Earnings Ext 2",
+            "E 161.8%": "Golden Earnings Ext",
+            "E 200.0%": "2x Earnings Expansion",
+            "E 261.8%": "Max Earnings Expansion",
+            "N -23.6%": "Earnings Breakdown 1",
+            "N -38.2%": "Earnings Breakdown 2",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
+    else:
+        mapping = {
+            "R 0.0%": "52W High",
+            "R 23.6%": "Shallow Retrace",
+            "R 38.2%": "Key Retrace",
+            "R 50.0%": "52W Midpoint",
+            "R 61.8%": "Golden Ratio",
+            "R 78.6%": "Deep Retrace",
+            "R 100.0%": "52W Low",
+            "E 127.2%": "Breakout Ext",
+            "E 141.4%": "Breakout Ext",
+            "E 161.8%": "Golden Ext",
+            "E 200.0%": "2x Expansion",
+            "E 261.8%": "Max Ext",
+            "N -23.6%": "Breakdown Target",
+            "N -38.2%": "Breakdown Target",
+            "N -50.0%": "Breakdown Midpoint",
+            "N -61.8%": "Golden Breakdown",
+            "N -100.0%": "100% Breakdown",
+        }
+    if label in mapping:
+        return mapping[label]
+    if label.startswith("E "):
+        return "Expansion Target"
+    if label.startswith("N -"):
+        return "Breakdown Target"
+    return "Fib Level"
+
+
+def generate_final_judgement(
+    trade: dict,
+    vol_profile: Optional[dict],
+    verdict: str,
+    entry_grade: dict,
+    current_price: float,
+    fib_levels: Optional[dict] = None,
+    nearest_fib: Optional[str] = None,
+) -> dict:
+    """
+    Synthesizes Entry Alert + Volume Profile Decision + 52W Fibonacci Level into a Final Trading Judgement.
+    Evaluates whether institutional volume and key range levels confirm or conflict with the price signal.
+    """
+    direction = "SHORT" if (verdict or "").upper() in ("BEARISH", "LEAN BEARISH") else "LONG"
+    grade_letter = (entry_grade.get("entry_grade") if isinstance(entry_grade, dict) else str(entry_grade)) or "C"
+    grade_label = (entry_grade.get("entry_label") if isinstance(entry_grade, dict) else "") or "Neutral"
+    entry_price = (trade.get("entry") or current_price) if isinstance(trade, dict) else current_price
+
+    vp = vol_profile or {}
+    vah = vp.get("vah")
+    val = vp.get("val")
+    poc = vp.get("poc")
+    vol_trend = vp.get("vol_trend", "FLAT")
+    vol_surge = bool(vp.get("vol_surge", False))
+    vol_ratio = vp.get("vol_ratio", 1.0) or 1.0
+
+    above_vah = current_price > vah if vah else False
+    below_val = current_price < val if val else False
+    inside_va = not above_vah and not below_val
+
+    is_bull_signal = direction == "LONG"
+    is_bear_signal = direction == "SHORT"
+
+    fib_call = None
+    if fib_levels and nearest_fib and nearest_fib in fib_levels:
+        fib_val = fib_levels[nearest_fib]
+        desc = get_fib_label_desc(nearest_fib)
+        dist_pct = round(((fib_val - current_price) / current_price) * 100, 1) if current_price > 0 else 0.0
+        role = "At Level" if abs(dist_pct) < 0.5 else ("Resistance" if fib_val > current_price else "Support")
+        fib_call = f"{nearest_fib} ({desc}) ${fib_val:.2f} · {role}"
+
+    if is_bull_signal:
+        if above_vah and (vol_trend == "ACCUMULATING" or vol_surge):
+            return {
+                "verdict_title": "HIGH CONVICTION BUY · INSTITUTIONALLY CONFIRMED",
+                "badge": "STRONG BUY",
+                "status": "CONFIRMED",
+                "color": "emerald",
+                "confluence_score": 95,
+                "summary": f"Entry Alert ({grade_letter} Grade) aligns with institutional volume accumulation above fair value (${vah:.2f} VAH). Volume confirms breakout momentum.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Above VAH (${vah:.2f}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
+            }
+        elif inside_va or (val is not None and current_price >= val and not below_val):
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+            poc_str = f"${poc:.2f}" if poc is not None else "POC"
+            return {
+                "verdict_title": "VALUE AREA ACCUMULATION BUY",
+                "badge": "DIP BUY SUPPORT",
+                "status": "ACCUMULATING",
+                "color": "cyan",
+                "confluence_score": 85,
+                "summary": f"Price holding institutional Value Area support ({val_str}–{vah_str}). High R/R dip accumulation with protective stop below VAL.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Inside Value Area ({val_str}–{vah_str}) · POC {poc_str}",
+                "fib_call": fib_call,
+            }
+        elif below_val:
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "VOLUME DIVERGENCE · CAUTION ON LONGS",
+                "badge": "CAUTION TRAP",
+                "status": "DIVERGENCE",
+                "color": "amber",
+                "confluence_score": 45,
+                "summary": f"Bullish entry alert conflict: Price is trading below Value Area Low ({val_str}) with distribution volume. High probability of false breakout. Wait for reclaim of {val_str} or reduce size.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
+            }
+        else:
+            stop_str = f"${trade.get('stop_loss', entry_price * 0.95):.2f}" if isinstance(trade, dict) and trade.get('stop_loss') else "defined stop"
+            return {
+                "verdict_title": "MODERATE BULLISH BIAS · MONITOR VOLUME",
+                "badge": "SPECULATIVE BUY",
+                "status": "MODERATE",
+                "color": "emerald",
+                "confluence_score": 70,
+                "summary": f"Bullish entry setup with steady volume. Manage risk at {stop_str}.",
+                "entry_call": f"{grade_letter} Grade at ${entry_price:.2f}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "fib_call": fib_call,
+            }
+    elif is_bear_signal:
+        if below_val and (vol_trend == "ACCUMULATING" or vol_surge):
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "INSTITUTIONAL BREAKDOWN CONFIRMED",
+                "badge": "CONFIRMED SHORT",
+                "status": "BREAKDOWN",
+                "color": "rose",
+                "confluence_score": 95,
+                "summary": f"Decisive breakdown below Value Area Low ({val_str}) confirmed by expanding volume surge. Institutional distribution favors aggressive short continuation.",
+                "entry_call": f"{grade_letter} Grade ({grade_label}) Short at ${entry_price:.2f}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x)",
+                "fib_call": fib_call,
+            }
+        elif inside_va:
+            poc_str = f"${poc:.2f}" if poc is not None else "POC"
+            val_str = f"${val:.2f}" if val is not None else "VAL"
+            return {
+                "verdict_title": "BEARISH FADE · SITTING NEAR POC SUPPORT",
+                "badge": "CAUTION SHORT",
+                "status": "SUPPORT_WARNING",
+                "color": "amber",
+                "confluence_score": 60,
+                "summary": f"Short signal active, but price is sitting near heavy Point of Control liquidity ({poc_str}). Expect choppy support; wait for breakdown below {val_str}.",
+                "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
+                "vp_call": f"Inside Value Area · Near POC {poc_str}",
+                "fib_call": fib_call,
+            }
+        else:
+            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+            return {
+                "verdict_title": "BEARISH BIAS · VOLUME RESISTANCE",
+                "badge": "LEAN SHORT",
+                "status": "BEARISH",
+                "color": "rose",
+                "confluence_score": 75,
+                "summary": f"Bearish trajectory with institutional resistance at {vah_str} (VAH).",
+                "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "fib_call": fib_call,
+            }
+    else:
+        val_str = f"${val:.2f}" if val is not None else "VAL"
+        vah_str = f"${vah:.2f}" if vah is not None else "VAH"
+        poc_str = f"${poc:.2f}" if poc is not None else "POC"
+        return {
+            "verdict_title": "NEUTRAL ROTATION · BALANCED VALUE AREA",
+            "badge": "CONSOLIDATION",
+            "status": "NEUTRAL",
+            "color": "slate",
+            "confluence_score": 50,
+            "summary": f"Price oscillating within 70% Value Area ({val_str}–{vah_str}) with neutral volume. Wait for directional breakout expansion.",
+            "entry_call": f"Neutral ({grade_letter} Grade)",
+            "vp_call": f"POC {poc_str} · VA {val_str}–{vah_str}",
+            "fib_call": fib_call,
+        }
 
 # ── Final Trading Judgement (Entry Alert + Volume Profile Confluence) ─────────
 
@@ -1058,4 +2008,111 @@ def analyze_institutional_control(weekly_df, lookback=26):
         return control, phase, emoji, int(days_in_phase)
     except Exception:
         return "N/A", "N/A", "❓", 0
+
+
+def _ema(series: pd.Series, span: int) -> pd.Series:
+    return series.ewm(span=span, adjust=False).mean()
+
+
+def compute_btd(daily_df: pd.DataFrame, regime_ok: bool = True) -> dict:
+    """
+    EMA-only Buy-The-Dip state machine. The gamma/GEX gate from the paper
+    design is NOT implemented yet — `regime_ok` stands in for it.
+
+    Layered rule:
+      GATE     close > 200EMA  AND  50EMA flat-or-rising  AND  regime_ok
+      TREND    close > 50EMA
+      DIP      pullback toward 20EMA (shallow) … 50EMA (deep)
+      TRIGGER  close reclaims 20EMA after having dipped below it
+
+    regime_ok: index-level regime gate. For SPY this is a VIX proxy until a
+    real gamma-flip / GEX gate exists. For single names pass True — the badge
+    then reflects the stock's own structure and the trader combines it with
+    the market-level badge (see UI).
+
+    States: TRIGGER · ARMED · ARMED-DEEP · DISARMED · N/A
+    """
+    out = {
+        "btd_state": "N/A", "btd_zone": None, "btd_reason": None,
+        "btd_size": None,
+        "ema11": None, "ema20": None, "ema50": None, "ema200": None, "ema50_slope_pct": None,
+    }
+    try:
+        if daily_df is None or daily_df.empty:
+            return out
+        cc = _col(daily_df, "close")
+        close = pd.to_numeric(daily_df[cc], errors="coerce").dropna()
+        n = len(close)
+        if n < 60:
+            out["btd_reason"] = "insufficient history"
+            return out
+
+        ema11s  = _ema(close, 11)
+        ema20s  = _ema(close, 20)
+        ema50s  = _ema(close, 50)
+        ema200s = _ema(close, 200) if n >= 200 else None
+
+        c   = float(close.iloc[-1])
+        e11 = float(ema11s.iloc[-1])
+        e20 = float(ema20s.iloc[-1])
+        e50 = float(ema50s.iloc[-1])
+        e200 = float(ema200s.iloc[-1]) if ema200s is not None else None
+
+        lookback  = 10 if n >= 11 else 1
+        e50_prev  = float(ema50s.iloc[-1 - lookback])
+        e50_slope = (e50 - e50_prev) / e50_prev if e50_prev > 0 else 0.0
+        e50_rising = e50_slope >= -0.002  # flat-or-up tolerance
+
+        out.update({
+            "ema11": round(e11, 2),
+            "ema20": round(e20, 2),
+            "ema50": round(e50, 2),
+            "ema200": round(e200, 2) if e200 is not None else None,
+            "ema50_slope_pct": round(e50_slope * 100, 2),
+        })
+
+        if e200 is None:
+            out["btd_reason"] = "need 200+ bars for regime gate"
+            return out
+
+        # ── GATE ─────────────────────────────────────────────────────────
+        if not regime_ok:
+            out.update(btd_state="DISARMED", btd_reason="regime risk-off (gate)")
+            return out
+        if c <= e200:
+            out.update(btd_state="DISARMED", btd_reason="below 200EMA — regime hostile")
+            return out
+        if not e50_rising:
+            out.update(btd_state="DISARMED",
+                       btd_reason=f"50EMA flat/falling ({e50_slope * 100:+.1f}%)")
+            return out
+
+        # ── ARMED — classify dip depth + reclaim trigger ─────────────────
+        above50 = c > e50
+        above20 = c > e20
+        if above20:
+            recent     = close.iloc[-4:-1]
+            e20_recent = ema20s.iloc[-4:-1]
+            dipped = bool((recent < e20_recent).any())
+            if dipped:
+                out.update(btd_state="TRIGGER", btd_zone="reclaimed 20EMA",
+                           btd_reason="closed back above 20EMA after dip",
+                           btd_size="full")
+            else:
+                out.update(btd_state="ARMED", btd_zone="extended >20EMA",
+                           btd_reason="trend OK — wait for pullback to 20EMA",
+                           btd_size="full")
+        elif above50:
+            out.update(btd_state="ARMED", btd_zone="dip 20–50EMA",
+                       btd_reason="in buy zone — wait for 20EMA reclaim",
+                       btd_size="full")
+        else:  # below 50EMA but above 200EMA
+            out.update(btd_state="ARMED-DEEP", btd_zone="deep dip <50EMA",
+                       btd_reason="degraded — half size, needs confirmation",
+                       btd_size="half")
+        return out
+    except Exception as e:  # never break a scan over the BTD overlay
+        out["btd_reason"] = f"error: {str(e)[:60]}"
+        return out
+
 

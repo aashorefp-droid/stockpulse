@@ -331,3 +331,62 @@ def send_30w_curl_alert(
     except Exception as e:
         return {"ok": False, "error": str(e), "sent": False}
 
+
+@router.post("/exceptional-alert")
+def send_exceptional_alert(
+    payload: Dict[str, Any] = Body(default={}),
+    send_telegram: bool = Query(True),
+    days_gmail: int = Query(2),
+):
+    """
+    Executes the End-of-Day Multi-Timeframe Strategy Scan across Default 50 + Momentum + Gmail TOS alerts
+    and dispatches high-conviction Exceptional tickers (Grade S/A, MTF Rank 1, 30W Curls) to Telegram.
+    """
+    try:
+        from backend.services.exceptional_scanner import dispatch_exceptional_telegram_alert
+        raw_tickers = payload.get("tickers")
+        t_list = None
+        if raw_tickers:
+            if isinstance(raw_tickers, list):
+                t_list = [str(t).strip().upper() for t in raw_tickers if str(t).strip()]
+            elif isinstance(raw_tickers, str):
+                t_list = [t.strip().upper() for t in raw_tickers.split(",") if t.strip()]
+
+        send_msg = payload.get("send_telegram") if payload.get("send_telegram") is not None else send_telegram
+        as_of = payload.get("as_of")
+
+        res = dispatch_exceptional_telegram_alert(
+            send_msg=send_msg,
+            universe=t_list,
+            as_of=as_of,
+        )
+        return _clean_nans(res)
+    except Exception as e:
+        return {"ok": False, "error": str(e), "sent": False}
+
+
+@router.get("/exceptional")
+def get_exceptional_scan(
+    days_gmail: int = Query(2),
+    as_of: Optional[str] = Query(None),
+):
+    """
+    Executes the Multi-Timeframe Strategy Scan across Default 50 + Momentum + Gmail TOS alerts
+    and returns categorized Exceptional Bullish, Exceptional Bearish, and 30W Stage 2 Curl setups.
+    """
+    try:
+        from backend.services.exceptional_scanner import scan_exceptional_tickers, get_exceptional_scan_universe
+        universe = get_exceptional_scan_universe(days_gmail=days_gmail)
+        res = scan_exceptional_tickers(universe=universe, as_of=as_of)
+        return _clean_nans(res)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "exceptional_bull": [],
+            "exceptional_bear": [],
+            "stage2_curls": [],
+            "total_scanned": 0,
+        }
+
+

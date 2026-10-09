@@ -12,7 +12,7 @@ from typing import Iterator, Optional
 from backend.services.analysis import (
     full_score_pipeline, get_entry_grade, calc_trade_levels,
     compute_weekly_bias, compute_daily_bias, compute_4h_bias,
-    mtf_signal_action, get_fundamentals, _col,
+    mtf_signal_action, get_fundamentals, _col, generate_final_judgement,
 )
 from backend.services.market_data import get_daily_bars_alpaca
 from backend.services.options import get_options_strategy
@@ -42,8 +42,11 @@ WATCHLISTS: dict[str, list[str]] = {
         "XLI", "SOXX", "SMH", "GLD", "SLV", "TLT", "HYG", "UVXY", "SQQQ", "TQQQ",
     ],
     "momentum": [
-        "NVDA", "MRVL", "AVGO", "ARM", "PLTR", "CRWD", "DDOG", "NET", "SMCI",
-        "TSLA", "META", "AMZN", "GOOGL", "MSFT", "AMD", "SNOW", "ZS", "SHOP", "COIN", "UBER",
+        "NVDA", "MRVL", "AVGO", "ARM", "PLTR", "CRWD", "DDOG", "NET", "SMCI", "TSLA",
+        "META", "AMZN", "GOOGL", "MSFT", "AMD", "SNOW", "ZS", "SHOP", "COIN", "UBER",
+        "MSTR", "APP", "CEG", "VST", "HOOD", "TSM", "ANET", "DECK", "AXON", "HIMS",
+        "SOFI", "AFRM", "RDDT", "SPOT", "DKNG", "CVNA", "SE", "WING", "BBAI", "IONQ",
+        "RKLB", "ASTS", "CAVA", "PANW", "NOW", "PATH", "CELH", "DUOL", "TTD", "FSLR",
     ],
     # Fallback only — overridden at runtime by get_short_squeeze_tickers()
     "short_squeeze": [
@@ -280,6 +283,13 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
         except Exception:
             pass
 
+        # Final Judgement confluence
+        final_judgement = None
+        try:
+            final_judgement = generate_final_judgement(trade, vol_profile, verdict, grade, price)
+        except Exception:
+            pass
+
         return {
             "ticker":            ticker,
             "price":             price,
@@ -323,6 +333,11 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
             "poc":          vol_profile.get("poc"),
             "val":          vol_profile.get("val"),
             "vah":          vol_profile.get("vah"),
+            "hi_52":        vol_profile.get("hi_52"),
+            "lo_52":        vol_profile.get("lo_52"),
+            "dist_hi_52":   vol_profile.get("dist_hi_52"),
+            "dist_lo_52":   vol_profile.get("dist_lo_52"),
+            "final_judgement": final_judgement,
             "breakout_score": strategy_sig.get("breakout_score", 0),
             "dist_from_high": strategy_sig.get("dist_from_high", None),
             "short_pct":    short_pct,
@@ -336,6 +351,32 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
             "rr_t1":        trade.get("rr_t1"),
             "rr_t2":        trade.get("rr_t2"),
             "atr":          trade.get("atr"),
+            "retest_entry": trade.get("retest_entry"),
+            "retest_zone_min": trade.get("retest_zone_min"),
+            "retest_zone_max": trade.get("retest_zone_max"),
+            "retest_label": trade.get("retest_label"),
+            "retest_diff_pct": trade.get("retest_diff_pct"),
+            "pw_low": trade.get("pw_low"),
+            "pw_latest_low": trade.get("pw_latest_low"),
+            "pw_latest_date": trade.get("pw_latest_date"),
+            "pw_latest_day": trade.get("pw_latest_day"),
+            "pw_latest_diff_pct": trade.get("pw_latest_diff_pct"),
+            "pw_latest_red_low": trade.get("pw_latest_red_low"),
+            "pw_latest_red_date": trade.get("pw_latest_red_date"),
+            "pw_latest_red_day": trade.get("pw_latest_red_day"),
+            "pw_latest_red_diff_pct": trade.get("pw_latest_red_diff_pct"),
+            "pw_avg_low": trade.get("pw_avg_low"),
+            "pw_avg_diff_pct": trade.get("pw_avg_diff_pct"),
+            "pw_range_label": trade.get("pw_range_label"),
+            "last_breakout": trade.get("last_breakout"),
+            "last_breakout_date": trade.get("last_breakout_date"),
+            "last_breakout_date_label": trade.get("last_breakout_date_label"),
+            "last_breakout_days_ago": trade.get("last_breakout_days_ago"),
+            "last_breakout_price": trade.get("last_breakout_price"),
+            "last_breakout_level": trade.get("last_breakout_level"),
+            "last_breakout_gain_pct": trade.get("last_breakout_gain_pct"),
+            "last_breakout_vol_ratio": trade.get("last_breakout_vol_ratio"),
+            "last_breakout_type": trade.get("last_breakout_type"),
             "cpr_type":     strategy_sig.get("cpr_type", "Normal"),
             "sector":       sector,
             "pe_ratio":     pe_ratio,

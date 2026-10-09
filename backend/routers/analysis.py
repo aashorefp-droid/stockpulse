@@ -14,8 +14,9 @@ from backend.services.analysis import (
     compute_weekly_bias, compute_daily_bias, compute_4h_bias,
     mtf_signal_action, get_multiframe_bias, get_entry_grade,
     calc_trade_levels, get_fundamentals, get_weekly_fib_and_rsi, _col,
-    generate_final_judgement,
+    generate_final_judgement, calc_earnings_fib_analysis,
 )
+from backend.services.earnings_prediction import calc_fib_earnings_prediction
 from backend.services.options import get_options_bias, get_options_strategy
 from backend.services.market_data import (
     get_daily_bars_alpaca, get_hourly_bars_yfinance, get_ohlcv_for_chart,
@@ -164,6 +165,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
 
     # ── 6. Fibonacci levels ───────────────────────────────────────────────────
     fib_levels, nearest_fib_label = {}, "N/A"
+    hi52, lo52 = None, None
     if not _daily.empty and len(_daily) >= 20:
         try:
             hi_col = _col(_daily, "high"); lo_col = _col(_daily, "low")
@@ -179,6 +181,37 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
 
     # ── 8. Trade levels (uses derived direction via verdict) ──────────────────
     trade_levels = _safe(calc_trade_levels, _EMPTY_TRADE, _daily, verdict, current_price)
+
+    # ── 8b. Weekly Fibonacci levels (Week High and Low) ───────────────────────
+    weekly_fib_levels, weekly_nearest_fib_label = {}, "N/A"
+    wk_lo = trade_levels.get("pw_low")
+    wk_hi = trade_levels.get("pw_high")
+    wk_range_label = trade_levels.get("pw_range_label")
+
+    if (wk_lo is None or wk_hi is None or wk_hi <= wk_lo) and not _daily.empty and len(_daily) >= 5:
+        try:
+            hi_col = _col(_daily, "high"); lo_col = _col(_daily, "low")
+            wk_hi = round(float(_daily[hi_col].tail(5).max()), 2)
+            wk_lo = round(float(_daily[lo_col].tail(5).min()), 2)
+            if not wk_range_label:
+                wk_range_label = "5-Day Range"
+        except Exception:
+            pass
+
+    if wk_lo is not None and wk_hi is not None and wk_hi > wk_lo:
+        weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
+        weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(current_price - x[1]))[0]
+
+    # ── 8c. Last Earnings Fibonacci Analysis (E-High & E-Low + Where We Are Now) ──
+    earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, _daily, current_price, as_of)
+
+    # ── 8d. Multi-Fib Earnings Outcome Prediction & Helpful Data (Tomorrow filter) ──
+    earnings_prediction = _safe(
+        calc_fib_earnings_prediction,
+        {"prediction": "N/A", "prediction_status": "N/A"},
+        ticker, current_price, fib_levels, weekly_fib_levels, earnings_fib,
+        hi52, lo52, wk_hi, wk_lo, as_of
+    )
 
     # ── 9. WTD Fib + RSI ─────────────────────────────────────────────────────
     weekly_fib_rsi = _safe(get_weekly_fib_and_rsi, {"weekly_fib": "N/A", "rsi_4h": "N/A"}, ticker, current_price)
@@ -249,7 +282,7 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "entry_grade":   entry_grade,
         "trade":         trade_levels,
         "volume_profile": scored.get("vol_profile"),
-        "final_judgement": _safe(generate_final_judgement, {}, trade_levels, scored.get("vol_profile"), verdict, entry_grade, current_price),
+        "final_judgement": _safe(generate_final_judgement, {}, trade_levels, scored.get("vol_profile"), verdict, entry_grade, current_price, fib_levels, nearest_fib_label),
         "strategy_signals": scored.get("strategy_signals", {}),
         "bias": {
             "weekly": weekly_bias, "daily": daily_bias,
@@ -258,6 +291,15 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         "signal":             signal,
         "fib_levels":         fib_levels,
         "nearest_fib":        nearest_fib_label,
+        "weekly_fib_levels":  weekly_fib_levels,
+        "weekly_nearest_fib": weekly_nearest_fib_label,
+        "week_high":          wk_hi,
+        "week_low":           wk_lo,
+        "week_range_label":   wk_range_label,
+        "hi_52":              hi52,
+        "lo_52":              lo52,
+        "earnings_fib":       earnings_fib,
+        "earnings_prediction": earnings_prediction,
         "support_resistance": sr,
         "weekly_fib_rsi":     weekly_fib_rsi,
         "fundamentals":       fundamentals,
@@ -474,12 +516,50 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         scored = _safe(full_score_pipeline, {"verdict": "NEUTRAL", "confidence": "N/A", "score": 0}, df_hist)
         verdict = scored.get("verdict", "NEUTRAL")
         direction = "SHORT" if verdict in ("BEARISH", "LEAN BEARISH") else "LONG"
-        trade = _safe(calc_trade_levels, _EMPTY_TRADE, df_hist, verdict, cur_price)
+        trade = _safe(calc_trade_levels, _EMPTY_TRADE, df_hist, verdict, cur_price, as_of)
         sr = _safe(calc_support_resistance, {"support": [], "resistance": []}, df_hist, cur_price)
 
         vol_profile = scored.get("vol_profile") or {}
         entry_grade = _safe(get_entry_grade, _EMPTY_GRADE, scored.get("score", 0), scored.get("confidence", "LOW"))
-        final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price)
+
+        hi_col = _col(df_hist, "high"); lo_col = _col(df_hist, "low")
+        lookback_52w = min(252, len(df_hist))
+        hi52 = float(df_hist[hi_col].tail(lookback_52w).max()) if lookback_52w > 0 else cur_price
+        lo52 = float(df_hist[lo_col].tail(lookback_52w).min()) if lookback_52w > 0 else cur_price
+        fib_levels = calc_fib_levels(lo52, hi52)
+        nearest_fib_label = min(fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0] if fib_levels else "N/A"
+
+        # Weekly Fibonacci levels (Week High and Low)
+        weekly_fib_levels, weekly_nearest_fib_label = {}, "N/A"
+        wk_lo = trade.get("pw_low")
+        wk_hi = trade.get("pw_high")
+        wk_range_label = trade.get("pw_range_label")
+
+        if (wk_lo is None or wk_hi is None or wk_hi <= wk_lo) and not df_hist.empty and len(df_hist) >= 5:
+            try:
+                wk_hi = round(float(df_hist[hi_col].tail(5).max()), 2)
+                wk_lo = round(float(df_hist[lo_col].tail(5).min()), 2)
+                if not wk_range_label:
+                    wk_range_label = "5-Day Range"
+            except Exception:
+                pass
+
+        if wk_lo is not None and wk_hi is not None and wk_hi > wk_lo:
+            weekly_fib_levels = calc_fib_levels(wk_lo, wk_hi)
+            weekly_nearest_fib_label = min(weekly_fib_levels.items(), key=lambda x: abs(cur_price - x[1]))[0]
+
+        # Last Earnings Fibonacci Analysis
+        earnings_fib = _safe(calc_earnings_fib_analysis, {"has_earnings": False}, ticker, df_hist, cur_price, as_of)
+
+        # Multi-Fib Earnings Outcome Prediction & Helpful Data
+        earnings_prediction = _safe(
+            calc_fib_earnings_prediction,
+            {"prediction": "N/A", "prediction_status": "N/A"},
+            ticker, cur_price, fib_levels, weekly_fib_levels, earnings_fib,
+            hi52, lo52, wk_hi, wk_lo, as_of
+        )
+
+        final_judgement = _safe(generate_final_judgement, {}, trade, vol_profile, verdict, entry_grade, cur_price, fib_levels, nearest_fib_label)
 
         bars = []
         volume_bars = []
@@ -627,12 +707,86 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "t1_days": trade.get("t1_days"),
                 "t2_days": trade.get("t2_days"),
                 "atr": trade.get("atr"),
+                "retest_entry": trade.get("retest_entry"),
+                "pw_low": trade.get("pw_low"),
+                "pw_high": trade.get("pw_high"),
+                "pw_latest_low": trade.get("pw_latest_low"),
+                "pw_latest_date": trade.get("pw_latest_date"),
+                "pw_latest_day": trade.get("pw_latest_day"),
+                "pw_latest_diff_pct": trade.get("pw_latest_diff_pct"),
+                "pw_latest_zone_min": trade.get("pw_latest_zone_min"),
+                "pw_latest_zone_max": trade.get("pw_latest_zone_max"),
+                "pw_latest_risk_pct": trade.get("pw_latest_risk_pct"),
+                "pw_latest_rr_t1": trade.get("pw_latest_rr_t1"),
+                "pw_latest_rr_t2": trade.get("pw_latest_rr_t2"),
+                "pw_latest_t1_gain": trade.get("pw_latest_t1_gain"),
+                "pw_latest_t2_gain": trade.get("pw_latest_t2_gain"),
+                "pw_avg_low": trade.get("pw_avg_low"),
+                "pw_avg_diff_pct": trade.get("pw_avg_diff_pct"),
+                "pw_avg_zone_min": trade.get("pw_avg_zone_min"),
+                "pw_avg_zone_max": trade.get("pw_avg_zone_max"),
+                "pw_avg_risk_pct": trade.get("pw_avg_risk_pct"),
+                "pw_avg_rr_t1": trade.get("pw_avg_rr_t1"),
+                "pw_avg_rr_t2": trade.get("pw_avg_rr_t2"),
+                "pw_avg_t1_gain": trade.get("pw_avg_t1_gain"),
+                "pw_avg_t2_gain": trade.get("pw_avg_t2_gain"),
+                "pw_latest_red_low": trade.get("pw_latest_red_low"),
+                "pw_latest_red_date": trade.get("pw_latest_red_date"),
+                "pw_latest_red_day": trade.get("pw_latest_red_day"),
+                "pw_latest_red_diff_pct": trade.get("pw_latest_red_diff_pct"),
+                "pw_latest_red_zone_min": trade.get("pw_latest_red_zone_min"),
+                "pw_latest_red_zone_max": trade.get("pw_latest_red_zone_max"),
+                "pw_latest_red_risk_pct": trade.get("pw_latest_red_risk_pct"),
+                "pw_latest_red_rr_t1": trade.get("pw_latest_red_rr_t1"),
+                "pw_latest_red_rr_t2": trade.get("pw_latest_red_rr_t2"),
+                "pw_latest_red_t1_gain": trade.get("pw_latest_red_t1_gain"),
+                "pw_latest_red_t2_gain": trade.get("pw_latest_red_t2_gain"),
+                "pw_latest_high": trade.get("pw_latest_high"),
+                "pw_latest_green_high": trade.get("pw_latest_green_high"),
+                "pw_red_day_lows": trade.get("pw_red_day_lows", []),
+                "pw_green_day_highs": trade.get("pw_green_day_highs", []),
+                "retest_zone_min": trade.get("retest_zone_min"),
+                "retest_zone_max": trade.get("retest_zone_max"),
+                "retest_label": trade.get("retest_label"),
+                "retest_diff_pct": trade.get("retest_diff_pct"),
+                "retest_risk_pct": trade.get("retest_risk_pct"),
+                "retest_rr_t1": trade.get("retest_rr_t1"),
+                "retest_rr_t2": trade.get("retest_rr_t2"),
+                "retest_t1_gain": trade.get("retest_t1_gain"),
+                "retest_t2_gain": trade.get("retest_t2_gain"),
+                "pw_range_label": trade.get("pw_range_label"),
+                "last_breakout": trade.get("last_breakout"),
+                "last_breakout_date": trade.get("last_breakout_date"),
+                "last_breakout_date_label": trade.get("last_breakout_date_label"),
+                "last_breakout_days_ago": trade.get("last_breakout_days_ago"),
+                "last_breakout_price": trade.get("last_breakout_price"),
+                "last_breakout_level": trade.get("last_breakout_level"),
+                "last_breakout_gain_pct": trade.get("last_breakout_gain_pct"),
+                "last_breakout_vol_ratio": trade.get("last_breakout_vol_ratio"),
+                "last_breakout_type": trade.get("last_breakout_type"),
+                "weekly_fib_levels": weekly_fib_levels,
+                "weekly_nearest_fib": weekly_nearest_fib_label,
+                "week_high": wk_hi,
+                "week_low": wk_lo,
+                "earnings_fib": earnings_fib,
+                "earnings_prediction": earnings_prediction,
             },
             "support_resistance": sr,
             "markers": markers,
             "vol_profile": vol_profile,
             "entry_grade": entry_grade,
             "final_judgement": final_judgement,
+            "fib_levels": fib_levels,
+            "nearest_fib": nearest_fib_label,
+            "weekly_fib_levels": weekly_fib_levels,
+            "weekly_nearest_fib": weekly_nearest_fib_label,
+            "week_high": wk_hi,
+            "week_low": wk_lo,
+            "week_range_label": wk_range_label,
+            "earnings_fib": earnings_fib,
+            "earnings_prediction": earnings_prediction,
+            "hi_52": hi52,
+            "lo_52": lo52,
         })
         _DAILY_CACHE[cache_key] = {"time": now, "data": res}
         return res
