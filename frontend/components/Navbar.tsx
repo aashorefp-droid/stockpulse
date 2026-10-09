@@ -1,11 +1,49 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function Navbar() {
   const [q, setQ] = useState("");
+  const [timeStr, setTimeStr] = useState<string>("");
+  const [marketOpen, setMarketOpen] = useState<boolean>(false);
   const router = useRouter();
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const datePart = now.toLocaleDateString("en-US", {
+        timeZone: "America/Chicago",
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
+      const timePart = now.toLocaleTimeString("en-US", {
+        timeZone: "America/Chicago",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+      setTimeStr(`${datePart} · ${timePart} CT`);
+
+      // Determine US market hours: Mon-Fri, 8:30 AM - 3:00 PM CT
+      try {
+        const cstStr = now.toLocaleString("en-US", { timeZone: "America/Chicago" });
+        const cstDate = new Date(cstStr);
+        const day = cstDate.getDay();
+        const isWeekday = day >= 1 && day <= 5;
+        const mins = cstDate.getHours() * 60 + cstDate.getMinutes();
+        setMarketOpen(isWeekday && mins >= 510 && mins < 900);
+      } catch {
+        setMarketOpen(false);
+      }
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const search = () => {
     const raw = q.trim();
@@ -26,8 +64,19 @@ export default function Navbar() {
   return (
     <nav className="border-b border-border bg-card sticky top-0 z-50">
       <div className="max-w-screen-2xl mx-auto px-4 h-14 flex items-center gap-6">
-        <Link href="/" className="text-accent font-bold text-xl tracking-tight shrink-0">
-          StockPulse
+        <Link href="/" className="text-accent font-bold tracking-tight shrink-0 flex flex-col justify-center leading-tight py-0.5 group">
+          <span className="text-lg lg:text-xl font-bold group-hover:text-accent/80 transition-colors">
+            StockPulse
+          </span>
+          {timeStr && (
+            <span className="text-[10px] text-muted font-mono font-normal tracking-normal flex items-center gap-1 mt-0.5 whitespace-nowrap">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${marketOpen ? "bg-emerald-400 animate-pulse" : "bg-muted/50"}`}
+                title={marketOpen ? "Market Open (US Equities)" : "Market Closed"}
+              />
+              {timeStr}
+            </span>
+          )}
         </Link>
 
         <div className="flex gap-4 text-xs lg:text-sm text-muted hidden md:flex items-center overflow-x-auto">
