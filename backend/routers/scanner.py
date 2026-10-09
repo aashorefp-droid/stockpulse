@@ -61,6 +61,89 @@ def tos_email_refresh(subjects: str = Query(""), days: int = Query(1)):
         return {"status": "error", "error": str(e), "count": 0, "tickers": []}
 
 
+@router.post("/v3-refresh")
+def v3_refresh(payload: dict = Body(...)):
+    """Re-evaluate ONLY the V3 day-trading engine for a list of tickers.
+
+    Designed to be polled every ~5 min during V3 trade windows
+    (09:50–11:00 / 13:30–15:30 ET) so Day Trading setups stay live
+    without re-running the full scan_single pipeline.
+
+    Request:  {"tickers": ["MU", "SPY", ...], "notify": {"SPY": "Rank 1"}}
+    Response: {"results": {"MU": {dt3_setup, ...}}, "count": <int>}
+    """
+    raw = payload.get("tickers") or []
+    tickers = [t.strip().upper() for t in raw
+               if isinstance(t, str) and t.strip()]
+    tickers = list(dict.fromkeys(tickers))[:200]
+    if not tickers:
+        return {"results": {}, "count": 0}
+
+    notify_in = payload.get("notify") or {}
+    notify: dict[str, str] = {}
+    if isinstance(notify_in, dict):
+        for k, v in notify_in.items():
+            if isinstance(k, str) and isinstance(v, str):
+                notify[k.strip().upper()] = v.strip()
+    elif isinstance(notify_in, list):
+        for k in notify_in:
+            if isinstance(k, str):
+                notify[k.strip().upper()] = "Rank 1"
+
+    from concurrent.futures import as_completed
+    from day_trading.v3 import analyze as _v3_analyze
+    from backend.services.scanner import _v3_alert_once
+
+    def _one(tk: str) -> tuple[str, dict]:
+        try:
+            r = _v3_analyze(tk)
+            sig = r.get("signal") or {}
+            lvl = r.get("levels") or {}
+            tgts = sig.get("targets") or []
+            setup = sig.get("setup")
+            if not setup:
+                setup = "no_setup" if lvl else "error"
+            return tk, {
+                "dt3_setup":     setup,
+                "dt3_side":      sig.get("side"),
+                "dt3_grade":     sig.get("grade"),
+                "dt3_level":     sig.get("level"),
+                "dt3_level_val": sig.get("level_val"),
+                "dt3_entry":     sig.get("entry"),
+                "dt3_stop":      sig.get("stop"),
+                "dt3_t1":        tgts[0] if len(tgts) >= 1 else None,
+                "dt3_t2":        tgts[1] if len(tgts) >= 2 else None,
+                "dt3_rr":        sig.get("rr"),
+                "dt3_rationale": sig.get("rationale") or r.get("error"),
+                "dt3_pdh":       lvl.get("pdh"),
+                "dt3_pdl":       lvl.get("pdl"),
+                "dt3_pwh":       lvl.get("pwh"),
+                "dt3_pwl":       lvl.get("pwl"),
+                "dt3_as_of":     r.get("as_of"),
+            }
+        except Exception as e:
+            return tk, {
+                "dt3_setup":     "error",
+                "dt3_rationale": f"{type(e).__name__}: {str(e)[:120]}",
+            }
+
+    out: dict = {}
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futures = {ex.submit(_one, tk): tk for tk in tickers}
+        for fut in as_completed(futures):
+            try:
+                tk, data = fut.result(timeout=8.0)
+                out[tk] = data
+                tier = notify.get(tk)
+                if tier:
+                    _v3_alert_once(tk, data, tier=tier)
+            except Exception:
+                continue
+
+    return {"results": out, "count": len(out), "notify_count": len(notify)}
+
+
+
 @router.get("/stage2-curl")
 def get_stage2_curl_stocks(
     watchlist: str = Query("default"),

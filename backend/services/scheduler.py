@@ -47,6 +47,8 @@ try:
         TELEGRAM_GROUP_CHAT_ID,
         TELEGRAM_MESSAGE_THREAD_ID,
         TELEGRAM_MACRO_MESSAGE_THREAD_ID,
+        TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID,
+        TELEGRAM_SWING_MESSAGE_THREAD_ID,
     )  # type: ignore
 except ImportError:
     try:
@@ -56,6 +58,8 @@ except ImportError:
             TELEGRAM_GROUP_CHAT_ID,
             TELEGRAM_MESSAGE_THREAD_ID,
             TELEGRAM_MACRO_MESSAGE_THREAD_ID,
+            TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID,
+            TELEGRAM_SWING_MESSAGE_THREAD_ID,
         )
     except ImportError:
         TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -63,6 +67,8 @@ except ImportError:
         TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
         TELEGRAM_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_MESSAGE_THREAD_ID", "")
         TELEGRAM_MACRO_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_MACRO_MESSAGE_THREAD_ID", "")
+        TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID", "")
+        TELEGRAM_SWING_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
 
 # ── Scheduler instance ────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="America/Chicago")
@@ -84,6 +90,54 @@ _MACRO_STATE_PATH = os.path.join(
     os.path.dirname(__file__), "..", "db", "macro_state.json",
 )
 _MACRO_ALERT_COOLDOWN_SEC = 300  # 5 min between alerts of any kind
+
+_SCHEDULER_STATE_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "db", "scheduler_state.json",
+)
+_SPY_V4_SUMMARY_ENABLED = _env_enabled("SPY_V4_SUMMARY_ENABLED", "1")
+_SWEEP_DIGEST_ENABLED = _env_enabled("SWEEP_DIGEST_ENABLED", "1")
+_BACKEND_V3_REFRESH_ENABLED = _env_enabled("BACKEND_V3_REFRESH_ENABLED", "0")
+_BACKEND_V3_REFRESH_WATCHLISTS = [
+    w.strip().lower()
+    for w in os.getenv("BACKEND_V3_REFRESH_WATCHLISTS", "holdings,earnings").split(",")
+    if w.strip()
+]
+_BACKEND_V3_REFRESH_MAX_WORKERS = max(1, int(os.getenv("BACKEND_V3_REFRESH_MAX_WORKERS", "6")))
+_BACKEND_V3_MESSAGE_THREAD_ID = os.getenv("BACKEND_V3_MESSAGE_THREAD_ID", "").strip()
+
+
+def _load_scheduler_state() -> dict:
+    try:
+        if os.path.exists(_SCHEDULER_STATE_PATH):
+            with open(_SCHEDULER_STATE_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_scheduler_state(state: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(_SCHEDULER_STATE_PATH), exist_ok=True)
+        tmp = f"{_SCHEDULER_STATE_PATH}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, sort_keys=True)
+        os.replace(tmp, _SCHEDULER_STATE_PATH)
+    except Exception as exc:
+        logger.warning("[scheduler] state write failed: %s", exc)
+
+
+def _daily_job_sent(key: str, day: str | None = None) -> bool:
+    day = day or datetime.now(CST).date().isoformat()
+    return _load_scheduler_state().get(key) == day
+
+
+def _mark_daily_job_sent(key: str, day: str | None = None) -> None:
+    day = day or datetime.now(CST).date().isoformat()
+    state = _load_scheduler_state()
+    state[key] = day
+    _save_scheduler_state(state)
 
 
 # ── Message formatters ────────────────────────────────────────────────────────
@@ -1272,6 +1326,394 @@ def macro_regime_watch_job():
     _save_macro_state(state)
 
 
+# ── V4 & V3 Day Trading Scheduler Jobs ────────────────────────────────────────
+
+def spy_v4_summary_job():
+    """Send the SPY Day Trading V4 plan to Telegram."""
+    if not _SPY_V4_SUMMARY_ENABLED:
+        logger.info("[scheduler] SPY V4 summary skipped: SPY_V4_SUMMARY_ENABLED=0")
+        return
+
+    import html
+
+    try:
+        from backend.services.scanner import scan_single
+
+        try:
+            row = scan_single("SPY", None, None, "daytrading")
+        except TypeError:
+            row = scan_single("SPY")
+
+        if not row.get("dt4_setup") or row.get("error"):
+            try:
+                from day_trading.v4 import analyze as _dt4_direct
+                _direct = _dt4_direct("SPY")
+                if _direct.get("signal"):
+                    _sig = _direct["signal"]
+                    _lvl = _direct.get("levels") or {}
+                    row.update({
+                        "dt4_enabled": True,
+                        "dt4_setup": _sig.get("setup"),
+                        "dt4_context": _sig.get("context"),
+                        "dt4_side": _sig.get("side"),
+                        "dt4_bias": _sig.get("bias"),
+                        "dt4_grade": _sig.get("grade"),
+                        "dt4_level": _sig.get("level"),
+                        "dt4_level_val": _sig.get("level_val"),
+                        "dt4_entry": _sig.get("entry"),
+                        "dt4_stop": _sig.get("stop"),
+                        "dt4_t1": _sig.get("t1"),
+                        "dt4_t2": _sig.get("t2"),
+                        "dt4_rr": _sig.get("rr"),
+                        "dt4_trigger": _sig.get("trigger"),
+                        "dt4_invalidation": _sig.get("invalidation"),
+                        "dt4_target_plan": _sig.get("target_plan"),
+                        "dt4_exit_plan": _sig.get("exit_plan"),
+                        "dt4_note": _sig.get("note"),
+                        "dt4_pdh": _lvl.get("pdh"),
+                        "dt4_pdl": _lvl.get("pdl"),
+                        "dt4_pwh": _lvl.get("pwh"),
+                        "dt4_pwl": _lvl.get("pwl"),
+                        "dt4_atr": _lvl.get("atr"),
+                        "price": _direct.get("price") or row.get("price"),
+                    })
+            except Exception as _e:
+                logger.warning(f"[scheduler] SPY direct V4 fallback failed: {_e}")
+
+        chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
+        if row.get("error") and not row.get("dt4_setup"):
+            msg = (
+                f"<b>SPY Day Trading V4 — {today_str()}</b>\n"
+                f"Unavailable: {html.escape(str(row.get('error') or 'unknown error'))}"
+            )
+            send_telegram(
+                TELEGRAM_BOT_TOKEN,
+                chat_id,
+                msg,
+                message_thread_id=thread_id,
+            )
+            logger.warning("[scheduler] SPY V4 summary unavailable: %s", row.get("error"))
+            return
+
+        def _money(value) -> str:
+            return f"${float(value):.2f}" if isinstance(value, (int, float)) else "—"
+
+        def _rr(value) -> str:
+            return f"{float(value):.2f}x" if isinstance(value, (int, float)) else "—"
+
+        setup = str(row.get("dt4_setup") or "—")
+        setup_text = html.escape(setup.replace("_", " "))
+        side = str(row.get("dt4_side") or "—")
+        side_label = "Long" if side == "long" else "Short" if side == "short" else "Plan"
+        grade = html.escape(str(row.get("dt4_grade") or "—"))
+        bias = html.escape(str(row.get("dt4_bias") or "—"))
+        context = html.escape(str(row.get("dt4_context") or "—"))
+        range_wait = setup == "range_wait"
+
+        if range_wait:
+            level_lines = [
+                f"Support: PDL {_money(row.get('dt4_pdl'))} / PWL {_money(row.get('dt4_pwl'))}",
+                f"Resistance: PDH {_money(row.get('dt4_pdh'))} / PWH {_money(row.get('dt4_pwh'))}",
+                "Entry: wait for reclaim/reject confirmation",
+                "Risk: define after trigger",
+                "Target: VWAP/mid, then opposite edge",
+            ]
+        else:
+            level = html.escape(str(row.get("dt4_level") or "—"))
+            level_lines = [
+                f"Level: {level} {_money(row.get('dt4_level_val'))}",
+                f"Watch/Entry: {_money(row.get('dt4_entry'))}",
+                f"Stop: {_money(row.get('dt4_stop'))}",
+                f"T1: {_money(row.get('dt4_t1'))} / T2: {_money(row.get('dt4_t2'))}",
+                f"R:R: {_rr(row.get('dt4_rr'))}",
+            ]
+
+        trigger = html.escape(str(row.get("dt4_trigger") or "—"))[:320]
+        invalidation = html.escape(str(row.get("dt4_invalidation") or "—"))[:260]
+        target_plan = html.escape(str(row.get("dt4_target_plan") or "—"))[:260]
+        exit_plan = html.escape(str(row.get("dt4_exit_plan") or "—"))[:260]
+        note = html.escape(str(row.get("dt4_note") or ""))[:260]
+
+        msg = (
+            f"<b>SPY Day Trading V4 — {today_str()}</b>\n"
+            f"{side_label} | {setup_text} | Grade {grade}\n"
+            f"Bias: {bias} | Context: {context}\n"
+            f"Price: {_money(row.get('price'))} | ATR: {_money(row.get('dt4_atr'))}\n"
+            f"PDH {_money(row.get('dt4_pdh'))} | PDL {_money(row.get('dt4_pdl'))} | "
+            f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}\n\n"
+            + "\n".join(level_lines)
+            + f"\n\nTrigger: {trigger}\n"
+            f"Invalidation: {invalidation}\n"
+            f"Target plan: {target_plan}\n"
+            f"Exit plan: {exit_plan}"
+        )
+        if note:
+            msg += f"\nNote: {note}"
+
+        sent = send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info("[scheduler] SPY V4 summary sent=%s setup=%s side=%s", sent, setup, side)
+    except Exception as e:
+        logger.error(f"[scheduler] SPY V4 summary failed: {e}")
+
+
+def sweep_digest_job():
+    """Post-market: send V4/V3 sweep reclaim/reject setups from saved scans."""
+    if not _SWEEP_DIGEST_ENABLED:
+        logger.info("[scheduler] sweep digest skipped: SWEEP_DIGEST_ENABLED=0")
+        return
+
+    import html
+
+    try:
+        from backend.services.scanner_snapshot import (
+            configured_watchlists,
+            load_snapshot,
+            refresh_snapshots,
+        )
+
+        watchlists = configured_watchlists()
+        snapshots = [load_snapshot(w) for w in watchlists]
+        if not any(s.get("available") and s.get("results") for s in snapshots):
+            refreshed = refresh_snapshots(watchlists)
+            snapshots = refreshed.get("watchlists", [])
+
+        seen: set[str] = set()
+        longs: list[dict] = []
+        shorts: list[dict] = []
+
+        for snap in snapshots:
+            for row in snap.get("results") or []:
+                ticker = str(row.get("ticker") or "").upper()
+                if not ticker or ticker in seen or row.get("error"):
+                    continue
+                seen.add(ticker)
+
+                dt4_setup = row.get("dt4_setup")
+                dt3_setup = row.get("dt3_setup")
+                dt3_side = row.get("dt3_side")
+
+                is_long = dt4_setup == "sweep_reclaim_long" or (
+                    dt3_setup == "sweep_reclaim" and dt3_side == "long"
+                )
+                is_short = dt4_setup == "sweep_reject_short" or (
+                    dt3_setup == "sweep_reclaim" and dt3_side == "short"
+                )
+                if not is_long and not is_short:
+                    continue
+
+                rec = {
+                    "ticker": ticker,
+                    "price": row.get("price"),
+                    "sector": row.get("sector"),
+                    "verdict": row.get("verdict"),
+                    "setup": dt4_setup or dt3_setup,
+                    "grade": row.get("dt4_grade") or row.get("dt3_grade"),
+                    "level": row.get("dt4_level") or row.get("dt3_level"),
+                    "entry": row.get("dt4_entry") or row.get("dt3_entry"),
+                    "stop": row.get("dt4_stop") or row.get("dt3_stop"),
+                    "t1": row.get("dt4_t1") or row.get("dt3_t1"),
+                    "rr": row.get("dt4_rr") or row.get("dt3_rr"),
+                    "trigger": row.get("dt4_trigger") or row.get("dt3_rationale"),
+                }
+                (longs if is_long else shorts).append(rec)
+
+        def _money(value) -> str:
+            return f"${float(value):.2f}" if isinstance(value, (int, float)) else "—"
+
+        def _line(row: dict) -> str:
+            parts = [
+                f"<b>{html.escape(row['ticker'])}</b>",
+                _money(row.get("price")),
+                html.escape(str(row.get("grade") or "")),
+                html.escape(str(row.get("level") or "")),
+            ]
+            head = " ".join(p for p in parts if p and p != "—")
+            setup = html.escape(str(row.get("setup") or "").replace("_", " "))
+            risk = (
+                f"watch {_money(row.get('entry'))} / stop {_money(row.get('stop'))} / "
+                f"T1 {_money(row.get('t1'))}"
+            )
+            rr = row.get("rr")
+            if isinstance(rr, (int, float)):
+                risk += f" / R:R {rr:.2f}x"
+            trigger = html.escape(str(row.get("trigger") or ""))[:180]
+            return f"{head}\n   {setup} — {risk}\n   {trigger}"
+
+        def _block(title: str, rows: list[dict]) -> str:
+            if not rows:
+                return f"<b>{title} (0)</b>\n—"
+            rows.sort(key=lambda r: (-(r.get("rr") or 0), str(r.get("ticker") or "")))
+            return f"<b>{title} ({len(rows)})</b>\n" + "\n\n".join(_line(r) for r in rows[:12])
+
+        msg = (
+            f"🎯 <b>Post-Market Sweep Setups — {today_str()}</b>\n"
+            f"Watchlists: {html.escape(', '.join(watchlists))}\n\n"
+            f"{_block('Sweep Reclaim Long', longs)}\n\n"
+            f"{_block('Sweep Reclaim Short', shorts)}"
+        )
+        chat_id, thread_id = _telegram_target(TELEGRAM_SWING_MESSAGE_THREAD_ID)
+        send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info(
+            "[scheduler] sweep digest sent: %s long / %s short from %s tickers",
+            len(longs),
+            len(shorts),
+            len(seen),
+        )
+    except Exception as e:
+        logger.error(f"[scheduler] sweep digest failed: {e}")
+
+
+def _backend_v3_in_trade_window(now_et: datetime | None = None) -> bool:
+    from datetime import datetime
+    now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return False
+    minutes = now_et.hour * 60 + now_et.minute
+    morning_start = 9 * 60 + 50
+    morning_end = 11 * 60
+    afternoon_start = 13 * 60 + 30
+    afternoon_end = 15 * 60 + 30
+    return (
+        morning_start <= minutes <= morning_end
+        or afternoon_start <= minutes <= afternoon_end
+    )
+
+
+def _backend_v3_tickers() -> dict[str, list[str]]:
+    from backend.services.scanner import WATCHLISTS
+    by_ticker: dict[str, list[str]] = {}
+
+    def add(source: str, tickers: list[str]) -> None:
+        label = source.strip().lower()
+        for raw in tickers:
+            ticker = str(raw or "").strip().upper()
+            if not ticker:
+                continue
+            by_ticker.setdefault(ticker, [])
+            if label not in by_ticker[ticker]:
+                by_ticker[ticker].append(label)
+
+    for watchlist in _BACKEND_V3_REFRESH_WATCHLISTS:
+        try:
+            add(watchlist, list(WATCHLISTS.get(watchlist, [])))
+        except Exception as exc:
+            logger.warning("[scheduler] backend v3 %s watchlist failed: %s", watchlist, str(exc)[:120])
+    return by_ticker
+
+
+def backend_v3_refresh_job(force: bool = False):
+    """Server-side V3 scan so Telegram alerts do not depend on the UI being open."""
+    if not _BACKEND_V3_REFRESH_ENABLED and not force:
+        logger.info("[scheduler] backend v3 refresh skipped: BACKEND_V3_REFRESH_ENABLED=0")
+        return
+    if not force and not _backend_v3_in_trade_window():
+        logger.debug("[scheduler] backend v3 refresh skipped: outside V3 trade window")
+        return
+
+    import html
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    try:
+        from day_trading.v3 import analyze as _v3_analyze
+
+        by_ticker = _backend_v3_tickers()
+        tickers = list(by_ticker)
+        if not tickers:
+            logger.info("[scheduler] backend v3 refresh skipped: no tickers from %s", _BACKEND_V3_REFRESH_WATCHLISTS)
+            return
+
+        def _one(ticker: str) -> tuple[str, dict]:
+            try:
+                result = _v3_analyze(ticker)
+                sig = result.get("signal") or {}
+                lvl = result.get("levels") or {}
+                targets = sig.get("targets") or []
+                setup = sig.get("setup") or ("no_setup" if lvl else "error")
+                return ticker, {
+                    "dt3_setup": setup,
+                    "dt3_side": sig.get("side"),
+                    "dt3_grade": sig.get("grade"),
+                    "dt3_level": sig.get("level"),
+                    "dt3_level_val": sig.get("level_val"),
+                    "dt3_entry": sig.get("entry"),
+                    "dt3_stop": sig.get("stop"),
+                    "dt3_t1": targets[0] if len(targets) >= 1 else None,
+                    "dt3_t2": targets[1] if len(targets) >= 2 else None,
+                    "dt3_rr": sig.get("rr"),
+                    "dt3_rationale": sig.get("rationale") or result.get("error"),
+                    "dt3_as_of": result.get("as_of"),
+                }
+            except Exception as exc:
+                return ticker, {
+                    "dt3_setup": "error",
+                    "dt3_rationale": f"{type(exc).__name__}: {str(exc)[:120]}",
+                }
+
+        def _money(value) -> str:
+            return f"${float(value):.2f}" if isinstance(value, (int, float)) else "—"
+
+        def _rr(value) -> str:
+            return f"{float(value):.2f}x" if isinstance(value, (int, float)) else "—"
+
+        scanned = 0
+        sent = 0
+        workers = max(1, min(len(tickers), _BACKEND_V3_REFRESH_MAX_WORKERS))
+        chat_id, thread_id = _telegram_target(_BACKEND_V3_MESSAGE_THREAD_ID or TELEGRAM_SWING_MESSAGE_THREAD_ID)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_one, ticker): ticker for ticker in tickers}
+            for fut in as_completed(futures):
+                ticker, row = fut.result()
+                scanned += 1
+                setup = str(row.get("dt3_setup") or "")
+                side = str(row.get("dt3_side") or "")
+                if setup not in {"sweep_reclaim", "break_retest"} or side not in {"long", "short"}:
+                    continue
+
+                state_key = f"backend_v3:{ticker}:{setup}:{side}"
+                if _daily_job_sent(state_key):
+                    continue
+
+                sources = ", ".join(s.upper() for s in by_ticker.get(ticker, []))
+                title = f"<b>V3 Backend Alert — {html.escape(ticker)}</b>"
+                msg = (
+                    f"{title}\n"
+                    f"<i>{html.escape(sources or 'WATCHLIST')} | {html.escape(setup.replace('_', '+'))} | {html.escape(side)}</i>\n"
+                    f"Grade {html.escape(str(row.get('dt3_grade') or '—'))} | "
+                    f"Level {html.escape(str(row.get('dt3_level') or '—'))} {_money(row.get('dt3_level_val'))}\n"
+                    f"Entry {_money(row.get('dt3_entry'))} / Stop {_money(row.get('dt3_stop'))}\n"
+                    f"T1 {_money(row.get('dt3_t1'))} / T2 {_money(row.get('dt3_t2'))} / R:R {_rr(row.get('dt3_rr'))}"
+                )
+                rationale = html.escape(str(row.get("dt3_rationale") or "")[:220])
+                if rationale:
+                    msg += f"\n\n<i>{rationale}</i>"
+                if row.get("dt3_as_of"):
+                    msg += f"\nAs of: {html.escape(str(row.get('dt3_as_of')))}"
+
+                if send_telegram(TELEGRAM_BOT_TOKEN, chat_id, msg, message_thread_id=thread_id):
+                    _mark_daily_job_sent(state_key)
+                    sent += 1
+
+        logger.info(
+            "[scheduler] backend v3 refresh completed: scanned=%s sent=%s watchlists=%s force=%s",
+            scanned,
+            sent,
+            ",".join(_BACKEND_V3_REFRESH_WATCHLISTS),
+            force,
+        )
+    except Exception as exc:
+        logger.error(f"[scheduler] backend v3 refresh failed: {exc}")
+
+
 # ── Scheduler setup ───────────────────────────────────────────────────────────
 
 def setup_scheduler():
@@ -1429,9 +1871,48 @@ def setup_scheduler():
         misfire_grace_time=3600,
     )
 
+    # SPY Day Trading V4 plan summaries: morning open plan & post-market review
+    if _SPY_V4_SUMMARY_ENABLED:
+        scheduler.add_job(
+            spy_v4_summary_job,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=CST),
+            id="spy_v4_summary_morning",
+            replace_existing=True,
+            misfire_grace_time=600,
+        )
+        scheduler.add_job(
+            spy_v4_summary_job,
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone=CST),
+            id="spy_v4_summary_post_market",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
+    # Post-market V4/V3 sweep setups digest
+    if _SWEEP_DIGEST_ENABLED:
+        scheduler.add_job(
+            sweep_digest_job,
+            CronTrigger(day_of_week="mon-fri", hour=15, minute=40, timezone=CST),
+            id="sweep_digest_close",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
+
+    # Intraday V3 backend refresh during trade windows
+    if _BACKEND_V3_REFRESH_ENABLED:
+        scheduler.add_job(
+            backend_v3_refresh_job,
+            CronTrigger(day_of_week="mon-fri", hour="8-10,12-14", minute="*/5", timezone=CST),
+            id="backend_v3_refresh",
+            replace_existing=True,
+            misfire_grace_time=300,
+            max_instances=1,
+        )
+
     _macro_w = "macro_regime_watch every 5m Mon-Fri 8-15:55CST" if _MACRO_ALERTS_ENABLED else "macro_regime_watch DISABLED"
+    _spy_v4_w = "spy_v4_summary@8:00&15:40CST" if _SPY_V4_SUMMARY_ENABLED else "spy_v4_summary DISABLED"
     logger.info(
-        f"[scheduler] registered: default50_scan@8:00CST, "
+        f"[scheduler] registered: default50_scan@8:00CST, {_spy_v4_w}, "
         f"default50_near_entry@8:30CST, paper_exit_monitor@*/5m, "
         f"pre_earnings@8:30CST, momentum@8:45CST, breakout_morning@9:00CST, "
         f"breakout_post_market@15:30CST, polling 15:00–18:00 CST, "

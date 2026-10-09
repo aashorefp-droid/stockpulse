@@ -202,3 +202,29 @@ def trigger_gamma_jobs():
     return {"status": "gamma jobs completed"}
 
 
+@router.post("/run-spy-v4")
+@router.post("/run-v4-spy")
+def trigger_spy_v4_summary():
+    """Manually trigger the SPY Day Trading V4 plan Telegram alert."""
+    from backend.services.scheduler import spy_v4_summary_job
+    spy_v4_summary_job()
+    return {"status": "spy_v4_summary completed"}
+
+
+@router.post("/run-sweeps")
+def trigger_sweep_digest():
+    """Manually trigger the post-market sweep setup digest."""
+    from backend.services.scheduler import sweep_digest_job
+    sweep_digest_job()
+    return {"status": "sweep digest completed"}
+
+
+@router.post("/run-v3-refresh")
+def trigger_backend_v3_refresh():
+    """Manually trigger the backend V3 refresh, outside the market-window gate."""
+    from backend.services.scheduler import backend_v3_refresh_job
+    backend_v3_refresh_job(force=True)
+    return {"status": "backend V3 refresh completed"}
+
+
+

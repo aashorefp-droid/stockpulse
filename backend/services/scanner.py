@@ -114,9 +114,71 @@ def get_short_squeeze_tickers(min_short_pct: float = 10.0, limit: int = 40) -> l
     return WATCHLISTS["short_squeeze"]
 
 
+_V3_ALERT_LOG: dict[tuple[str, str], date] = {}
+
+
+def _v3_alert_once(ticker: str, dt3: dict, tier: str = "Rank 1") -> None:
+    """Send a Telegram alert for a newly detected V3 setup (deduped to 1/day)."""
+    setup = dt3.get("dt3_setup")
+    side = dt3.get("dt3_side")
+    if setup not in {"sweep_reclaim", "break_retest"} or side not in {"long", "short"}:
+        return
+    if not tier:
+        return
+    key = (ticker.upper(), str(setup))
+    today = date.today()
+    if _V3_ALERT_LOG.get(key) == today:
+        return
+
+    try:
+        import html
+        from backend.services.telegram_svc import send_telegram
+        from backend.services.scheduler import _telegram_target
+
+        tok = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id, thread_id = _telegram_target(
+            os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
+        )
+        if not (tok and chat_id):
+            return
+
+        arrow = "📈" if side == "long" else "📉"
+        grade = dt3.get("dt3_grade") or ""
+        level = dt3.get("dt3_level") or "?"
+        lv = dt3.get("dt3_level_val")
+        entry = dt3.get("dt3_entry")
+        stop = dt3.get("dt3_stop")
+        t1 = dt3.get("dt3_t1")
+        t2 = dt3.get("dt3_t2")
+        rr = dt3.get("dt3_rr")
+        rationale = html.escape((dt3.get("dt3_rationale") or "")[:240])
+
+        def _m(v): return f"${v:.2f}" if isinstance(v, (int, float)) else "—"
+        def _r(v): return f"{v:.2f}×" if isinstance(v, (int, float)) else "—"
+
+        msg = (
+            f"<b>{arrow} V3 {html.escape(tier)} — {html.escape(ticker.upper())}</b>\n"
+            f"<i>{html.escape(str(setup).replace('_', '+'))} · {side} · {html.escape(str(grade))}</i>\n"
+            f"Lvl: {html.escape(str(level))} {_m(lv)}\n"
+            f"Entry: {_m(entry)}  Stop: {_m(stop)}\n"
+            f"T1: {_m(t1)}  T2: {_m(t2)}  R:R: {_r(rr)}\n"
+            f"\n<i>{rationale}</i>"
+        )
+        send_telegram(tok, chat_id, msg, message_thread_id=thread_id)
+        _V3_ALERT_LOG[key] = today
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[scanner] V3 alert failed for {ticker}: {e}")
+
+
 # ── Single ticker scan ────────────────────────────────────────────────────────
 
-def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
+def scan_single(
+    ticker: str,
+    as_of: Optional[str] = None,
+    include_news: Optional[bool] = None,
+    mode: Optional[str] = None,
+) -> dict:
     try:
         if as_of:
             end = date.fromisoformat(as_of)
@@ -290,7 +352,71 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
         except Exception:
             pass
 
-        return {
+        # V4 day-trading: PDH/PWH/PDL/PWL plan engine
+        dt4_fields = {}
+        try:
+            from day_trading.v4 import analyze_from_daily as _dt4_analyze
+            _dt4 = _dt4_analyze(ticker, daily_df, scan_date=end, current_price=price)
+            _sig = _dt4.get("signal") or {}
+            _lvl = _dt4.get("levels") or {}
+            dt4_fields = {
+                "dt4_enabled": True,
+                "dt4_setup": _sig.get("setup"),
+                "dt4_context": _sig.get("context"),
+                "dt4_side": _sig.get("side"),
+                "dt4_bias": _sig.get("bias"),
+                "dt4_grade": _sig.get("grade"),
+                "dt4_level": _sig.get("level"),
+                "dt4_level_val": _sig.get("level_val"),
+                "dt4_entry": _sig.get("entry"),
+                "dt4_stop": _sig.get("stop"),
+                "dt4_t1": _sig.get("t1"),
+                "dt4_t2": _sig.get("t2"),
+                "dt4_rr": _sig.get("rr"),
+                "dt4_trigger": _sig.get("trigger"),
+                "dt4_invalidation": _sig.get("invalidation"),
+                "dt4_target_plan": _sig.get("target_plan"),
+                "dt4_exit_plan": _sig.get("exit_plan"),
+                "dt4_note": _sig.get("note"),
+                "dt4_pdh": round(_lvl.get("pdh"), 2) if _lvl.get("pdh") is not None else None,
+                "dt4_pdl": round(_lvl.get("pdl"), 2) if _lvl.get("pdl") is not None else None,
+                "dt4_pwh": round(_lvl.get("pwh"), 2) if _lvl.get("pwh") is not None else None,
+                "dt4_pwl": round(_lvl.get("pwl"), 2) if _lvl.get("pwl") is not None else None,
+                "dt4_atr": round(_lvl.get("atr"), 2) if _lvl.get("atr") is not None else None,
+            }
+        except Exception as _e:
+            dt4_fields = {"dt4_enabled": True, "dt4_setup": "error", "dt4_note": str(_e)[:120]}
+
+        # V3 day-trading: PDH/PWH/PDL/PWL setup engine
+        dt3_fields = {}
+        try:
+            from day_trading.v3 import analyze as _dt3_analyze
+            _dt3 = _dt3_analyze(ticker, daily=daily_df)
+            _sig = _dt3.get("signal") or {}
+            _lvl = _dt3.get("levels") or {}
+            _tgts = _sig.get("targets") or []
+            _setup_val = _sig.get("setup") or ("no_setup" if _lvl else "error")
+            dt3_fields = {
+                "dt3_setup": _setup_val,
+                "dt3_side": _sig.get("side"),
+                "dt3_grade": _sig.get("grade"),
+                "dt3_level": _sig.get("level"),
+                "dt3_level_val": _sig.get("level_val"),
+                "dt3_entry": _sig.get("entry"),
+                "dt3_stop": _sig.get("stop"),
+                "dt3_t1": _tgts[0] if len(_tgts) >= 1 else None,
+                "dt3_t2": _tgts[1] if len(_tgts) >= 2 else None,
+                "dt3_rr": _sig.get("rr"),
+                "dt3_rationale": _sig.get("rationale"),
+                "dt3_pdh": _lvl.get("pdh"),
+                "dt3_pdl": _lvl.get("pdl"),
+                "dt3_pwh": _lvl.get("pwh"),
+                "dt3_pwl": _lvl.get("pwl"),
+            }
+        except Exception:
+            pass
+
+        out_row = {
             "ticker":            ticker,
             "price":             price,
             "is_30w_curl":       is_30w_curl,
@@ -399,8 +525,11 @@ def scan_single(ticker: str, as_of: Optional[str] = None) -> dict:
             "opt_exp_short": opt_exp_short,
             "opt_exp_long":  opt_exp_long,
             "opt_alt":       opt_alt,
+            **dt4_fields,
+            **dt3_fields,
             "error":         None,
         }
+        return out_row
     except Exception as e:
         return {"ticker": ticker, "error": str(e)[:120], "score": 0}
 
