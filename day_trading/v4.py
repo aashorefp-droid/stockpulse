@@ -340,6 +340,221 @@ def _pick_signal(price: float, session_high: float, session_low: float, levels: 
     return _range_wait(price, levels)
 
 
+def compute_outcomes(price: float, levels: Levels) -> dict:
+    """Calculate concrete possible trade outcomes and price levels based on current price."""
+    buf = _buffer(levels, price)
+    pd_mid = levels.pd_mid
+    atr = max(levels.atr, 1.0)
+
+    dist_pdh = levels.pdh - price
+    dist_pdl = price - levels.pdl
+    dist_pwh = levels.pwh - price
+    dist_pwl = price - levels.pwl
+
+    range_span = max(levels.pdh - levels.pdl, 0.01)
+    pos_pct = max(0.0, min(100.0, (price - levels.pdl) / range_span * 100.0))
+
+    if price > levels.pdh:
+        position_desc = f"Above PDH (+${price - levels.pdh:.2f}, +{(price - levels.pdh)/levels.pdh*100:.2f}%) — Breakout zone"
+        primary_focus = f"Price is above PDH (${levels.pdh:.2f}). Watch PDH retest hold for long continuation to PWH (${levels.pwh:.2f}), or failure back below PDH for a false-breakout short."
+
+        # Bullish 1: Retest Hold of PDH
+        long_reclaim = {
+            "scenario": "Retest & Hold PDH",
+            "watch_level": "PDH",
+            "watch_val": _round2(levels.pdh),
+            "entry": _round2(levels.pdh),
+            "stop": _round2(levels.pdh - buf),
+            "t1": _round2(max(levels.pwh, levels.pdh + atr * 0.5)),
+            "t2": _round2(levels.pdh + atr),
+            "rr": _rr(levels.pdh, levels.pdh - buf, max(levels.pwh, levels.pdh + atr * 0.5)),
+            "trigger": f"Pulls back to PDH (${levels.pdh:.2f}) and 5m candle confirms support hold",
+            "invalidation": f"Stop loss on break back below PDH (est. ${levels.pdh - buf:.2f})",
+        }
+        # Bullish 2: Breakout through PWH
+        t1_pwh = levels.pwh + atr * 0.5
+        t2_pwh = levels.pwh + atr
+        long_breakout = {
+            "scenario": "Breakout & Hold PWH",
+            "watch_level": "PWH",
+            "watch_val": _round2(levels.pwh),
+            "entry": _round2(levels.pwh),
+            "stop": _round2(levels.pwh - buf),
+            "t1": _round2(t1_pwh),
+            "t2": _round2(t2_pwh),
+            "rr": _rr(levels.pwh, levels.pwh - buf, t1_pwh),
+            "trigger": f"5m candle closes above PWH (${levels.pwh:.2f}) and holds on retest",
+            "invalidation": f"Stop loss on failed retest below PWH (est. ${levels.pwh - buf:.2f})",
+        }
+        # Bearish 1: False Breakout / Re-entry Short below PDH
+        short_reject = {
+            "scenario": "False Breakout Fail below PDH",
+            "watch_level": "PDH",
+            "watch_val": _round2(levels.pdh),
+            "entry": _round2(levels.pdh),
+            "stop": _round2(levels.pdh + buf),
+            "t1": _round2(pd_mid),
+            "t2": _round2(levels.pdl),
+            "rr": _rr(levels.pdh, levels.pdh + buf, pd_mid),
+            "trigger": f"Fails back below PDH (${levels.pdh:.2f}) with 5m candle close inside prior range",
+            "invalidation": f"Stop loss on reclaim above PDH (est. ${levels.pdh + buf:.2f})",
+        }
+        # Bearish 2: Rejection at PWH
+        short_breakdown = {
+            "scenario": "Sweep & Reject PWH",
+            "watch_level": "PWH",
+            "watch_val": _round2(levels.pwh),
+            "entry": _round2(levels.pwh),
+            "stop": _round2(levels.pwh + buf),
+            "t1": _round2(min(levels.pdh, levels.pwh - atr * 0.5)),
+            "t2": _round2(pd_mid),
+            "rr": _rr(levels.pwh, levels.pwh + buf, min(levels.pdh, levels.pwh - atr * 0.5)),
+            "trigger": f"Tests PWH (${levels.pwh:.2f}) then 5m candle rejects back below",
+            "invalidation": f"Stop loss on breakout above PWH (est. ${levels.pwh + buf:.2f})",
+        }
+
+    elif price < levels.pdl:
+        position_desc = f"Below PDL (-${levels.pdl - price:.2f}, -{(levels.pdl - price)/levels.pdl*100:.2f}%) — Breakdown zone"
+        primary_focus = f"Price is below PDL (${levels.pdl:.2f}). Watch PDL reclaim for bear trap long bounce to mid (${pd_mid:.2f}), or continuation breakdown toward PWL (${levels.pwl:.2f})."
+
+        # Bullish 1: Sweep Reclaim PDL
+        long_reclaim = {
+            "scenario": "Sweep & Reclaim PDL",
+            "watch_level": "PDL",
+            "watch_val": _round2(levels.pdl),
+            "entry": _round2(levels.pdl),
+            "stop": _round2(levels.pdl - buf),
+            "t1": _round2(pd_mid),
+            "t2": _round2(levels.pdh),
+            "rr": _rr(levels.pdl, levels.pdl - buf, pd_mid),
+            "trigger": f"5m candle reclaims back above PDL (${levels.pdl:.2f}) after dipping below",
+            "invalidation": f"Stop loss below sweep low (est. ${levels.pdl - buf:.2f})",
+        }
+        # Bullish 2: PWL Support Reclaim
+        t1_pwl = max(levels.pdl, levels.pwl + atr * 0.5)
+        long_breakout = {
+            "scenario": "Sweep & Reclaim PWL",
+            "watch_level": "PWL",
+            "watch_val": _round2(levels.pwl),
+            "entry": _round2(levels.pwl),
+            "stop": _round2(levels.pwl - buf),
+            "t1": _round2(t1_pwl),
+            "t2": _round2(pd_mid),
+            "rr": _rr(levels.pwl, levels.pwl - buf, t1_pwl),
+            "trigger": f"Dips into PWL (${levels.pwl:.2f}) and reclaims with 5m bullish candle",
+            "invalidation": f"Stop loss below PWL sweep low (est. ${levels.pwl - buf:.2f})",
+        }
+        # Bearish 1: Breakdown Retest PDL
+        t1_bd_pdl = min(levels.pwl, levels.pdl - atr * 0.5)
+        short_breakdown = {
+            "scenario": "Breakdown Retest PDL",
+            "watch_level": "PDL",
+            "watch_val": _round2(levels.pdl),
+            "entry": _round2(levels.pdl),
+            "stop": _round2(levels.pdl + buf),
+            "t1": _round2(t1_bd_pdl),
+            "t2": _round2(levels.pdl - atr),
+            "rr": _rr(levels.pdl, levels.pdl + buf, t1_bd_pdl),
+            "trigger": f"Tests PDL (${levels.pdl:.2f}) from below and 5m candle confirms rejection",
+            "invalidation": f"Stop loss on reclaim back above PDL (est. ${levels.pdl + buf:.2f})",
+        }
+        # Bearish 2: Breakdown Retest PWL
+        t1_bd_pwl = levels.pwl - atr * 0.5
+        short_reject = {
+            "scenario": "Breakdown Retest PWL",
+            "watch_level": "PWL",
+            "watch_val": _round2(levels.pwl),
+            "entry": _round2(levels.pwl),
+            "stop": _round2(levels.pwl + buf),
+            "t1": _round2(t1_bd_pwl),
+            "t2": _round2(levels.pwl - atr),
+            "rr": _rr(levels.pwl, levels.pwl + buf, t1_bd_pwl),
+            "trigger": f"5m candle closes below PWL (${levels.pwl:.2f}) and rejects on retest",
+            "invalidation": f"Stop loss on reclaim back above PWL (est. ${levels.pwl + buf:.2f})",
+        }
+
+    else:
+        # Inside PDL-PDH Range
+        if price >= pd_mid:
+            position_desc = f"Upper Range ({pos_pct:.0f}% of PDL-PDH span) — Closer to Resistance PDH (+${dist_pdh:.2f})"
+            primary_focus = f"Price is closer to PDH (${levels.pdh:.2f}, +${dist_pdh:.2f} away). Primary watch: Test of PDH for sweep rejection short, or clean 5m candle breakout hold long."
+        else:
+            position_desc = f"Lower Range ({pos_pct:.0f}% of PDL-PDH span) — Closer to Support PDL (-${dist_pdl:.2f})"
+            primary_focus = f"Price is closer to PDL (${levels.pdl:.2f}, -${dist_pdl:.2f} away). Primary watch: Test of PDL for sweep reclaim bounce long, or breakdown retest short."
+
+        # Bullish 1: Breakout & Retest PDH
+        t1_bo = max(levels.pwh, levels.pdh + atr * 0.5)
+        t2_bo = levels.pdh + atr
+        long_breakout = {
+            "scenario": "Breakout & Retest PDH",
+            "watch_level": "PDH",
+            "watch_val": _round2(levels.pdh),
+            "entry": _round2(levels.pdh),
+            "stop": _round2(levels.pdh - buf),
+            "t1": _round2(t1_bo),
+            "t2": _round2(t2_bo),
+            "rr": _rr(levels.pdh, levels.pdh - buf, t1_bo),
+            "trigger": f"5m candle closes above PDH (${levels.pdh:.2f}) and holds on retest",
+            "invalidation": f"Stop loss on failed retest below PDH (est. ${levels.pdh - buf:.2f})",
+        }
+        # Bullish 2: Sweep & Reclaim PDL
+        long_reclaim = {
+            "scenario": "Sweep & Reclaim PDL",
+            "watch_level": "PDL",
+            "watch_val": _round2(levels.pdl),
+            "entry": _round2(levels.pdl),
+            "stop": _round2(levels.pdl - buf),
+            "t1": _round2(pd_mid),
+            "t2": _round2(levels.pdh),
+            "rr": _rr(levels.pdl, levels.pdl - buf, pd_mid),
+            "trigger": f"Dips below PDL (${levels.pdl:.2f}) then 5m candle reclaims back above",
+            "invalidation": f"Stop loss below sweep low (est. ${levels.pdl - buf:.2f})",
+        }
+        # Bearish 1: Sweep & Reject PDH
+        short_reject = {
+            "scenario": "Sweep & Reject PDH",
+            "watch_level": "PDH",
+            "watch_val": _round2(levels.pdh),
+            "entry": _round2(levels.pdh),
+            "stop": _round2(levels.pdh + buf),
+            "t1": _round2(pd_mid),
+            "t2": _round2(levels.pdl),
+            "rr": _rr(levels.pdh, levels.pdh + buf, pd_mid),
+            "trigger": f"Pushes through PDH (${levels.pdh:.2f}) then 5m candle rejects back below",
+            "invalidation": f"Stop loss above sweep high (est. ${levels.pdh + buf:.2f})",
+        }
+        # Bearish 2: Breakdown & Retest PDL
+        t1_bd = min(levels.pwl, levels.pdl - atr * 0.5)
+        t2_bd = levels.pdl - atr
+        short_breakdown = {
+            "scenario": "Breakdown & Retest PDL",
+            "watch_level": "PDL",
+            "watch_val": _round2(levels.pdl),
+            "entry": _round2(levels.pdl),
+            "stop": _round2(levels.pdl + buf),
+            "t1": _round2(t1_bd),
+            "t2": _round2(t2_bd),
+            "rr": _rr(levels.pdl, levels.pdl + buf, t1_bd),
+            "trigger": f"5m candle closes below PDL (${levels.pdl:.2f}) and rejects on retest",
+            "invalidation": f"Stop loss on reclaim back above PDL (est. ${levels.pdl + buf:.2f})",
+        }
+
+    return {
+        "position_desc": position_desc,
+        "primary_focus": primary_focus,
+        "pos_pct": _round2(pos_pct),
+        "dist_pdh": _round2(dist_pdh),
+        "dist_pdl": _round2(dist_pdl),
+        "dist_pwh": _round2(dist_pwh),
+        "dist_pwl": _round2(dist_pwl),
+        "pd_mid": _round2(pd_mid),
+        "long_reclaim": long_reclaim,
+        "long_breakout": long_breakout,
+        "short_reject": short_reject,
+        "short_breakdown": short_breakdown,
+    }
+
+
 def analyze_from_daily(
     ticker: str,
     daily_df: pd.DataFrame,
@@ -365,6 +580,7 @@ def analyze_from_daily(
     session_high = float(session["high"]) if session is not None else price
     session_low = float(session["low"]) if session is not None else price
     signal = _pick_signal(price, session_high, session_low, levels)
+    outcomes = compute_outcomes(price, levels)
 
     return {
         "ticker": ticker,
@@ -377,6 +593,7 @@ def analyze_from_daily(
         "session_low": _round2(session_low),
         "levels": asdict(levels),
         "signal": asdict(signal),
+        "outcomes": outcomes,
     }
 
 

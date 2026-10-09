@@ -1378,6 +1378,7 @@ def spy_v4_summary_job():
                         "dt4_pwh": _lvl.get("pwh"),
                         "dt4_pwl": _lvl.get("pwl"),
                         "dt4_atr": _lvl.get("atr"),
+                        "dt4_outcomes": _direct.get("outcomes"),
                         "price": _direct.get("price") or row.get("price"),
                     })
             except Exception as _e:
@@ -1413,45 +1414,103 @@ def spy_v4_summary_job():
         context = html.escape(str(row.get("dt4_context") or "—"))
         range_wait = setup == "range_wait"
 
-        if range_wait:
-            level_lines = [
-                f"Support: PDL {_money(row.get('dt4_pdl'))} / PWL {_money(row.get('dt4_pwl'))}",
-                f"Resistance: PDH {_money(row.get('dt4_pdh'))} / PWH {_money(row.get('dt4_pwh'))}",
-                "Entry: wait for reclaim/reject confirmation",
-                "Risk: define after trigger",
-                "Target: VWAP/mid, then opposite edge",
-            ]
-        else:
-            level = html.escape(str(row.get("dt4_level") or "—"))
-            level_lines = [
-                f"Level: {level} {_money(row.get('dt4_level_val'))}",
-                f"Watch/Entry: {_money(row.get('dt4_entry'))}",
-                f"Stop: {_money(row.get('dt4_stop'))}",
-                f"T1: {_money(row.get('dt4_t1'))} / T2: {_money(row.get('dt4_t2'))}",
-                f"R:R: {_rr(row.get('dt4_rr'))}",
-            ]
-
         trigger = html.escape(str(row.get("dt4_trigger") or "—"))[:320]
         invalidation = html.escape(str(row.get("dt4_invalidation") or "—"))[:260]
         target_plan = html.escape(str(row.get("dt4_target_plan") or "—"))[:260]
         exit_plan = html.escape(str(row.get("dt4_exit_plan") or "—"))[:260]
         note = html.escape(str(row.get("dt4_note") or ""))[:260]
 
-        msg = (
-            f"<b>SPY Day Trading V4 — {today_str()}</b>\n"
-            f"{side_label} | {setup_text} | Grade {grade}\n"
-            f"Bias: {bias} | Context: {context}\n"
-            f"Price: {_money(row.get('price'))} | ATR: {_money(row.get('dt4_atr'))}\n"
+        outcomes = row.get("dt4_outcomes")
+        if not outcomes and row.get("price") and row.get("dt4_pdh") and row.get("dt4_pdl"):
+            try:
+                from day_trading.v4 import compute_outcomes, Levels
+                _lvl_obj = Levels(
+                    pdh=float(row.get("dt4_pdh")),
+                    pdl=float(row.get("dt4_pdl")),
+                    pwh=float(row.get("dt4_pwh") or row.get("dt4_pdh")),
+                    pwl=float(row.get("dt4_pwl") or row.get("dt4_pdl")),
+                    pd_close=float(row.get("price")),
+                    pd_mid=(float(row.get("dt4_pdh")) + float(row.get("dt4_pdl"))) / 2.0,
+                    atr=float(row.get("dt4_atr") or 5.0),
+                )
+                outcomes = compute_outcomes(float(row["price"]), _lvl_obj)
+            except Exception as _oe:
+                logger.debug(f"[scheduler] On-the-fly outcomes computation failed: {_oe}")
+
+        msg_lines = [
+            f"🎯 <b>SPY Day Trading V4 Playbook — {today_str()}</b>",
+            f"Status: <b>{side_label}</b> | Setup: <b>{setup_text}</b> | Grade: <b>{grade}</b>",
+            f"Bias: {bias} | Context: {context}",
+            f"Price: <b>{_money(row.get('price'))}</b> | ATR: {_money(row.get('dt4_atr'))}",
             f"PDH {_money(row.get('dt4_pdh'))} | PDL {_money(row.get('dt4_pdl'))} | "
-            f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}\n\n"
-            + "\n".join(level_lines)
-            + f"\n\nTrigger: {trigger}\n"
-            f"Invalidation: {invalidation}\n"
-            f"Target plan: {target_plan}\n"
-            f"Exit plan: {exit_plan}"
-        )
+            f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}",
+        ]
+
+        if not range_wait:
+            level = html.escape(str(row.get("dt4_level") or "—"))
+            msg_lines.append(
+                f"\n🎯 <b>ACTIVE SETUP ({level}):</b>\n"
+                f"• Entry: {_money(row.get('dt4_entry'))} | Stop: {_money(row.get('dt4_stop'))} | "
+                f"T1: {_money(row.get('dt4_t1'))} | T2: {_money(row.get('dt4_t2'))} (R:R {_rr(row.get('dt4_rr'))})\n"
+                f"• Trigger: {trigger}\n"
+                f"• Invalidation: {invalidation}"
+            )
+
+        if outcomes:
+            pos_desc = html.escape(str(outcomes.get("position_desc") or ""))
+            prim_focus = html.escape(str(outcomes.get("primary_focus") or ""))
+            if pos_desc:
+                msg_lines.append(f"\n📍 <b>Position:</b> {pos_desc}")
+            if prim_focus:
+                msg_lines.append(f"⚡ <b>Action Plan:</b> {prim_focus}")
+
+            lb = outcomes.get("long_breakout") or {}
+            lr = outcomes.get("long_reclaim") or {}
+            msg_lines.append("\n🟢 <b>BULLISH OUTCOMES & TRADE LEVELS:</b>")
+            for oc in (lb, lr):
+                if oc and oc.get("entry") is not None:
+                    scen = html.escape(str(oc.get("scenario") or "Long Setup"))
+                    trig = html.escape(str(oc.get("trigger") or ""))
+                    msg_lines.append(
+                        f"• <b>{scen}</b>\n"
+                        f"   Entry: {_money(oc.get('entry'))} | Stop: {_money(oc.get('stop'))} | "
+                        f"T1: {_money(oc.get('t1'))} | T2: {_money(oc.get('t2'))} (R:R {_rr(oc.get('rr'))})\n"
+                        f"   <i>Trigger: {trig}</i>"
+                    )
+
+            sr = outcomes.get("short_reject") or {}
+            sb = outcomes.get("short_breakdown") or {}
+            msg_lines.append("\n🔴 <b>BEARISH OUTCOMES & TRADE LEVELS:</b>")
+            for oc in (sr, sb):
+                if oc and oc.get("entry") is not None:
+                    scen = html.escape(str(oc.get("scenario") or "Short Setup"))
+                    trig = html.escape(str(oc.get("trigger") or ""))
+                    msg_lines.append(
+                        f"• <b>{scen}</b>\n"
+                        f"   Entry: {_money(oc.get('entry'))} | Stop: {_money(oc.get('stop'))} | "
+                        f"T1: {_money(oc.get('t1'))} | T2: {_money(oc.get('t2'))} (R:R {_rr(oc.get('rr'))})\n"
+                        f"   <i>Trigger: {trig}</i>"
+                    )
+        else:
+            if range_wait:
+                msg_lines.append(
+                    f"\nSupport: PDL {_money(row.get('dt4_pdl'))} / PWL {_money(row.get('dt4_pwl'))}\n"
+                    f"Resistance: PDH {_money(row.get('dt4_pdh'))} / PWH {_money(row.get('dt4_pwh'))}\n"
+                    "Entry: wait for reclaim/reject confirmation\n"
+                    "Risk: define after trigger\n"
+                    "Target: VWAP/mid, then opposite edge"
+                )
+            msg_lines.append(
+                f"\nTrigger: {trigger}\n"
+                f"Invalidation: {invalidation}\n"
+                f"Target plan: {target_plan}\n"
+                f"Exit plan: {exit_plan}"
+            )
+
         if note:
-            msg += f"\nNote: {note}"
+            msg_lines.append(f"\nNote: {note}")
+
+        msg = "\n".join(msg_lines)
 
         sent = send_telegram(
             TELEGRAM_BOT_TOKEN,

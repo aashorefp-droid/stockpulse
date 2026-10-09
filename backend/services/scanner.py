@@ -398,6 +398,7 @@ def scan_single(
                 "dt4_pwh": round(_lvl.get("pwh"), 2) if _lvl.get("pwh") is not None else None,
                 "dt4_pwl": round(_lvl.get("pwl"), 2) if _lvl.get("pwl") is not None else None,
                 "dt4_atr": round(_lvl.get("atr"), 2) if _lvl.get("atr") is not None else None,
+                "dt4_outcomes": _dt4.get("outcomes"),
             }
         except Exception as _e:
             dt4_fields = {"dt4_enabled": True, "dt4_setup": "error", "dt4_note": str(_e)[:120]}
