@@ -21,6 +21,8 @@ export default function BackendStatusBanner() {
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
   const [isPinging, setIsPinging] = useState<boolean>(false);
+  const [isTestingAlert, setIsTestingAlert] = useState<boolean>(false);
+  const [testAlertMsg, setTestAlertMsg] = useState<string | null>(null);
 
   const verifyBackend = useCallback(async () => {
     setIsPinging(true);
@@ -39,16 +41,33 @@ export default function BackendStatusBanner() {
 
       if (res.ok) {
         const json = await res.json().catch(() => ({}));
-        setStatus("online");
+        setStatus((prevStatus) => {
+          if (prevStatus === "offline") {
+            // Backend recovered! Notify alert route
+            fetch("/api/health-alert", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ status: "online", latency: elapsed }),
+            }).catch(() => {});
+          }
+          return "online";
+        });
         setLatency(elapsed);
         setDetails(json);
         setErrorMsg(null);
         setLastChecked(new Date().toLocaleTimeString());
       } else {
+        const failMsg = `HTTP ${res.status} ${res.statusText}`;
         setStatus("offline");
-        setErrorMsg(`HTTP ${res.status} ${res.statusText}`);
+        setErrorMsg(failMsg);
         setLatency(elapsed);
         setLastChecked(new Date().toLocaleTimeString());
+        // Report offline to Telegram alert route
+        fetch("/api/health-alert", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "offline", error: failMsg, latency: elapsed }),
+        }).catch(() => {});
       }
     } catch (err: any) {
       clearTimeout(timeoutId);
@@ -56,15 +75,49 @@ export default function BackendStatusBanner() {
       setStatus("offline");
       setLatency(elapsed);
       setLastChecked(new Date().toLocaleTimeString());
-      if (err.name === "AbortError") {
-        setErrorMsg("Request timed out (Render instance may be waking from cold sleep).");
-      } else {
-        setErrorMsg(err.message || "Network / CORS connection failed");
-      }
+      const failMsg =
+        err.name === "AbortError"
+          ? "Request timed out (Render instance may be waking from cold sleep)."
+          : err.message || "Network / CORS connection failed";
+      setErrorMsg(failMsg);
+      // Report offline to Telegram alert route
+      fetch("/api/health-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "offline", error: failMsg, latency: elapsed }),
+      }).catch(() => {});
     } finally {
       setIsPinging(false);
     }
   }, []);
+
+  const triggerTestAlert = async () => {
+    setIsTestingAlert(true);
+    setTestAlertMsg("Sending test alert to Telegram...");
+    try {
+      const res = await fetch("/api/health-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "offline",
+          error: "Manual UI Test Alert — Backend Down Alert Check",
+          latency: latency || 150,
+          force: true,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.alerted) {
+        setTestAlertMsg("✅ Alert sent to Telegram!");
+      } else {
+        setTestAlertMsg("⚠️ Telegram alert completed");
+      }
+    } catch (err: any) {
+      setTestAlertMsg(`❌ Failed: ${err.message || "Network error"}`);
+    } finally {
+      setIsTestingAlert(false);
+      setTimeout(() => setTestAlertMsg(null), 6000);
+    }
+  };
 
   useEffect(() => {
     verifyBackend();
@@ -231,7 +284,7 @@ export default function BackendStatusBanner() {
       {/* Diagnostics Drawer */}
       {showDiagnostics && (
         <div className="bg-[#070a0f] border-t border-border/50 px-4 py-3 text-[11px] text-slate-300">
-          <div className="max-w-screen-2xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="max-w-screen-2xl mx-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
             <div>
               <div className="text-muted uppercase text-[10px] font-semibold mb-0.5">Target Backend</div>
               <div className="text-white font-mono break-all">{API_BASE}</div>
@@ -251,6 +304,23 @@ export default function BackendStatusBanner() {
               <div className="text-white font-mono">
                 {details?.status === "ok" ? "Running · Healthy" : "Offline / Unchecked"}
               </div>
+            </div>
+            <div>
+              <div className="text-muted uppercase text-[10px] font-semibold mb-0.5">Telegram Alert Monitor</div>
+              <div className="flex items-center gap-2">
+                <span className="text-emerald-400 font-semibold">Active (15m Cooldown)</span>
+                <button
+                  onClick={triggerTestAlert}
+                  disabled={isTestingAlert}
+                  className="px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 hover:border-rose-500/60 text-rose-300 hover:text-white rounded text-[10px] transition-colors disabled:opacity-50"
+                  title="Send a test offline alert to Telegram topic"
+                >
+                  {isTestingAlert ? "Testing..." : "📢 Test Alert"}
+                </button>
+              </div>
+              {testAlertMsg && (
+                <div className="text-[10px] mt-1 text-amber-300 font-sans">{testAlertMsg}</div>
+              )}
             </div>
           </div>
         </div>

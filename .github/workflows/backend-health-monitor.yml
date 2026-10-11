@@ -1,0 +1,44 @@
+name: Backend Health & Ping Monitor
+
+on:
+  schedule:
+    # Run every 15 minutes to keep Render alive and alert immediately if down
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping StockPulse Render Backend
+        id: ping
+        continue-on-error: true
+        run: |
+          echo "Pinging https://stockpulse-pkpj.onrender.com/health..."
+          HTTP_STATUS=$(curl -s -o /tmp/health_response.json -w "%{http_code}" --max-time 20 https://stockpulse-pkpj.onrender.com/health || echo "FAILED")
+          echo "HTTP Status: $HTTP_STATUS"
+          cat /tmp/health_response.json || true
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "BACKEND_DOWN=true" >> $GITHUB_ENV
+            echo "STATUS_CODE=$HTTP_STATUS" >> $GITHUB_ENV
+            exit 1
+          else
+            echo "BACKEND_DOWN=false" >> $GITHUB_ENV
+            echo "Backend is healthy and responsive."
+          fi
+
+      - name: Send Telegram Alert if Backend Down
+        if: steps.ping.outcome != 'success' || env.BACKEND_DOWN == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || '8777563646:AAGc1wTtz3BcZt--kmkCHwR8unRe0ir7o4Q' }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || '-1003823895758' }}
+          THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID || '18' }}
+        run: |
+          NOW_UTC=$(date -u "+%Y-%m-%d %H:%M:%S UTC")
+          MSG="🚨 <b>StockPulse Backend ALERT — Server DOWN / Not Pingable</b>%0A%0A⚠️ <b>Status:</b> Unreachable (HTTP ${STATUS_CODE:-Timeout})%0A📍 <b>Target:</b> <code>https://stockpulse-pkpj.onrender.com/health</code>%0A📅 <b>Detected at:</b> ${NOW_UTC}%0A%0A💡 <i>Automated 15-min background monitor failed to reach Render backend. Check Render dashboard logs or restart container.</i>"
+          
+          curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "message_thread_id=${THREAD_ID}" \
+            -d "parse_mode=HTML" \
+            -d "text=${MSG}"
