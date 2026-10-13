@@ -613,6 +613,14 @@ export default function DailyTradeChart({
     const belowVal = cp && val ? cp < val : false;
     const insideVa = !aboveVah && !belowVal;
 
+    const fmtPrice = (p: number | undefined | null) => {
+      if (p == null) return "";
+      return Math.round(p * 100) % 100 === 0 ? `$${Math.round(p)}` : `$${p.toFixed(2)}`;
+    };
+    const rangeStr = (val != null && vah != null) ? ` (Low: ${fmtPrice(val)} High ${fmtPrice(vah)})` : "";
+    const nearPoc = (poc != null && cp > 0) ? Math.abs(cp - poc) / poc < 0.02 : false;
+    const pocLabel = nearPoc ? "Near POC" : "POC";
+
     if (direction === "LONG") {
       if (aboveVah && (volTrend === "ACCUMULATING" || volSurge)) {
         return {
@@ -622,7 +630,7 @@ export default function DailyTradeChart({
           confluence_score: 95,
           summary: `Entry alert (${gradeLetter} Grade) aligns with institutional volume accumulation above fair value (${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}). Volume confirms breakout momentum.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Above VAH ($${vah?.toFixed(2)}) · ${volTrend} (${volRatio.toFixed(1)}x)`,
+          vp_call: `Above VAH (${fmtPrice(vah)}) · ${volTrend} (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else if (insideVa || (!belowVal && val && cp >= val)) {
         return {
@@ -632,7 +640,7 @@ export default function DailyTradeChart({
           confluence_score: 85,
           summary: `Price holding institutional Value Area support (${val ? `$${val.toFixed(2)}` : ""}${vah ? `–$${vah.toFixed(2)}` : ""}). High R/R dip accumulation with defined stop below VAL.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Inside Value Area · POC $${poc?.toFixed(2)}`,
+          vp_call: `Inside Value Area · ${pocLabel} ${fmtPrice(poc)}${rangeStr}`,
         };
       } else if (belowVal) {
         return {
@@ -642,7 +650,7 @@ export default function DailyTradeChart({
           confluence_score: 45,
           summary: `Bullish entry alert conflict: Price is trading below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) with distribution volume. High probability of false breakout. Wait for reclaim of VAL or reduce size.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Below VAL ($${val?.toFixed(2)}) · ${volTrend} (${volRatio.toFixed(1)}x)`,
+          vp_call: `Below VAL (${fmtPrice(val)}) · ${volTrend} (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else {
         return {
@@ -652,7 +660,7 @@ export default function DailyTradeChart({
           confluence_score: 70,
           summary: `Bullish price signal with steady volume profile. Maintain strict risk management at stop loss.`,
           entry_call: `${gradeLetter} Grade at $${entryPrice.toFixed(2)}`,
-          vp_call: `${vp?.detail || "Normal volume profile"}`,
+          vp_call: `${vp?.detail || "Normal volume profile"}${rangeStr}`,
         };
       }
     } else {
@@ -664,7 +672,7 @@ export default function DailyTradeChart({
           confluence_score: 95,
           summary: `Decisive breakdown below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) confirmed by expanding volume surge. Institutional liquidation favors aggressive short continuation.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `Below VAL ($${val?.toFixed(2)}) · ${volTrend} Surge (${volRatio.toFixed(1)}x)`,
+          vp_call: `Below VAL (${fmtPrice(val)}) · ${volTrend} Surge (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else if (insideVa) {
         return {
@@ -674,7 +682,7 @@ export default function DailyTradeChart({
           confluence_score: 60,
           summary: `Short signal active, but price is sitting near heavy Point of Control liquidity (${poc ? `$${poc.toFixed(2)}` : ""}). Expect choppy support; wait for breakdown below VAL.`,
           entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `Inside Value Area · Near POC $${poc?.toFixed(2)}`,
+          vp_call: `Inside Value Area · Near POC ${fmtPrice(poc)}${rangeStr}`,
         };
       } else {
         return {
@@ -684,7 +692,7 @@ export default function DailyTradeChart({
           confluence_score: 75,
           summary: `Bearish trajectory with institutional resistance at ${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}.`,
           entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `${vp?.detail || "Normal volume profile"}`,
+          vp_call: `${vp?.detail || "Normal volume profile"}${rangeStr}`,
         };
       }
     }

@@ -1295,6 +1295,18 @@ def generate_final_judgement(
         role = "At Level" if abs(dist_pct) < 0.5 else ("Resistance" if fib_val > current_price else "Support")
         fib_call = f"{nearest_fib} ({desc}) ${fib_val:.2f} · {role}"
 
+    def _fmt(val_num: Optional[float]) -> str:
+        if val_num is None:
+            return ""
+        return f"${int(val_num)}" if round(val_num, 2) == int(val_num) else f"${val_num:.2f}"
+
+    val_str = _fmt(val) if val is not None else "VAL"
+    vah_str = _fmt(vah) if vah is not None else "VAH"
+    poc_str = _fmt(poc) if poc is not None else "POC"
+    range_str = f" (Low: {_fmt(val)} High {_fmt(vah)})" if (val is not None and vah is not None) else ""
+    near_poc = bool(poc and current_price > 0 and abs(current_price - poc) / poc < 0.02)
+    poc_prefix = "Near POC" if near_poc else "POC"
+
     if is_bull_signal:
         if above_vah and (vol_trend == "ACCUMULATING" or vol_surge):
             return {
@@ -1305,13 +1317,10 @@ def generate_final_judgement(
                 "confluence_score": 95,
                 "summary": f"Entry Alert ({grade_letter} Grade) aligns with institutional volume accumulation above fair value (${vah:.2f} VAH). Volume confirms breakout momentum.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Above VAH (${vah:.2f}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "vp_call": f"Above VAH ({vah_str}) · {vol_trend} ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         elif inside_va or (val is not None and current_price >= val and not below_val):
-            val_str = f"${val:.2f}" if val is not None else "VAL"
-            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
-            poc_str = f"${poc:.2f}" if poc is not None else "POC"
             return {
                 "verdict_title": "VALUE AREA ACCUMULATION BUY",
                 "badge": "DIP BUY SUPPORT",
@@ -1320,11 +1329,10 @@ def generate_final_judgement(
                 "confluence_score": 85,
                 "summary": f"Price holding institutional Value Area support ({val_str}–{vah_str}). High R/R dip accumulation with protective stop below VAL.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Inside Value Area ({val_str}–{vah_str}) · POC {poc_str}",
+                "vp_call": f"Inside Value Area · {poc_prefix} {poc_str}{range_str}",
                 "fib_call": fib_call,
             }
         elif below_val:
-            val_str = f"${val:.2f}" if val is not None else "VAL"
             return {
                 "verdict_title": "VOLUME DIVERGENCE · CAUTION ON LONGS",
                 "badge": "CAUTION TRAP",
@@ -1333,7 +1341,7 @@ def generate_final_judgement(
                 "confluence_score": 45,
                 "summary": f"Bullish entry alert conflict: Price is trading below Value Area Low ({val_str}) with distribution volume. High probability of false breakout. Wait for reclaim of {val_str} or reduce size.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x)",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         else:
@@ -1346,12 +1354,11 @@ def generate_final_judgement(
                 "confluence_score": 70,
                 "summary": f"Bullish entry setup with steady volume. Manage risk at {stop_str}.",
                 "entry_call": f"{grade_letter} Grade at ${entry_price:.2f}",
-                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}{range_str}",
                 "fib_call": fib_call,
             }
     elif is_bear_signal:
         if below_val and (vol_trend == "ACCUMULATING" or vol_surge):
-            val_str = f"${val:.2f}" if val is not None else "VAL"
             return {
                 "verdict_title": "INSTITUTIONAL BREAKDOWN CONFIRMED",
                 "badge": "CONFIRMED SHORT",
@@ -1360,12 +1367,10 @@ def generate_final_judgement(
                 "confluence_score": 95,
                 "summary": f"Decisive breakdown below Value Area Low ({val_str}) confirmed by expanding volume surge. Institutional distribution favors aggressive short continuation.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) Short at ${entry_price:.2f}",
-                "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x)",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         elif inside_va:
-            poc_str = f"${poc:.2f}" if poc is not None else "POC"
-            val_str = f"${val:.2f}" if val is not None else "VAL"
             return {
                 "verdict_title": "BEARISH FADE · SITTING NEAR POC SUPPORT",
                 "badge": "CAUTION SHORT",
@@ -1374,11 +1379,10 @@ def generate_final_judgement(
                 "confluence_score": 60,
                 "summary": f"Short signal active, but price is sitting near heavy Point of Control liquidity ({poc_str}). Expect choppy support; wait for breakdown below {val_str}.",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
-                "vp_call": f"Inside Value Area · Near POC {poc_str}",
+                "vp_call": f"Inside Value Area · Near POC {poc_str}{range_str}",
                 "fib_call": fib_call,
             }
         else:
-            vah_str = f"${vah:.2f}" if vah is not None else "VAH"
             return {
                 "verdict_title": "BEARISH BIAS · VOLUME RESISTANCE",
                 "badge": "LEAN SHORT",
@@ -1387,13 +1391,10 @@ def generate_final_judgement(
                 "confluence_score": 75,
                 "summary": f"Bearish trajectory with institutional resistance at {vah_str} (VAH).",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
-                "vp_call": f"{vp.get('detail', 'Normal volume profile')}",
+                "vp_call": f"{vp.get('detail', 'Normal volume profile')}{range_str}",
                 "fib_call": fib_call,
             }
     else:
-        val_str = f"${val:.2f}" if val is not None else "VAL"
-        vah_str = f"${vah:.2f}" if vah is not None else "VAH"
-        poc_str = f"${poc:.2f}" if poc is not None else "POC"
         return {
             "verdict_title": "NEUTRAL ROTATION · BALANCED VALUE AREA",
             "badge": "CONSOLIDATION",
@@ -1402,7 +1403,7 @@ def generate_final_judgement(
             "confluence_score": 50,
             "summary": f"Price oscillating within 70% Value Area ({val_str}–{vah_str}) with neutral volume. Wait for directional breakout expansion.",
             "entry_call": f"Neutral ({grade_letter} Grade)",
-            "vp_call": f"POC {poc_str} · VA {val_str}–{vah_str}",
+            "vp_call": f"Inside Value Area · POC {poc_str}{range_str}",
             "fib_call": fib_call,
         }
 
