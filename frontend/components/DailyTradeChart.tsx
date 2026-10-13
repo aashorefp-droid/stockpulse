@@ -587,11 +587,15 @@ export default function DailyTradeChart({
   const latestSma200 = data?.sma200 && data.sma200.length > 0 ? data.sma200[data.sma200.length - 1]?.value : null;
 
   // Synthesize or retrieve final judgement based on entry alert + volume profile decision
-  const finalJudgement = data?.final_judgement ?? propFinalJudgement ?? (() => {
-    const vp = data?.vol_profile ?? propVolumeProfile;
-    const v = data?.verdict ?? propVerdict;
-    const eg = data?.entry_grade ?? propEntryGrade;
-    const cp = data?.current_price;
+  const finalJudgement = (data?.final_judgement && typeof data.final_judgement === "object" && data.final_judgement.verdict_title)
+    ? data.final_judgement
+    : (propFinalJudgement && typeof propFinalJudgement === "object" && propFinalJudgement.verdict_title)
+    ? propFinalJudgement
+    : (() => {
+    const vp = data?.vol_profile ?? data?.levels?.vol_profile ?? propVolumeProfile;
+    const v = data?.verdict ?? data?.levels?.verdict ?? propVerdict;
+    const eg = data?.entry_grade ?? data?.levels?.entry_grade ?? propEntryGrade;
+    const cp = data?.current_price ?? data?.levels?.current_price ?? (data?.bars && data.bars.length > 0 ? data.bars[data.bars.length - 1].close : 0);
     const tr = data?.levels;
     if (!vp && !eg) return null;
 
