@@ -135,7 +135,7 @@ export default function StockPage({ params }: StockPageProps) {
     direction = "LONG",
     signal_names = [],
     entry_grade = { entry_grade: "D", entry_label: "N/A", expected_wr: 0, expected_avg: 0, grade_color: "#8b949e" },
-    trade = { entry: 0, stop_loss: null, target1: null, target2: null, risk_pct: null, rr_t1: null, rr_t2: null, t1_days: null, t2_days: null, atr: 0 },
+    trade = { entry: 0, stop_loss: null, target1: null, target2: null, risk_pct: null, rr_t1: null, rr_t2: null, t1_days: null, t2_days: null, atr: 0, beta: null, beta_label: null, beta_risk_summary: null },
     volume_profile = null,
     strategy_signals = {},
     options = null,

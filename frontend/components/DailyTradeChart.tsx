@@ -38,10 +38,12 @@ export default function DailyTradeChart({
   const sma20ValRef = useRef<HTMLSpanElement>(null);
   const sma50ValRef = useRef<HTMLSpanElement>(null);
   const sma200ValRef = useRef<HTMLSpanElement>(null);
+  const rsValRef = useRef<HTMLSpanElement>(null);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [viewMode, setViewMode] = useState<"levels" | "embed" | "finviz">("levels");
   const [showSma, setShowSma] = useState(true);
+  const [showRs, setShowRs] = useState(true);
   const [showFuture, setShowFuture] = useState(false);
   const [showRetestLine, setShowRetestLine] = useState(true);
   const [entryMode, setEntryMode] = useState<"trigger" | "latest_low" | "avg_low" | "retest">("trigger");
@@ -142,6 +144,9 @@ export default function DailyTradeChart({
       const activeSma200 = (isBacktest && !showFuture && data.hist_sma200 && data.hist_sma200.length > 0)
         ? data.hist_sma200
         : data.sma200;
+      const activeRsSpy = (isBacktest && !showFuture && data.hist_rs_spy && data.hist_rs_spy.length > 0)
+        ? data.hist_rs_spy
+        : data.rs_spy;
 
       // 1. Volume Series
       const volumeSeries = chart.addHistogramSeries({
@@ -203,6 +208,27 @@ export default function DailyTradeChart({
           });
           sma200Series.setData(activeSma200);
         }
+      }
+
+      // 3b. Relative Strength vs SPY Line (Normalized RS vs Benchmark)
+      let rsSeries: any = null;
+      if (showRs && activeRsSpy && activeRsSpy.length > 0) {
+        rsSeries = chart.addLineSeries({
+          color: "#00d2ff",
+          lineWidth: 2,
+          priceScaleId: "rs_scale",
+          title: "RS vs SPY",
+          priceLineVisible: false,
+          lastValueVisible: false,
+        });
+        chart.priceScale("rs_scale").applyOptions({
+          scaleMargins: {
+            top: 0.74,
+            bottom: 0.04,
+          },
+          visible: false,
+        });
+        rsSeries.setData(activeRsSpy);
       }
 
       // 4. Horizontal Trade Price Lines
@@ -369,22 +395,25 @@ export default function DailyTradeChart({
         candleSeries.setMarkers(activeMarkers);
       }
 
-      // Update real-time SMA values in legend on crosshair hover
+      // Update real-time SMA and RS values in legend on crosshair hover
       const lastSma20 = data.sma20 && data.sma20.length > 0 ? data.sma20[data.sma20.length - 1]?.value : null;
       const lastSma50 = data.sma50 && data.sma50.length > 0 ? data.sma50[data.sma50.length - 1]?.value : null;
       const lastSma200 = data.sma200 && data.sma200.length > 0 ? data.sma200[data.sma200.length - 1]?.value : null;
+      const lastRsVal = activeRsSpy && activeRsSpy.length > 0 ? activeRsSpy[activeRsSpy.length - 1]?.value : (data.latest_rs ?? null);
 
       chart.subscribeCrosshairMove((param: any) => {
         if (!param || !param.time || !param.seriesData) {
           if (sma20ValRef.current) sma20ValRef.current.textContent = lastSma20 != null ? `$${lastSma20.toFixed(2)}` : "—";
           if (sma50ValRef.current) sma50ValRef.current.textContent = lastSma50 != null ? `$${lastSma50.toFixed(2)}` : "—";
           if (sma200ValRef.current) sma200ValRef.current.textContent = lastSma200 != null ? `$${lastSma200.toFixed(2)}` : "—";
+          if (rsValRef.current) rsValRef.current.textContent = lastRsVal != null ? `${lastRsVal.toFixed(1)}` : "—";
           return;
         }
 
         const v20 = sma20Series ? (param.seriesData.get(sma20Series) as any)?.value : undefined;
         const v50 = sma50Series ? (param.seriesData.get(sma50Series) as any)?.value : undefined;
         const v200 = sma200Series ? (param.seriesData.get(sma200Series) as any)?.value : undefined;
+        const vRs = rsSeries ? (param.seriesData.get(rsSeries) as any)?.value : undefined;
 
         if (sma20ValRef.current) {
           sma20ValRef.current.textContent = v20 != null ? `$${v20.toFixed(2)}` : (lastSma20 != null ? `$${lastSma20.toFixed(2)}` : "—");
@@ -394,6 +423,9 @@ export default function DailyTradeChart({
         }
         if (sma200ValRef.current) {
           sma200ValRef.current.textContent = v200 != null ? `$${v200.toFixed(2)}` : (lastSma200 != null ? `$${lastSma200.toFixed(2)}` : "—");
+        }
+        if (rsValRef.current) {
+          rsValRef.current.textContent = vRs != null ? `${vRs.toFixed(1)}` : (lastRsVal != null ? `${lastRsVal.toFixed(1)}` : "—");
         }
       });
 
@@ -413,7 +445,7 @@ export default function DailyTradeChart({
       isMounted = false;
       chart?.remove();
     };
-  }, [viewMode, data, showSma, showFuture, showRetestLine, selectedRedDay, showAllRedDayLines, entryMode]);
+  }, [viewMode, data, showSma, showRs, showFuture, showRetestLine, selectedRedDay, showAllRedDayLines, entryMode]);
 
   // Render TradingView Embed widget when selected
   useEffect(() => {
@@ -798,6 +830,20 @@ export default function DailyTradeChart({
                 }`}
               >
                 MAs (20/50/200)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowRs(!showRs)}
+                className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 ${
+                  showRs
+                    ? "bg-[#082a36] text-[#00d2ff] border-[#00d2ff]/40 shadow-sm"
+                    : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                }`}
+                title="Toggle SPY Relative Strength (RS) line"
+              >
+                <span>📈</span>
+                <span>RS vs SPY</span>
               </button>
 
               {levels.retest_entry != null && (
@@ -1252,8 +1298,40 @@ export default function DailyTradeChart({
                 Risk: -{(entryMode !== "trigger" && activeRetestRiskPct != null ? activeRetestRiskPct : levels.risk_pct)?.toFixed(1)}% ({isBull ? "Below" : "Above"} ATR buffer)
               </div>
             </div>
+
+            {/* Stock Beta & Systematic Risk Context */}
+            {(levels.beta != null || data?.beta != null) && (() => {
+              const bVal = levels.beta ?? data?.beta;
+              const bLbl = levels.beta_label ?? data?.beta_label ?? (bVal > 1.3 ? "High Beta" : bVal >= 0.85 ? "Moderate Beta" : "Low Beta");
+              const bRisk = levels.beta_risk_summary ?? data?.beta_risk_summary;
+              return (
+                <div className="mt-2.5 pt-2 border-t border-[#2d1a20]">
+                  <div className="flex items-center justify-between gap-1 text-[11px]">
+                    <span className="text-slate-400 font-medium flex items-center gap-1">
+                      <span>⚡ Beta (SPY):</span>
+                      <b className="font-mono text-white">{bVal?.toFixed(2)}</b>
+                    </span>
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                      bVal > 1.3
+                        ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                        : bVal >= 0.85
+                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    }`}>
+                      {bLbl}
+                    </span>
+                  </div>
+                  {bRisk && (
+                    <p className="text-[10px] text-slate-300/90 leading-tight mt-1 font-sans">
+                      {bRisk}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
             {entryMode !== "trigger" && activeRetestRiskPct != null && (
-              <div className="mt-2.5 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
+              <div className="mt-2 pt-2 border-t border-[#2d1a20] text-[10px] text-slate-400 font-sans">
                 Tighter risk from {entryMode === "latest_low" ? "Latest Low" : entryMode === "avg_low" ? "AVG Low" : (selectedRedDay ? `${selectedRedDay.date_label} Red Low` : "PWL")} <span className="text-[#38bdf8] font-mono font-bold">${activeRetestEntry?.toFixed(2)}</span> entry
               </div>
             )}
@@ -1539,6 +1617,20 @@ export default function DailyTradeChart({
                   <span className="flex items-center gap-1.5 text-[#a855f7]">
                     <span className="w-2.5 h-0.5 bg-[#a855f7] rounded"></span>
                     <span>200 SMA: <span ref={sma200ValRef}>{latestSma200 != null ? `$${latestSma200.toFixed(2)}` : "—"}</span></span>
+                  </span>
+                </>
+              )}
+              {showRs && (
+                <>
+                  <span className="text-[#6b7099]">·</span>
+                  <span className="flex items-center gap-1.5 text-[#00d2ff]">
+                    <span className="w-2.5 h-0.5 bg-[#00d2ff] rounded"></span>
+                    <span>RS vs SPY: <span ref={rsValRef}>{data?.latest_rs != null ? `${data.latest_rs.toFixed(1)}` : "—"}</span></span>
+                    {data?.rs_1m_change != null && (
+                      <span className={`text-[10px] font-mono ${data.rs_1m_change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        ({data.rs_1m_change >= 0 ? "+" : ""}{data.rs_1m_change.toFixed(1)}% 1M)
+                      </span>
+                    )}
                   </span>
                 </>
               )}

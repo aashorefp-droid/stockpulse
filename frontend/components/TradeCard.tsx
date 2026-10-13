@@ -9,6 +9,9 @@ interface Trade {
   t1_days:   number | null;
   t2_days:   number | null;
   atr:       number;
+  beta?:     number | null;
+  beta_label?: string | null;
+  beta_risk_summary?: string | null;
 }
 
 interface OptionsLeg {
@@ -73,6 +76,33 @@ export default function TradeCard({
       </div>
 
       <div className="mt-2 text-xs text-muted text-center">ATR(14): ${trade.atr}</div>
+
+      {trade.beta != null && (
+        <div className="mt-3 pt-3 border-t border-border space-y-1.5">
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-muted flex items-center gap-1 font-semibold">
+              <span>⚡ Beta (SPY Risk)</span>
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono font-bold text-white">{trade.beta.toFixed(2)}</span>
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                trade.beta > 1.3
+                  ? "bg-red/10 text-red border border-red/30"
+                  : trade.beta >= 0.85
+                  ? "bg-accent/10 text-accent border border-accent/30"
+                  : "bg-green/10 text-green border border-green/30"
+              }`}>
+                {trade.beta_label || (trade.beta > 1.3 ? "High Beta" : trade.beta >= 0.85 ? "Moderate" : "Low Beta")}
+              </span>
+            </div>
+          </div>
+          {trade.beta_risk_summary && (
+            <p className="text-[11px] text-muted leading-tight">
+              {trade.beta_risk_summary}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Options recommendation */}
       {optionsStrategy?.legs && optionsStrategy.legs.length > 0 && (

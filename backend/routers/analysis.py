@@ -65,6 +65,87 @@ _WEEKLY_CACHE = {}
 _DAILY_CACHE = {}
 _CACHE_TTL_LIVE = 180       # 3 minutes cache for live data
 _CACHE_TTL_BACKTEST = 3600  # 1 hour cache for historical backtest
+_SPY_DAILY_CACHE = {"time": 0, "df": None}
+_SPY_CACHE_TTL = 900        # 15 minutes cache for SPY benchmark
+
+def _get_spy_daily_history() -> Optional[pd.DataFrame]:
+    now = time.time()
+    if _SPY_DAILY_CACHE["df"] is not None and (now - _SPY_DAILY_CACHE["time"] < _SPY_CACHE_TTL):
+        return _SPY_DAILY_CACHE["df"]
+    try:
+        spy_df = yf.Ticker("SPY").history(period="5y", interval="1d")
+        if not spy_df.empty:
+            spy_df.columns = [c.lower() for c in spy_df.columns]
+            if hasattr(spy_df.index, "tz_localize") and spy_df.index.tz is not None:
+                spy_df.index = spy_df.index.tz_localize(None)
+            _SPY_DAILY_CACHE["df"] = spy_df
+            _SPY_DAILY_CACHE["time"] = now
+            return spy_df
+    except Exception:
+        pass
+    return _SPY_DAILY_CACHE.get("df")
+
+def _calc_beta_and_rs(stock_df: pd.DataFrame, ticker: str) -> tuple[float, str, str, list[dict]]:
+    """
+    Computes Beta vs SPY and normalized SPY Relative Strength line.
+    Returns (beta, beta_label, beta_risk_summary, rs_spy_data).
+    """
+    import numpy as np
+    spy_df = _get_spy_daily_history()
+    rs_data = []
+    beta = 1.0
+    beta_label = "Moderate Beta"
+    beta_risk_summary = "Balanced systematic risk (1.00x SPY swings). Volatility profile moves in line with broader market trends."
+
+    if spy_df is None or spy_df.empty or stock_df is None or stock_df.empty:
+        return beta, beta_label, beta_risk_summary, rs_data
+
+    try:
+        stock_closes = stock_df["close"]
+        spy_closes = spy_df["close"]
+        aligned = pd.DataFrame({"stock": stock_closes, "spy": spy_closes}).dropna()
+        if not aligned.empty:
+            aligned["ratio"] = aligned["stock"] / aligned["spy"]
+            base_ratio = float(aligned["ratio"].iloc[0]) if aligned["ratio"].iloc[0] > 0 else 1.0
+            aligned["rs"] = (aligned["ratio"] / base_ratio) * 100.0
+
+            for dt, val in aligned["rs"].items():
+                rs_data.append({
+                    "time": dt.strftime("%Y-%m-%d"),
+                    "value": round(float(val), 2),
+                })
+
+            if ticker == "SPY":
+                beta = 1.0
+            else:
+                ret_stock = aligned["stock"].pct_change().dropna()
+                ret_spy = aligned["spy"].pct_change().dropna()
+                common_ret = ret_stock.index.intersection(ret_spy.index)
+                if len(common_ret) >= 20:
+                    s_ret = ret_stock.loc[common_ret].tail(252)
+                    m_ret = ret_spy.loc[common_ret].tail(252)
+                    var_m = float(np.var(m_ret))
+                    if var_m > 0:
+                        cov = float(np.cov(s_ret, m_ret)[0, 1])
+                        beta = round(float(cov / var_m), 2)
+
+            if beta > 1.3:
+                beta_label = "High Beta"
+                beta_risk_summary = f"High systematic risk ({beta:.2f}x SPY swings). Amplified market drawdowns and gap risk require disciplined stop adherence or smaller position size."
+            elif beta >= 0.85:
+                beta_label = "Moderate Beta"
+                beta_risk_summary = f"Balanced systematic risk ({beta:.2f}x SPY swings). Volatility profile moves in line with broader market trends."
+            elif beta >= 0.0:
+                beta_label = "Low Beta / Defensive"
+                beta_risk_summary = f"Defensive risk profile ({beta:.2f}x SPY swings). More resilient during market pullbacks with tighter noise around stops."
+            else:
+                beta_label = "Negative Beta"
+                beta_risk_summary = f"Inversely correlated with market ({beta:.2f}x SPY swings). Moves opposite to broader market fluctuations."
+    except Exception:
+        pass
+
+    return beta, beta_label, beta_risk_summary, rs_data
+
 
 
 @router.get("/{ticker}")
@@ -241,6 +322,37 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
                                  direction, ALPACA_API_KEY, ALPACA_API_SECRET, fib_zone)
 
     stock_verdict = _safe(get_stock_verdict, None, ticker)
+
+    # Attach stock Beta and Risk summary to trade levels
+    b_val = None
+    f_beta = fundamentals.get("beta") if isinstance(fundamentals, dict) else None
+    if f_beta not in (None, "N/A"):
+        try:
+            b_val = round(float(f_beta), 2)
+        except Exception:
+            b_val = None
+    if b_val is None and not _daily.empty:
+        try:
+            b_val, b_lbl, b_sum, _ = _calc_beta_and_rs(_daily, ticker)
+            trade_levels["beta"] = b_val
+            trade_levels["beta_label"] = b_lbl
+            trade_levels["beta_risk_summary"] = b_sum
+        except Exception:
+            pass
+    elif b_val is not None:
+        trade_levels["beta"] = b_val
+        if b_val > 1.3:
+            trade_levels["beta_label"] = "High Beta"
+            trade_levels["beta_risk_summary"] = f"High systematic risk ({b_val:.2f}x SPY swings). Amplified market drawdowns and gap risk require disciplined stop adherence or smaller position size."
+        elif b_val >= 0.85:
+            trade_levels["beta_label"] = "Moderate Beta"
+            trade_levels["beta_risk_summary"] = f"Balanced systematic risk ({b_val:.2f}x SPY swings). Volatility profile moves in line with broader market trends."
+        elif b_val >= 0.0:
+            trade_levels["beta_label"] = "Low Beta / Defensive"
+            trade_levels["beta_risk_summary"] = f"Defensive risk profile ({b_val:.2f}x SPY swings). More resilient during market pullbacks with tighter noise around stops."
+        else:
+            trade_levels["beta_label"] = "Negative Beta"
+            trade_levels["beta_risk_summary"] = f"Inversely correlated with market ({b_val:.2f}x SPY swings). Moves opposite to broader market fluctuations."
 
     backtest_outcome = None
     if as_of_date and not df_future.empty:
@@ -597,8 +709,17 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         hist_sma50 = [s for s in sma50_data if target_str is None or s["time"] <= target_str]
         hist_sma200 = [s for s in sma200_data if target_str is None or s["time"] <= target_str]
 
+        # ── SPY Relative Strength Line & Stock Beta ─────────────────────────
+        beta_val, beta_label, beta_risk_summary, rs_spy_data = _calc_beta_and_rs(df, ticker)
+        hist_rs_spy = [r for r in rs_spy_data if target_str is None or r["time"] <= target_str]
+        latest_rs = rs_spy_data[-1]["value"] if rs_spy_data else 100.0
+        rs_1m_change = round(rs_spy_data[-1]["value"] - rs_spy_data[-21]["value"], 2) if len(rs_spy_data) >= 21 else 0.0
+
         # Trade Entry and Exit Points
         entry = trade.get("entry", cur_price)
+        trade["beta"] = beta_val
+        trade["beta_label"] = beta_label
+        trade["beta_risk_summary"] = beta_risk_summary
         stop_loss = trade.get("stop_loss")
         target1 = trade.get("target1")
         target2 = trade.get("target2")
@@ -770,6 +891,11 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "week_low": wk_lo,
                 "earnings_fib": earnings_fib,
                 "earnings_prediction": earnings_prediction,
+                "beta": beta_val,
+                "beta_label": beta_label,
+                "beta_risk_summary": beta_risk_summary,
+                "latest_rs": latest_rs,
+                "rs_1m_change": rs_1m_change,
             },
             "support_resistance": sr,
             "markers": markers,
@@ -787,6 +913,13 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "earnings_prediction": earnings_prediction,
             "hi_52": hi52,
             "lo_52": lo52,
+            "beta": beta_val,
+            "beta_label": beta_label,
+            "beta_risk_summary": beta_risk_summary,
+            "rs_spy": rs_spy_data,
+            "hist_rs_spy": hist_rs_spy,
+            "latest_rs": latest_rs,
+            "rs_1m_change": rs_1m_change,
         })
         _DAILY_CACHE[cache_key] = {"time": now, "data": res}
         return res
