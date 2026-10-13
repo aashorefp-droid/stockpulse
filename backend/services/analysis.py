@@ -408,11 +408,18 @@ def analyze_volume_profile(daily_df: pd.DataFrame, lookback: int = 50, n_bins: i
     else:
         vol_bias = "NEUTRAL"
 
+    if vol_trend == "ACCUMULATING":
+        vol_trend_label = "Bullish Volume Surge" if vol_surge else ("Bullish Accumulation" if vol_bias == "BULLISH" or current_price >= val else "Volume Accumulation")
+    elif vol_trend == "DISTRIBUTING":
+        vol_trend_label = "Bearish Volume Surge" if vol_surge else ("Bearish Distribution" if vol_bias == "BEARISH" or current_price < val else "Volume Distribution")
+    else:
+        vol_trend_label = "High Volume Surge" if vol_surge else ("Steady Accumulation" if vol_bias == "BULLISH" else ("Mild Distribution" if vol_bias == "BEARISH" else "Balanced Flow"))
+
     pos_label = ("Above VA" if current_price > vah else
                  "Below VA" if current_price < val else
                  "Above POC" if current_price > poc else
                  "Below POC" if current_price < poc else "At POC")
-    detail = f"{pos_label} | POC ${poc:.2f} | VA ${val:.2f}–${vah:.2f} | {vol_trend} | Vol {vol_ratio:.1f}x"
+    detail = f"{pos_label} | {vol_trend_label} | POC ${poc:.2f} (Low: ${val:.2f} High ${vah:.2f}) | Vol {vol_ratio:.1f}x"
 
     # 52-week High / Low & Distance (252 trading days)
     lookback_52w = min(252, len(clean_daily))
@@ -423,7 +430,7 @@ def analyze_volume_profile(daily_df: pd.DataFrame, lookback: int = 50, n_bins: i
 
     return {
         "poc": round(poc, 2), "vah": round(vah, 2), "val": round(val, 2),
-        "vol_bias": vol_bias, "vol_trend": vol_trend,
+        "vol_bias": vol_bias, "vol_trend": vol_trend, "vol_trend_label": vol_trend_label,
         "vol_ratio": round(float(vol_ratio), 2), "vol_surge": bool(vol_surge), "detail": detail,
         "hi_52": round(hi_52, 2), "lo_52": round(lo_52, 2),
         "dist_hi_52": dist_hi_52, "dist_lo_52": dist_lo_52,
@@ -1279,6 +1286,7 @@ def generate_final_judgement(
     vol_trend = vp.get("vol_trend", "FLAT")
     vol_surge = bool(vp.get("vol_surge", False))
     vol_ratio = vp.get("vol_ratio", 1.0) or 1.0
+    vol_bias = vp.get("vol_bias", "NEUTRAL")
 
     above_vah = current_price > vah if vah else False
     below_val = current_price < val if val else False
@@ -1286,6 +1294,16 @@ def generate_final_judgement(
 
     is_bull_signal = direction == "LONG"
     is_bear_signal = direction == "SHORT"
+
+    # Human-friendly volume trend label (e.g. Bullish Accumulation, Bearish Distribution, Balanced Flow)
+    vol_trend_label = vp.get("vol_trend_label")
+    if not vol_trend_label:
+        if vol_trend == "ACCUMULATING":
+            vol_trend_label = "Bullish Volume Surge" if vol_surge else ("Bullish Accumulation" if is_bull_signal or vol_bias == "BULLISH" or not below_val else "Volume Accumulation")
+        elif vol_trend == "DISTRIBUTING":
+            vol_trend_label = "Bearish Volume Surge" if vol_surge else ("Bearish Distribution" if is_bear_signal or vol_bias == "BEARISH" or below_val else "Volume Distribution")
+        else:
+            vol_trend_label = "High Volume Surge" if vol_surge else ("Steady Accumulation" if is_bull_signal else ("Mild Distribution" if is_bear_signal else "Balanced Flow"))
 
     fib_call = None
     if fib_levels and nearest_fib and nearest_fib in fib_levels:
@@ -1317,7 +1335,7 @@ def generate_final_judgement(
                 "confluence_score": 95,
                 "summary": f"Entry Alert ({grade_letter} Grade) aligns with institutional volume accumulation above fair value (${vah:.2f} VAH). Volume confirms breakout momentum.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Above VAH ({vah_str}) · {vol_trend} ({vol_ratio:.1f}x){range_str}",
+                "vp_call": f"Above VAH ({vah_str}) · {vol_trend_label} ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         elif inside_va or (val is not None and current_price >= val and not below_val):
@@ -1329,7 +1347,7 @@ def generate_final_judgement(
                 "confluence_score": 85,
                 "summary": f"Price holding institutional Value Area support ({val_str}–{vah_str}). High R/R dip accumulation with protective stop below VAL.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Inside Value Area · {poc_prefix} {poc_str}{range_str}",
+                "vp_call": f"Inside Value Area · {vol_trend_label} · {poc_prefix} {poc_str}{range_str}",
                 "fib_call": fib_call,
             }
         elif below_val:
@@ -1341,7 +1359,7 @@ def generate_final_judgement(
                 "confluence_score": 45,
                 "summary": f"Bullish entry alert conflict: Price is trading below Value Area Low ({val_str}) with distribution volume. High probability of false breakout. Wait for reclaim of {val_str} or reduce size.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) at ${entry_price:.2f}",
-                "vp_call": f"Below VAL ({val_str}) · {vol_trend} ({vol_ratio:.1f}x){range_str}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend_label} ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         else:
@@ -1354,7 +1372,7 @@ def generate_final_judgement(
                 "confluence_score": 70,
                 "summary": f"Bullish entry setup with steady volume. Manage risk at {stop_str}.",
                 "entry_call": f"{grade_letter} Grade at ${entry_price:.2f}",
-                "vp_call": f"{vp.get('detail', 'Normal volume profile')}{range_str}",
+                "vp_call": f"{vol_trend_label} · {poc_prefix} {poc_str}{range_str}" if poc else f"{vol_trend_label}{range_str}",
                 "fib_call": fib_call,
             }
     elif is_bear_signal:
@@ -1367,7 +1385,7 @@ def generate_final_judgement(
                 "confluence_score": 95,
                 "summary": f"Decisive breakdown below Value Area Low ({val_str}) confirmed by expanding volume surge. Institutional distribution favors aggressive short continuation.",
                 "entry_call": f"{grade_letter} Grade ({grade_label}) Short at ${entry_price:.2f}",
-                "vp_call": f"Below VAL ({val_str}) · {vol_trend} Surge ({vol_ratio:.1f}x){range_str}",
+                "vp_call": f"Below VAL ({val_str}) · {vol_trend_label} Surge ({vol_ratio:.1f}x){range_str}",
                 "fib_call": fib_call,
             }
         elif inside_va:
@@ -1379,7 +1397,7 @@ def generate_final_judgement(
                 "confluence_score": 60,
                 "summary": f"Short signal active, but price is sitting near heavy Point of Control liquidity ({poc_str}). Expect choppy support; wait for breakdown below {val_str}.",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
-                "vp_call": f"Inside Value Area · Near POC {poc_str}{range_str}",
+                "vp_call": f"Inside Value Area · {vol_trend_label} · {poc_prefix} {poc_str}{range_str}",
                 "fib_call": fib_call,
             }
         else:
@@ -1391,7 +1409,7 @@ def generate_final_judgement(
                 "confluence_score": 75,
                 "summary": f"Bearish trajectory with institutional resistance at {vah_str} (VAH).",
                 "entry_call": f"{grade_letter} Grade Short at ${entry_price:.2f}",
-                "vp_call": f"{vp.get('detail', 'Normal volume profile')}{range_str}",
+                "vp_call": f"Above VAH ({vah_str}) · {vol_trend_label}{range_str}" if vah else f"{vol_trend_label}{range_str}",
                 "fib_call": fib_call,
             }
     else:
@@ -1403,7 +1421,7 @@ def generate_final_judgement(
             "confluence_score": 50,
             "summary": f"Price oscillating within 70% Value Area ({val_str}–{vah_str}) with neutral volume. Wait for directional breakout expansion.",
             "entry_call": f"Neutral ({grade_letter} Grade)",
-            "vp_call": f"Inside Value Area · POC {poc_str}{range_str}",
+            "vp_call": f"Inside Value Area · {vol_trend_label} · POC {poc_str}{range_str}",
             "fib_call": fib_call,
         }
 

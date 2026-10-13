@@ -9,6 +9,7 @@ interface VolumeProfile {
   vol_ratio: number;
   vol_surge: boolean;
   detail:    string;
+  vol_trend_label?: string;
   hi_52?:    number;
   lo_52?:    number;
   dist_hi_52?: number;
@@ -81,6 +82,15 @@ export default function VolumeProfileCard({
         <h3 className="text-sm font-semibold text-muted">Volume Profile</h3>
         <div className="flex gap-2 items-center">
           <span className={biasColor[vp.vol_bias] ?? "badge-neutral"}>{vp.vol_bias}</span>
+          <span className={`text-xs px-2 py-0.5 rounded font-mono font-semibold border ${
+            (vp.vol_trend === "ACCUMULATING" || (vp.vol_trend_label && vp.vol_trend_label.includes("Accumulation")))
+              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+              : (vp.vol_trend === "DISTRIBUTING" || (vp.vol_trend_label && vp.vol_trend_label.includes("Distribution")))
+              ? "bg-rose-500/10 text-rose-400 border-rose-500/30"
+              : "bg-slate-500/10 text-slate-400 border-slate-500/30"
+          }`}>
+            {vp.vol_trend_label || (vp.vol_trend === "ACCUMULATING" ? "Bullish Accumulation" : vp.vol_trend === "DISTRIBUTING" ? "Bearish Distribution" : "Balanced Flow")}
+          </span>
           {vp.vol_surge && (
             <span className="text-xs px-1.5 py-0.5 rounded bg-yellow/10 text-yellow border border-yellow/20 font-mono font-semibold">
               ⚡ SURGE {vp.vol_ratio}x
@@ -96,8 +106,14 @@ export default function VolumeProfileCard({
           <div className="text-xs flex justify-between mb-1 items-center">
             <span className="font-mono text-muted">VAH ${vp.vah?.toFixed(2) ?? vp.vah}</span>
             <div className="flex items-center gap-1.5 font-mono">
-              <span className={`text-[11px] font-semibold ${trendColor[vp.vol_trend] ?? "text-muted"}`}>
-                {vp.vol_trend}
+              <span className={`text-[11px] font-semibold ${
+                (vp.vol_trend === "ACCUMULATING" || (vp.vol_trend_label && vp.vol_trend_label.includes("Accumulation")))
+                  ? "text-emerald-400"
+                  : (vp.vol_trend === "DISTRIBUTING" || (vp.vol_trend_label && vp.vol_trend_label.includes("Distribution")))
+                  ? "text-rose-400"
+                  : "text-muted"
+              }`}>
+                {vp.vol_trend_label || (vp.vol_trend === "ACCUMULATING" ? "Bullish Accumulation" : vp.vol_trend === "DISTRIBUTING" ? "Bearish Distribution" : "Balanced Flow")}
               </span>
               <span className="text-muted/40">•</span>
               {aboveVah && <span className="text-[11px] text-green font-semibold">▲ Above VA</span>}

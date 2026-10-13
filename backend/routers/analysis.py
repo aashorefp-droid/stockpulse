@@ -333,10 +333,18 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
             b_val = None
     if b_val is None and not _daily.empty:
         try:
-            b_val, b_lbl, b_sum, _ = _calc_beta_and_rs(_daily, ticker)
+            b_val, b_lbl, b_sum, rs_pts = _calc_beta_and_rs(_daily, ticker)
             trade_levels["beta"] = b_val
             trade_levels["beta_label"] = b_lbl
             trade_levels["beta_risk_summary"] = b_sum
+            if rs_pts:
+                r1m = round(rs_pts[-1]["value"] - rs_pts[-21]["value"], 2) if len(rs_pts) >= 21 else (round(rs_pts[-1]["value"] - rs_pts[0]["value"], 2) if len(rs_pts) > 1 else 0.0)
+                is_out = bool(r1m >= 0)
+                trade_levels["latest_rs"] = rs_pts[-1]["value"]
+                trade_levels["rs_1m_change"] = r1m
+                trade_levels["rs_is_outperforming"] = is_out
+                trade_levels["rs_trend"] = "OUTPERFORMING" if is_out else "LAGGING"
+                trade_levels["rs_color"] = "#00e5a0" if is_out else "#ff4d6a"
         except Exception:
             pass
     elif b_val is not None:
@@ -353,6 +361,19 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         else:
             trade_levels["beta_label"] = "Negative Beta"
             trade_levels["beta_risk_summary"] = f"Inversely correlated with market ({b_val:.2f}x SPY swings). Moves opposite to broader market fluctuations."
+        if not _daily.empty:
+            try:
+                _, _, _, rs_pts = _calc_beta_and_rs(_daily, ticker)
+                if rs_pts:
+                    r1m = round(rs_pts[-1]["value"] - rs_pts[-21]["value"], 2) if len(rs_pts) >= 21 else (round(rs_pts[-1]["value"] - rs_pts[0]["value"], 2) if len(rs_pts) > 1 else 0.0)
+                    is_out = bool(r1m >= 0)
+                    trade_levels["latest_rs"] = rs_pts[-1]["value"]
+                    trade_levels["rs_1m_change"] = r1m
+                    trade_levels["rs_is_outperforming"] = is_out
+                    trade_levels["rs_trend"] = "OUTPERFORMING" if is_out else "LAGGING"
+                    trade_levels["rs_color"] = "#00e5a0" if is_out else "#ff4d6a"
+            except Exception:
+                pass
 
     backtest_outcome = None
     if as_of_date and not df_future.empty:
@@ -713,13 +734,21 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
         beta_val, beta_label, beta_risk_summary, rs_spy_data = _calc_beta_and_rs(df, ticker)
         hist_rs_spy = [r for r in rs_spy_data if target_str is None or r["time"] <= target_str]
         latest_rs = rs_spy_data[-1]["value"] if rs_spy_data else 100.0
-        rs_1m_change = round(rs_spy_data[-1]["value"] - rs_spy_data[-21]["value"], 2) if len(rs_spy_data) >= 21 else 0.0
+        rs_1m_change = round(rs_spy_data[-1]["value"] - rs_spy_data[-21]["value"], 2) if len(rs_spy_data) >= 21 else (round(rs_spy_data[-1]["value"] - rs_spy_data[0]["value"], 2) if len(rs_spy_data) > 1 else 0.0)
+        rs_is_outperforming = bool(rs_1m_change >= 0)
+        rs_trend = "OUTPERFORMING" if rs_is_outperforming else "LAGGING"
+        rs_color = "#00e5a0" if rs_is_outperforming else "#ff4d6a"
 
         # Trade Entry and Exit Points
         entry = trade.get("entry", cur_price)
         trade["beta"] = beta_val
         trade["beta_label"] = beta_label
         trade["beta_risk_summary"] = beta_risk_summary
+        trade["latest_rs"] = latest_rs
+        trade["rs_1m_change"] = rs_1m_change
+        trade["rs_is_outperforming"] = rs_is_outperforming
+        trade["rs_trend"] = rs_trend
+        trade["rs_color"] = rs_color
         stop_loss = trade.get("stop_loss")
         target1 = trade.get("target1")
         target2 = trade.get("target2")
@@ -896,6 +925,9 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
                 "beta_risk_summary": beta_risk_summary,
                 "latest_rs": latest_rs,
                 "rs_1m_change": rs_1m_change,
+                "rs_is_outperforming": rs_is_outperforming,
+                "rs_trend": rs_trend,
+                "rs_color": rs_color,
             },
             "support_resistance": sr,
             "markers": markers,
@@ -920,6 +952,9 @@ def get_daily_chart_data(ticker: str, as_of: Optional[str] = Query(None)):
             "hist_rs_spy": hist_rs_spy,
             "latest_rs": latest_rs,
             "rs_1m_change": rs_1m_change,
+            "rs_is_outperforming": rs_is_outperforming,
+            "rs_trend": rs_trend,
+            "rs_color": rs_color,
         })
         _DAILY_CACHE[cache_key] = {"time": now, "data": res}
         return res

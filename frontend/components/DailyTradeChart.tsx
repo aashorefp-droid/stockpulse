@@ -213,11 +213,16 @@ export default function DailyTradeChart({
       // 3b. Relative Strength vs SPY Line (Normalized RS vs Benchmark)
       let rsSeries: any = null;
       if (showRs && activeRsSpy && activeRsSpy.length > 0) {
+        const isRsOutperforming = data?.rs_is_outperforming != null
+          ? Boolean(data.rs_is_outperforming)
+          : (data?.rs_1m_change != null ? data.rs_1m_change >= 0 : true);
+        const rsLineColor = isRsOutperforming ? "#00e5a0" : "#ff4d6a";
+
         rsSeries = chart.addLineSeries({
-          color: "#00d2ff",
+          color: rsLineColor,
           lineWidth: 2,
           priceScaleId: "rs_scale",
-          title: "RS vs SPY",
+          title: `RS vs SPY (${isRsOutperforming ? "Outperforming" : "Lagging"})`,
           priceLineVisible: false,
           lastValueVisible: false,
         });
@@ -609,9 +614,20 @@ export default function DailyTradeChart({
     const volTrend = vp?.vol_trend || "FLAT";
     const volSurge = Boolean(vp?.vol_surge);
     const volRatio = vp?.vol_ratio || 1.0;
+    const volBias = vp?.vol_bias || "NEUTRAL";
     const aboveVah = cp && vah ? cp > vah : false;
     const belowVal = cp && val ? cp < val : false;
     const insideVa = !aboveVah && !belowVal;
+
+    const trendLabel = vp?.vol_trend_label || (() => {
+      if (volTrend === "ACCUMULATING") {
+        return volSurge ? "Bullish Volume Surge" : (direction === "LONG" || volBias === "BULLISH" || !belowVal ? "Bullish Accumulation" : "Volume Accumulation");
+      } else if (volTrend === "DISTRIBUTING") {
+        return volSurge ? "Bearish Volume Surge" : (direction === "SHORT" || volBias === "BEARISH" || belowVal ? "Bearish Distribution" : "Volume Distribution");
+      } else {
+        return volSurge ? "High Volume Surge" : (direction === "LONG" ? "Steady Accumulation" : (direction === "SHORT" ? "Mild Distribution" : "Balanced Flow"));
+      }
+    })();
 
     const fmtPrice = (p: number | undefined | null) => {
       if (p == null) return "";
@@ -630,7 +646,7 @@ export default function DailyTradeChart({
           confluence_score: 95,
           summary: `Entry alert (${gradeLetter} Grade) aligns with institutional volume accumulation above fair value (${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}). Volume confirms breakout momentum.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Above VAH (${fmtPrice(vah)}) · ${volTrend} (${volRatio.toFixed(1)}x)${rangeStr}`,
+          vp_call: `Above VAH (${fmtPrice(vah)}) · ${trendLabel} (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else if (insideVa || (!belowVal && val && cp >= val)) {
         return {
@@ -640,7 +656,7 @@ export default function DailyTradeChart({
           confluence_score: 85,
           summary: `Price holding institutional Value Area support (${val ? `$${val.toFixed(2)}` : ""}${vah ? `–$${vah.toFixed(2)}` : ""}). High R/R dip accumulation with defined stop below VAL.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Inside Value Area · ${pocLabel} ${fmtPrice(poc)}${rangeStr}`,
+          vp_call: `Inside Value Area · ${trendLabel} · ${pocLabel} ${fmtPrice(poc)}${rangeStr}`,
         };
       } else if (belowVal) {
         return {
@@ -650,7 +666,7 @@ export default function DailyTradeChart({
           confluence_score: 45,
           summary: `Bullish entry alert conflict: Price is trading below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) with distribution volume. High probability of false breakout. Wait for reclaim of VAL or reduce size.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) at $${entryPrice.toFixed(2)}`,
-          vp_call: `Below VAL (${fmtPrice(val)}) · ${volTrend} (${volRatio.toFixed(1)}x)${rangeStr}`,
+          vp_call: `Below VAL (${fmtPrice(val)}) · ${trendLabel} (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else {
         return {
@@ -660,7 +676,7 @@ export default function DailyTradeChart({
           confluence_score: 70,
           summary: `Bullish price signal with steady volume profile. Maintain strict risk management at stop loss.`,
           entry_call: `${gradeLetter} Grade at $${entryPrice.toFixed(2)}`,
-          vp_call: `${vp?.detail || "Normal volume profile"}${rangeStr}`,
+          vp_call: `${trendLabel} · ${pocLabel} ${fmtPrice(poc)}${rangeStr}`,
         };
       }
     } else {
@@ -672,7 +688,7 @@ export default function DailyTradeChart({
           confluence_score: 95,
           summary: `Decisive breakdown below Value Area Low (${val ? `$${val.toFixed(2)}` : ""}) confirmed by expanding volume surge. Institutional liquidation favors aggressive short continuation.`,
           entry_call: `${gradeLetter} Grade (${gradeLabel}) Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `Below VAL (${fmtPrice(val)}) · ${volTrend} Surge (${volRatio.toFixed(1)}x)${rangeStr}`,
+          vp_call: `Below VAL (${fmtPrice(val)}) · ${trendLabel} (${volRatio.toFixed(1)}x)${rangeStr}`,
         };
       } else if (insideVa) {
         return {
@@ -682,7 +698,7 @@ export default function DailyTradeChart({
           confluence_score: 60,
           summary: `Short signal active, but price is sitting near heavy Point of Control liquidity (${poc ? `$${poc.toFixed(2)}` : ""}). Expect choppy support; wait for breakdown below VAL.`,
           entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `Inside Value Area · Near POC ${fmtPrice(poc)}${rangeStr}`,
+          vp_call: `Inside Value Area · ${trendLabel} · Near POC ${fmtPrice(poc)}${rangeStr}`,
         };
       } else {
         return {
@@ -692,7 +708,7 @@ export default function DailyTradeChart({
           confluence_score: 75,
           summary: `Bearish trajectory with institutional resistance at ${vah ? `$${vah.toFixed(2)} VAH` : "VAH"}.`,
           entry_call: `${gradeLetter} Grade Short at $${entryPrice.toFixed(2)}`,
-          vp_call: `${vp?.detail || "Normal volume profile"}${rangeStr}`,
+          vp_call: `Above VAH (${fmtPrice(vah)}) · ${trendLabel}${rangeStr}`,
         };
       }
     }
@@ -844,19 +860,33 @@ export default function DailyTradeChart({
                 MAs (20/50/200)
               </button>
 
-              <button
-                type="button"
-                onClick={() => setShowRs(!showRs)}
-                className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 ${
-                  showRs
-                    ? "bg-[#082a36] text-[#00d2ff] border-[#00d2ff]/40 shadow-sm"
-                    : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
-                }`}
-                title="Toggle SPY Relative Strength (RS) line"
-              >
-                <span>📈</span>
-                <span>RS vs SPY</span>
-              </button>
+              {(() => {
+                const isRsOutperforming = data?.rs_is_outperforming != null
+                  ? Boolean(data.rs_is_outperforming)
+                  : (data?.rs_1m_change != null ? data.rs_1m_change >= 0 : true);
+                return (
+                  <button
+                    type="button"
+                    onClick={() => setShowRs(!showRs)}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold border transition-all flex items-center gap-1.5 ${
+                      showRs
+                        ? isRsOutperforming
+                          ? "bg-[#0a3d1f] text-[#00e5a0] border-[#00e5a0]/40 shadow-sm shadow-[#00e5a0]/10"
+                          : "bg-[#3d0a1a] text-[#ff4d6a] border-[#ff4d6a]/40 shadow-sm shadow-[#ff4d6a]/10"
+                        : "bg-[#131625] text-[#6b7099] border-[#1a1d2e]"
+                    }`}
+                    title={`Toggle SPY Relative Strength line · Currently ${isRsOutperforming ? "Outperforming SPY (Green Line)" : "Lagging SPY (Red Line)"}`}
+                  >
+                    <span>{isRsOutperforming ? "📈" : "📉"}</span>
+                    <span>RS vs SPY</span>
+                    <span className={`px-1 py-0.2 rounded text-[10px] font-mono font-bold uppercase ${
+                      isRsOutperforming ? "bg-[#00e5a0]/20 text-[#00e5a0]" : "bg-[#ff4d6a]/20 text-[#ff4d6a]"
+                    }`}>
+                      {isRsOutperforming ? "Outperforming" : "Lagging"}
+                    </span>
+                  </button>
+                );
+              })()}
 
               {levels.retest_entry != null && (
                 <button
@@ -1632,20 +1662,25 @@ export default function DailyTradeChart({
                   </span>
                 </>
               )}
-              {showRs && (
-                <>
-                  <span className="text-[#6b7099]">·</span>
-                  <span className="flex items-center gap-1.5 text-[#00d2ff]">
-                    <span className="w-2.5 h-0.5 bg-[#00d2ff] rounded"></span>
-                    <span>RS vs SPY: <span ref={rsValRef}>{data?.latest_rs != null ? `${data.latest_rs.toFixed(1)}` : "—"}</span></span>
-                    {data?.rs_1m_change != null && (
-                      <span className={`text-[10px] font-mono ${data.rs_1m_change >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        ({data.rs_1m_change >= 0 ? "+" : ""}{data.rs_1m_change.toFixed(1)}% 1M)
-                      </span>
-                    )}
-                  </span>
-                </>
-              )}
+              {showRs && (() => {
+                const isRsOutperforming = data?.rs_is_outperforming != null
+                  ? Boolean(data.rs_is_outperforming)
+                  : (data?.rs_1m_change != null ? data.rs_1m_change >= 0 : true);
+                return (
+                  <>
+                    <span className="text-[#6b7099]">·</span>
+                    <span className={`flex items-center gap-1.5 ${isRsOutperforming ? "text-[#00e5a0]" : "text-[#ff4d6a]"}`}>
+                      <span className={`w-2.5 h-0.5 rounded ${isRsOutperforming ? "bg-[#00e5a0]" : "bg-[#ff4d6a]"}`}></span>
+                      <span>RS vs SPY: <span ref={rsValRef}>{data?.latest_rs != null ? `${data.latest_rs.toFixed(1)}` : "—"}</span></span>
+                      {data?.rs_1m_change != null && (
+                        <span className={`text-[10px] font-mono font-bold ${isRsOutperforming ? "text-emerald-400" : "text-rose-400"}`}>
+                          ({data.rs_1m_change >= 0 ? "+" : ""}{data.rs_1m_change.toFixed(1)}% 1M {isRsOutperforming ? "▲ Outperforming" : "▼ Lagging"})
+                        </span>
+                      )}
+                    </span>
+                  </>
+                );
+              })()}
             </div>
 
             <div ref={containerRef} style={{ height: 520 }} />

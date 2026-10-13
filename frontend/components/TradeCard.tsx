@@ -12,6 +12,11 @@ interface Trade {
   beta?:     number | null;
   beta_label?: string | null;
   beta_risk_summary?: string | null;
+  latest_rs?: number | null;
+  rs_1m_change?: number | null;
+  rs_is_outperforming?: boolean | null;
+  rs_trend?: string | null;
+  rs_color?: string | null;
 }
 
 interface OptionsLeg {
@@ -100,6 +105,26 @@ export default function TradeCard({
             <p className="text-[11px] text-muted leading-tight">
               {trade.beta_risk_summary}
             </p>
+          )}
+
+          {trade.rs_1m_change != null && (
+            <div className="flex justify-between items-center text-xs pt-1.5 border-t border-border/40">
+              <span className="text-muted flex items-center gap-1 font-semibold">
+                <span>{trade.rs_is_outperforming || trade.rs_1m_change >= 0 ? "📈" : "📉"} RS vs SPY (1M)</span>
+              </span>
+              <div className="flex items-center gap-1.5 font-mono">
+                {trade.latest_rs != null && (
+                  <span className="font-bold text-white">{trade.latest_rs.toFixed(1)}</span>
+                )}
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                  trade.rs_is_outperforming || trade.rs_1m_change >= 0
+                    ? "bg-[#0a3d1f] text-[#00e5a0] border-[#00e5a0]/40"
+                    : "bg-[#3d0a1a] text-[#ff4d6a] border-[#ff4d6a]/40"
+                }`}>
+                  {trade.rs_1m_change >= 0 ? "+" : ""}{trade.rs_1m_change.toFixed(1)}% · {trade.rs_is_outperforming || trade.rs_1m_change >= 0 ? "Outperforming" : "Lagging"}
+                </span>
+              </div>
+            </div>
           )}
         </div>
       )}
