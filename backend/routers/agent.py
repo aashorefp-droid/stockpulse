@@ -116,6 +116,14 @@ def get_configured_providers() -> List[Dict[str, Any]]:
     4. OpenRouter (Free models: nemotron-3.5-lightning:free / liquid:free)
     5. Local Ollama (Always included as offline fallback)
     """
+    try:
+        from dotenv import load_dotenv
+        _backend_env = Path(__file__).resolve().parent.parent / ".env"
+        if _backend_env.exists():
+            load_dotenv(_backend_env, override=True)
+    except Exception:
+        pass
+
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     cerebras_key = os.getenv("CEREBRAS_API_KEY", "").strip()
@@ -145,7 +153,7 @@ def get_configured_providers() -> List[Dict[str, Any]]:
         chain.append({
             "id": "gemini",
             "name": "Google Gemini",
-            "model": "gemini-3.8-flash",
+            "model": "gemini-flash-latest",
             "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             "headers": {
                 "Authorization": f"Bearer {gemini_key}",
@@ -483,9 +491,13 @@ async def chat_with_agent(req: ChatRequest):
             if matched:
                 candidate_chain = matched + [p for p in chain if p["id"] != requested]
             else:
-                for p in candidate_chain:
-                    if p["is_local"]:
-                        p["model"] = req.model
+                # If requested model is a cloud provider (groq, gemini, cerebras, openrouter)
+                # but unconfigured, DO NOT overwrite local Ollama's model!
+                known_cloud_ids = {"groq", "gemini", "cerebras", "openrouter"}
+                if requested not in known_cloud_ids:
+                    for p in candidate_chain:
+                        if p["is_local"]:
+                            p["model"] = req.model
 
         stream_succeeded = False
         last_error = ""
