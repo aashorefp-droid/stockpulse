@@ -394,48 +394,68 @@ async def chat_with_agent(req: ChatRequest):
         "help", "why is chat", "what can you do", "tell me about", "what are"
     ]) or "only aaoi" in user_lower or "general chat" in user_lower
 
-    # Dynamic Ticker Detection for any US stock (SPCX, NVDA, TSLA, PLTR, AAOI, etc.)
-    dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
+    # Dynamic Ticker Detection for any US stock (AAOI, SPCX, NVDA, TSLA, PLTR, etc.)
+    ticker_stop_words = {
+        "WHAT", "WHEN", "WHERE", "WHICH", "HOW", "WHY", "WHO", "WHOSE",
+        "TODAY", "YESTERDAY", "TOMORROW", "NOW", "LATER", "SOON",
+        "BUY", "SELL", "HOLD", "TRADE", "SWING", "LONG", "SHORT",
+        "CALL", "CALLS", "PUT", "PUTS", "OPTION", "OPTIONS",
+        "STOCK", "STOCKS", "SHARE", "SHARES", "TICKER", "TICKERS",
+        "PRICE", "PRICES", "LEVEL", "LEVELS", "TARGET", "TARGETS",
+        "STOP", "STOPS", "LOSS", "LOSSES", "RISK", "REWARD", "PLAN",
+        "ENTRY", "ENTRIES", "EXIT", "EXITS", "POINT", "POINTS",
+        "POC", "VAL", "VAH", "FIB", "FIBS", "BETA", "RSI", "MACD", "EMA", "SMA",
+        "GOOD", "BAD", "BEST", "WORST", "TOP", "BOTTOM", "HIGH", "LOW",
+        "MORE", "LESS", "MUCH", "MANY", "SOME", "ANY", "ALL", "NONE",
+        "WITH", "FROM", "INTO", "OVER", "UNDER", "ABOVE", "BELOW",
+        "THIS", "THAT", "THESE", "THOSE", "THEIR", "THERE", "HERE",
+        "THE", "AND", "OR", "BUT", "FOR", "NOR", "YET", "SO",
+        "CAN", "COULD", "WILL", "WOULD", "SHALL", "SHOULD", "MAY", "MIGHT", "MUST",
+        "HAVE", "HAS", "HAD", "BEEN", "BEING", "WERE", "WAS", "ARE", "IS", "AM",
+        "GIVE", "SHOW", "TELL", "FIND", "LOOK", "SEEK", "WANT", "NEED", "BUILD",
+        "CHAT", "LIVE", "DATA", "INFO", "WORK", "PAGE", "USER", "AI", "MAKE",
+        "WRONG", "RIGHT", "TRUE", "FALSE", "REAL", "FAKE", "LAST", "NOTE",
+        "DEFAULT", "UNIVERSE", "WATCH", "LIST", "VIEW", "CHART", "OPEN", "DROP",
+        "ABOUT", "ONLY", "ITS", "IT", "NOT", "YES", "NO", "SURE", "FINE",
+        "HELP", "LIKE", "NEWS", "AUTO", "TECH", "EDIT", "TEST", "TIME",
+        "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW", "SETUP", "SETUPS"
+    }
+
     explicit_ticker = None
+
+    # Stage 1: Explicit dollar sign (e.g. $AAOI, $SPCX)
+    dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
     if dollar_tickers:
         explicit_ticker = dollar_tickers[0].upper()
-    else:
-        tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
-        ticker_stop_words = {
-            "WHAT", "WHEN", "WHERE", "WHICH", "HOW", "WHY", "WHO", "WHOSE",
-            "TODAY", "YESTERDAY", "TOMORROW", "NOW", "LATER", "SOON",
-            "BUY", "SELL", "HOLD", "TRADE", "SWING", "LONG", "SHORT",
-            "CALL", "CALLS", "PUT", "PUTS", "OPTION", "OPTIONS",
-            "STOCK", "STOCKS", "SHARE", "SHARES", "TICKER", "TICKERS",
-            "PRICE", "PRICES", "LEVEL", "LEVELS", "TARGET", "TARGETS",
-            "STOP", "STOPS", "LOSS", "LOSSES", "RISK", "REWARD", "PLAN",
-            "ENTRY", "ENTRIES", "EXIT", "EXITS", "POINT", "POINTS",
-            "POC", "VAL", "VAH", "FIB", "FIBS", "BETA", "RSI", "MACD", "EMA", "SMA",
-            "GOOD", "BAD", "BEST", "WORST", "TOP", "BOTTOM", "HIGH", "LOW",
-            "MORE", "LESS", "MUCH", "MANY", "SOME", "ANY", "ALL", "NONE",
-            "WITH", "FROM", "INTO", "OVER", "UNDER", "ABOVE", "BELOW",
-            "THIS", "THAT", "THESE", "THOSE", "THEIR", "THERE", "HERE",
-            "THE", "AND", "OR", "BUT", "FOR", "NOR", "YET", "SO",
-            "CAN", "COULD", "WILL", "WOULD", "SHALL", "SHOULD", "MAY", "MIGHT", "MUST",
-            "HAVE", "HAS", "HAD", "BEEN", "BEING", "WERE", "WAS", "ARE", "IS", "AM",
-            "GIVE", "SHOW", "TELL", "FIND", "LOOK", "SEEK", "WANT", "NEED",
-            "CHAT", "LIVE", "DATA", "INFO", "WORK", "PAGE", "USER", "AI",
-            "WRONG", "RIGHT", "TRUE", "FALSE", "REAL", "FAKE", "LAST", "NOTE",
-            "DEFAULT", "UNIVERSE", "WATCH", "LIST", "VIEW", "CHART", "OPEN", "DROP",
-            "ABOUT", "ONLY", "ITS", "IT", "NOT", "YES", "NO", "SURE", "FINE",
-            "HELP", "LIKE", "NEWS", "AUTO", "TECH", "EDIT", "TEST", "TIME",
-            "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW"
-        }
-        for token in tokens:
-            up = token.upper()
-            if up not in ticker_stop_words:
+
+    # Stage 2: Phrases like "for AAOI", "on NVDA", "about TSLA", "ticker MDT"
+    if not explicit_ticker:
+        phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
+        if phrase_matches:
+            cand = phrase_matches[0].upper()
+            if cand not in ticker_stop_words:
+                explicit_ticker = cand
+
+    # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA) - skipping stop words
+    if not explicit_ticker:
+        raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
+        caps_tokens = [t.upper() for t in raw_tokens if t.isupper() and t.upper() not in ticker_stop_words]
+        if caps_tokens:
+            explicit_ticker = caps_tokens[-1]
+
+    # Stage 4: Fallback for short queries (e.g. "aaoi", "aaoi setup", "analyze aaoi")
+    if not explicit_ticker and not is_general_query and not is_universe_query:
+        raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
+        for t in raw_tokens:
+            up = t.upper()
+            if up not in ticker_stop_words and len(up) >= 2:
                 explicit_ticker = up
                 break
 
     active_ticker = explicit_ticker
     if is_universe_query:
         active_ticker = None
-    elif is_general_query and not dollar_tickers:
+    elif is_general_query and not explicit_ticker:
         active_ticker = None
     elif not active_ticker:
         raw_req_t = (req.ticker or "").upper().strip()

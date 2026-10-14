@@ -10,14 +10,14 @@ const WATCHLISTS = [
   { key: "default",       label: "Default 50",      count: 50 },
   { key: "tech",          label: "Tech 30",          count: 30 },
   { key: "mega_cap",      label: "Mega Cap 20",      count: 20 },
-  { key: "momentum",      label: "Momentum 20",      count: 20 },
+  { key: "momentum",      label: "Momentum 50",      count: 50 },
   { key: "etfs",          label: "ETFs 20",          count: 20 },
   { key: "tos_email",     label: "📧 TOS Scan",      count: 25 },
   { key: "short_squeeze", label: "🔥 Short Squeeze", count: 40 },
   { key: "custom",        label: "Custom",           count: 0  },
 ];
 
-type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "rank1" | "exceptional" | "good_rr" | "high_short";
+type Filter = "all" | "strength" | "emerging" | "weakness" | "fresh_curl" | "curl_vol" | "below_va" | "rank1" | "exceptional" | "good_rr" | "high_short" | "sweep_long" | "sweep_short";
 
 interface OptLeg {
   action:     string;
@@ -51,6 +51,13 @@ interface ScanResult {
   daily_bias?:   string;
   vol_trend?:    string;
   vol_surge?:    boolean;
+  vol_ratio?:    number | null;
+  vol_bias?:     string;
+  below_va?:     boolean;
+  vol_detail?:   string;
+  poc?:          number | null;
+  val?:          number | null;
+  vah?:          number | null;
   breakout_score?: number;
   dist_from_high?: number;
   stage2_curl_surge?: boolean;
@@ -190,8 +197,128 @@ export default function ScannerPage() {
   const [tosMsg, setTosMsg] = useState<string | null>(null);
   const [telegramSending, setTelegramSending] = useState(false);
   const [telegramSentMsg, setTelegramSentMsg] = useState<string | null>(null);
+  const [breakoutSending, setBreakoutSending] = useState(false);
+  const [breakoutSentMsg, setBreakoutSentMsg] = useState<string | null>(null);
+  const [sweepSending, setSweepSending] = useState(false);
+  const [sweepSentMsg, setSweepSentMsg] = useState<string | null>(null);
+  const [curlSending, setCurlSending] = useState(false);
+  const [curlSentMsg, setCurlSentMsg] = useState<string | null>(null);
+  const [curlMatches, setCurlMatches] = useState<any[]>([]);
+  const [curlLoading, setCurlLoading] = useState(false);
+  const [curlFilter, setCurlFilter] = useState<"all" | "fresh" | "surge" | "base">("all");
+  const [showCurlSection, setShowCurlSection] = useState(false);
+  const [curlTotalScanned, setCurlTotalScanned] = useState(0);
+  const [curlSourceLabel, setCurlSourceLabel] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const esRef = useRef<EventSource | null>(null);
+
+  // ── LocalStorage Snapshot Persistence ──
+  const SNAPSHOT_STORAGE_KEY = "stockpulse_scanner_snapshot_v2";
+  const [snapshotTimestamp, setSnapshotTimestamp] = useState<string | null>(null);
+  const [snapshotSavedMsg, setSnapshotSavedMsg] = useState<string | null>(null);
+
+  function stockHref(ticker: string) {
+    const base = `/stock/${encodeURIComponent(ticker)}`;
+    return activeBacktestDate ? `${base}?as_of=${encodeURIComponent(activeBacktestDate)}` : base;
+  }
+
+  function saveSnapshotToStorage(overrides?: {
+    results?: ScanResult[];
+    bestPicks?: BestPickResponse | null;
+    watchlist?: string;
+    customInput?: string;
+    mode?: "live" | "backtest";
+    backtestDate?: string;
+    activeBacktestDate?: string | null;
+    filter?: Filter;
+    sortBy?: "score" | "grade" | "rr" | "stage30w";
+    activePickMode?: "strength" | "emerging" | "weakness";
+    curlMatches?: any[];
+    curlTotalScanned?: number;
+    curlSourceLabel?: string;
+    showCurlSection?: boolean;
+  }) {
+    try {
+      const targetResults = overrides?.results ?? results;
+      const targetBestPicks = overrides?.bestPicks !== undefined ? overrides.bestPicks : bestPicks;
+      const targetCurls = overrides?.curlMatches !== undefined ? overrides.curlMatches : curlMatches;
+      if ((!targetResults || targetResults.length === 0) && (!targetCurls || targetCurls.length === 0)) return;
+
+      const now = new Date();
+      const timeStr = now.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) +
+        " at " + now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+      const snap = {
+        savedAt: now.toISOString(),
+        savedAtLabel: timeStr,
+        watchlist: overrides?.watchlist ?? watchlist,
+        customInput: overrides?.customInput ?? customInput,
+        mode: overrides?.mode ?? mode,
+        backtestDate: overrides?.backtestDate ?? backtestDate,
+        activeBacktestDate: overrides?.activeBacktestDate !== undefined ? overrides.activeBacktestDate : activeBacktestDate,
+        filter: overrides?.filter ?? filter,
+        sortBy: overrides?.sortBy ?? sortBy,
+        results: targetResults,
+        bestPicks: targetBestPicks,
+        activePickMode: overrides?.activePickMode ?? activePickMode,
+        curlMatches: targetCurls,
+        curlTotalScanned: overrides?.curlTotalScanned ?? curlTotalScanned,
+        curlSourceLabel: overrides?.curlSourceLabel ?? curlSourceLabel,
+        showCurlSection: overrides?.showCurlSection ?? showCurlSection,
+      };
+
+      localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(snap));
+      setSnapshotTimestamp(timeStr);
+      setSnapshotSavedMsg("✅ Snapshot Saved!");
+      setTimeout(() => setSnapshotSavedMsg(null), 3500);
+    } catch (e) {
+      console.warn("Failed saving scanner snapshot to localStorage:", e);
+    }
+  }
+
+  function clearSnapshotFromStorage() {
+    try {
+      localStorage.removeItem(SNAPSHOT_STORAGE_KEY);
+      setSnapshotTimestamp(null);
+      setResults([]);
+      setBestPicks(null);
+      setCurlMatches([]);
+      setShowCurlSection(false);
+      setSnapshotSavedMsg("Snapshot cleared.");
+      setTimeout(() => setSnapshotSavedMsg(null), 3000);
+    } catch (e) {
+      console.warn("Failed clearing snapshot:", e);
+    }
+  }
+
+  // Restore snapshot on initial page mount if available
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+      if (raw) {
+        const snap = JSON.parse(raw);
+        if (snap && ((Array.isArray(snap.results) && snap.results.length > 0) || (Array.isArray(snap.curlMatches) && snap.curlMatches.length > 0))) {
+          if (Array.isArray(snap.results)) setResults(snap.results);
+          if (snap.bestPicks) setBestPicks(snap.bestPicks);
+          if (snap.watchlist) setWatchlist(snap.watchlist);
+          if (snap.customInput) setCustomInput(snap.customInput);
+          if (snap.mode) setMode(snap.mode);
+          if (snap.backtestDate) setBacktestDate(snap.backtestDate);
+          if (snap.activeBacktestDate) setActiveBacktestDate(snap.activeBacktestDate);
+          if (snap.filter) setFilter(snap.filter);
+          if (snap.sortBy) setSortBy(snap.sortBy);
+          if (snap.activePickMode) setActivePickMode(snap.activePickMode);
+          if (Array.isArray(snap.curlMatches)) setCurlMatches(snap.curlMatches);
+          if (snap.curlTotalScanned) setCurlTotalScanned(snap.curlTotalScanned);
+          if (snap.curlSourceLabel) setCurlSourceLabel(snap.curlSourceLabel);
+          if (snap.showCurlSection !== undefined) setShowCurlSection(snap.showCurlSection);
+          if (snap.savedAtLabel) setSnapshotTimestamp(snap.savedAtLabel);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not load scanner snapshot:", e);
+    }
+  }, []);
 
   async function sendTriadTelegram() {
     setTelegramSending(true);
@@ -206,6 +333,7 @@ export default function ScannerPage() {
           subjects: tosSubjectFilter,
           days: tosDays,
           send_telegram: true,
+          curl_matches: curlMatches.length > 0 ? curlMatches : undefined,
         }),
       });
       const data = await res.json();
@@ -224,6 +352,123 @@ export default function ScannerPage() {
     }
   }
 
+  async function sendBreakoutTelegram() {
+    setBreakoutSending(true);
+    setBreakoutSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/telegram/breakout-alert`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data && data.sent) {
+        setBreakoutSentMsg(`✅ Sent (${data.total_matches} Breakouts)!`);
+      } else if (data && data.total_matches === 0) {
+        setBreakoutSentMsg("ℹ️ 0 breakouts today");
+      } else if (data && data.errors && data.errors.length > 0) {
+        setBreakoutSentMsg(`⚠️ ${data.errors[0]}`);
+      } else {
+        setBreakoutSentMsg("✅ Breakout scan completed");
+      }
+    } catch (err: any) {
+      setBreakoutSentMsg(`⚠️ ${err.message || "Failed"}`);
+    } finally {
+      setBreakoutSending(false);
+      setTimeout(() => setBreakoutSentMsg(null), 6000);
+    }
+  }
+
+  async function sendSweepTelegram() {
+    setSweepSending(true);
+    setSweepSentMsg(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/scheduler/run-sweeps`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (data && (data.status || data.ok)) {
+        setSweepSentMsg("✅ Sweep Digest Sent!");
+      } else {
+        setSweepSentMsg(`⚠️ ${data?.error || "Sweep scan triggered"}`);
+      }
+    } catch (err: any) {
+      setSweepSentMsg(`⚠️ ${err.message || "Failed"}`);
+    } finally {
+      setSweepSending(false);
+      setTimeout(() => setSweepSentMsg(null), 5000);
+    }
+  }
+
+  async function load30wCurls(dispatchTelegram: boolean = false) {
+    setCurlLoading(true);
+    setShowCurlSection(true);
+    if (dispatchTelegram) {
+      setCurlSending(true);
+      setCurlSentMsg(null);
+    }
+    try {
+      if (dispatchTelegram) {
+        const res = await fetch(`${API_BASE}/api/scanner/30w-curl/alert`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            watchlist: watchlist === "tos_email" ? "tos_email" : watchlist,
+            subjects: tosSubjectFilter,
+            days: tosDays,
+            send_telegram: true,
+          }),
+        });
+        const data = await res.json();
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+          saveSnapshotToStorage({
+            curlMatches: data.matches,
+            curlTotalScanned: data.total_scanned || 0,
+            curlSourceLabel: data.source_label || "",
+            showCurlSection: true,
+          });
+        }
+        if (data && data.sent) {
+          setCurlSentMsg(`✅ Sent ${data.count || data.matches?.length || 0} Curls!`);
+        } else if (data && data.error) {
+          setCurlSentMsg(`⚠️ ${data.error}`);
+        } else {
+          setCurlSentMsg(`✅ Loaded ${data.count || 0} Curls`);
+        }
+      } else {
+        const params = new URLSearchParams();
+        params.set("watchlist", watchlist === "tos_email" ? "tos_email" : watchlist);
+        params.set("days", String(tosDays));
+        if (tosSubjectFilter) params.set("subjects", tosSubjectFilter);
+
+        const res = await fetch(`${API_BASE}/api/scanner/30w-curl?${params.toString()}`);
+        const data = await res.json();
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+          saveSnapshotToStorage({
+            curlMatches: data.matches,
+            curlTotalScanned: data.total_scanned || 0,
+            curlSourceLabel: data.source_label || "",
+            showCurlSection: true,
+          });
+        }
+      }
+    } catch (err: any) {
+      if (dispatchTelegram) {
+        setCurlSentMsg(`⚠️ ${err.message || "Failed to load 30W curls"}`);
+      }
+    } finally {
+      setCurlLoading(false);
+      setCurlSending(false);
+      if (dispatchTelegram) {
+        setTimeout(() => setCurlSentMsg(null), 5000);
+      }
+    }
+  }
+
   useEffect(() => {
     if (watchlist === "tos_email") {
       const params = new URLSearchParams();
@@ -238,6 +483,22 @@ export default function ScannerPage() {
         })
         .catch(err => console.warn("Failed fetching TOS status:", err));
     }
+
+    // Pre-fetch 30W Curls count in background
+    const curlParams = new URLSearchParams();
+    curlParams.set("watchlist", watchlist === "tos_email" ? "tos_email" : watchlist);
+    curlParams.set("days", String(tosDays));
+    if (tosSubjectFilter) curlParams.set("subjects", tosSubjectFilter);
+    fetch(`${API_BASE}/api/scanner/30w-curl?${curlParams.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.matches) {
+          setCurlMatches(data.matches);
+          setCurlTotalScanned(data.total_scanned || 0);
+          setCurlSourceLabel(data.source_label || "");
+        }
+      })
+      .catch(err => console.warn("Background 30W curl fetch:", err));
   }, [watchlist, tosSubjectFilter, tosDays]);
 
   async function refreshTosEmail() {
@@ -290,16 +551,19 @@ export default function ScannerPage() {
         const data = await res.json();
         if (data && (data.best_pick || (data.ranked && data.ranked.length > 0))) {
           setBestPicks(data);
+          saveSnapshotToStorage({ bestPicks: data, results: list });
           return;
         }
       }
       // If backend responded with empty or error, use instant client-side evaluator
       const fallbackData = computeClientSideBestPicks(list);
       setBestPicks(fallbackData);
+      saveSnapshotToStorage({ bestPicks: fallbackData, results: list });
     } catch (err) {
       console.warn("Backend ranking failed, falling back to client-side ranking:", err);
       const fallbackData = computeClientSideBestPicks(list);
       setBestPicks(fallbackData);
+      saveSnapshotToStorage({ bestPicks: fallbackData, results: list });
     } finally {
       setRankingLoading(false);
     }
@@ -319,6 +583,7 @@ export default function ScannerPage() {
       if (res.ok) {
         const data = await res.json();
         setBestPicks(data);
+        saveSnapshotToStorage({ bestPicks: data });
       }
     } catch (err) {
       console.error("Failed to rank uploaded CSV:", err);
@@ -374,6 +639,7 @@ export default function ScannerPage() {
         if (accumulated.length > 0) {
           runRanking(accumulated);
         }
+        saveSnapshotToStorage({ results: accumulated });
         return;
       }
       accumulated.push(data);
@@ -387,6 +653,7 @@ export default function ScannerPage() {
       if (accumulated.length > 0) {
         runRanking(accumulated);
       }
+      saveSnapshotToStorage({ results: accumulated });
     };
   }
 
@@ -395,8 +662,16 @@ export default function ScannerPage() {
     setScanning(false);
     if (results.length > 0) {
       runRanking(results);
+      saveSnapshotToStorage({ results });
     }
   }
+
+  const isSweepReclaimLong = (r: ScanResult) =>
+    r.dt4_setup === "sweep_reclaim_long"
+    || (r.dt3_setup === "sweep_reclaim" && r.dt3_side === "long");
+  const isSweepReclaimShort = (r: ScanResult) =>
+    r.dt4_setup === "sweep_reject_short"
+    || (r.dt3_setup === "sweep_reclaim" && r.dt3_side === "short");
 
   const gradeRank: Record<string, number> = { S: 0, A: 1, B: 2, "B-": 3, C: 4, D: 5 };
 
@@ -422,10 +697,18 @@ export default function ScannerPage() {
         return (rr >= 1.8 && dist >= 3.0);
       }
       if (filter === "fresh_curl")  return Boolean(r.is_fresh_stage2 || r.stage2_status === "FRESH");
-      if (filter === "curl_vol")    return Boolean(r.is_30w_curl);
+      if (filter === "curl_vol")    return Boolean(r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0));
+      if (filter === "below_va") {
+        const isBelowVal = Boolean(r.below_va || (r.val != null && r.price != null && r.price < r.val));
+        const isAcc = r.vol_trend === "ACCUMULATING";
+        const isSurge = Boolean(r.vol_surge || (r.vol_ratio != null && r.vol_ratio >= 1.5));
+        return isBelowVal && isAcc && isSurge;
+      }
       if (filter === "rank1")       return r.mtf_rank === 1;
       if (filter === "good_rr")     return (r.rr_t1 ?? 0) >= 1.5;
       if (filter === "high_short")  return (r.short_pct ?? 0) >= 10;
+      if (filter === "sweep_long")  return isSweepReclaimLong(r);
+      if (filter === "sweep_short") return isSweepReclaimShort(r);
       // Matches original: score≥4 + HIGH conf + grade A/S + rank1 + ACCUMULATING vol
       if (filter === "exceptional")
         return ["S", "A"].includes(r.entry_grade ?? "")
@@ -455,10 +738,44 @@ export default function ScannerPage() {
     <div className="space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex flex-wrap items-end gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-white">Scanner</h1>
           <p className="text-muted text-sm mt-0.5">Multi-stock scoring · Rank 1 signals · Exceptional setups</p>
+        </div>
+
+        {/* ── Snapshot Persistence Controls ── */}
+        <div className="flex flex-wrap items-center gap-2">
+          {snapshotTimestamp && (
+            <div className="flex items-center gap-2 bg-[#131625] border border-border px-3 py-1.5 rounded-lg text-xs font-mono">
+              <span className="text-yellow">📸 Last Snapshot:</span>
+              <span className="text-white font-semibold">{snapshotTimestamp}</span>
+              <button
+                type="button"
+                onClick={clearSnapshotFromStorage}
+                className="ml-1 text-muted hover:text-red transition-colors text-[11px] underline"
+                title="Clear saved snapshot and start fresh"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          {results.length > 0 && (
+            <button
+              type="button"
+              onClick={() => saveSnapshotToStorage()}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 transition-all flex items-center gap-1.5 shadow-sm"
+              title="Save current scan results and best picks to your browser so they are preserved"
+            >
+              <span>💾</span>
+              <span>Save Snapshot</span>
+            </button>
+          )}
+          {snapshotSavedMsg && (
+            <span className="text-xs text-green font-mono font-semibold animate-fade-in">
+              {snapshotSavedMsg}
+            </span>
+          )}
         </div>
       </div>
 
@@ -723,6 +1040,32 @@ export default function ScannerPage() {
             />
           </label>
 
+          <button
+            onClick={() => {
+              if (showCurlSection && curlMatches.length > 0) {
+                setShowCurlSection(!showCurlSection);
+              } else {
+                load30wCurls(false);
+              }
+            }}
+            disabled={curlLoading}
+            className={`px-3 py-2 rounded-lg font-semibold text-xs border transition-colors flex items-center gap-1.5 shadow-sm ${
+              showCurlSection
+                ? "bg-purple-600/25 border-purple-400 text-purple-200 ring-1 ring-purple-400/50"
+                : "border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20"
+            }`}
+            title="Scan watchlist for 30-Week MA Curl Up TradingView arrow signals and display tickers on screen"
+          >
+            <span>{curlLoading ? "⏳" : "🌀"}</span>
+            <span>
+              {curlLoading
+                ? "Scanning 30W Curls..."
+                : curlMatches.length > 0
+                ? `30W Curls (${curlMatches.length})`
+                : "30W Curl Scan"}
+            </span>
+          </button>
+
           {(scanning || results.length > 0) && (
             <div className="flex-1 max-w-xs">
               <div className="flex justify-between text-xs text-muted mb-1">
@@ -756,6 +1099,205 @@ export default function ScannerPage() {
           </div>
         );
       })()}
+
+      {/* ── 🌀 30W MA Curl Up Dedicated Showcase Panel ── */}
+      {showCurlSection && (
+        <div className="card border border-purple-500/40 bg-gradient-to-br from-[#130d22] via-[#0d101a] to-[#0d1222] p-5 shadow-[0_0_35px_rgba(168,85,247,0.15)] animate-fade-in relative rounded-xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4 border-b border-purple-500/20 pb-3">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🌀</span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-white tracking-wide">
+                    30-Week MA Curl Up (TradingView Arrows)
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    {curlMatches.length} Setups Found
+                  </span>
+                </div>
+                <p className="text-xs text-muted mt-0.5">
+                  Weekly 30W SMA turning positive from flat/declining with volume expansion ({curlSourceLabel || watchlist})
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => load30wCurls(true)}
+                disabled={curlSending || curlLoading}
+                className="px-3 py-1.5 text-xs rounded-lg border border-purple-500/50 bg-purple-500/20 text-purple-200 hover:bg-purple-500/30 transition-colors font-semibold flex items-center gap-1.5 shadow-sm"
+                title="Dispatch these 30W Curl setups to Telegram"
+              >
+                <span>{curlSending ? "⏳" : "✈️"}</span>
+                <span>{curlSending ? "Sending..." : curlSentMsg || "Send to Telegram"}</span>
+              </button>
+              <button
+                onClick={() => load30wCurls(false)}
+                disabled={curlLoading}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:text-white transition-colors"
+                title="Refresh 30W Curl Scan"
+              >
+                🔄 Refresh
+              </button>
+              <button
+                onClick={() => setShowCurlSection(false)}
+                className="px-2.5 py-1.5 text-xs text-muted hover:text-white transition-colors border border-transparent hover:border-border rounded-lg"
+                title="Close 30W Curl Showcase"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Subcategory Filter Tabs inside 30W Curl Showcase */}
+          {curlMatches.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[
+                { key: "all", label: `All Curls (${curlMatches.length})` },
+                { key: "fresh", label: `✨ Fresh Curls (0-3w) (${curlMatches.filter(m => m.category === "FRESH").length})` },
+                { key: "surge", label: `🔥 Volume Surges (${curlMatches.filter(m => m.is_vol_surge).length})` },
+                { key: "base", label: `🏗️ Bases (${curlMatches.filter(m => ["BASE", "ADVANCING"].includes(m.category)).length})` },
+              ].map(tab => (
+                <button
+                  key={tab.key}
+                  onClick={() => setCurlFilter(tab.key as any)}
+                  className={`px-3 py-1 text-xs rounded-lg font-semibold transition-colors ${
+                    curlFilter === tab.key
+                      ? "bg-purple-500 text-white shadow-sm"
+                      : "bg-[#0d101a] border border-border/60 text-muted hover:text-white"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Content: Cards Grid */}
+          {curlLoading ? (
+            <div className="py-12 text-center text-sm text-muted animate-pulse">
+              <span className="text-xl">🌀</span>
+              <p className="mt-2">Scanning weekly bars for TradingView 30W Curl Arrows and volume inflection...</p>
+            </div>
+          ) : curlMatches.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted">
+              <span>No 30W Curl setups currently qualify in this watchlist lookback.</span>
+              <div className="mt-3">
+                <button
+                  onClick={() => load30wCurls(false)}
+                  className="px-4 py-1.5 rounded-lg text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 hover:bg-purple-500/30 font-semibold"
+                >
+                  Scan All Watchlists
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {curlMatches
+                .filter(m => {
+                  if (curlFilter === "fresh") return m.category === "FRESH";
+                  if (curlFilter === "surge") return m.is_vol_surge;
+                  if (curlFilter === "base") return ["BASE", "ADVANCING"].includes(m.category);
+                  return true;
+                })
+                .map((item) => (
+                  <div
+                    key={item.ticker}
+                    className="p-3.5 rounded-xl border border-purple-500/30 bg-[#0d111d]/90 hover:border-purple-400 transition-all flex flex-col justify-between group shadow-sm"
+                  >
+                    <div>
+                      {/* Top Row: Ticker, Price, Badge */}
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={stockHref(item.ticker)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-lg font-black font-mono text-white group-hover:text-purple-300 transition-colors flex items-center gap-1"
+                          >
+                            {item.ticker}
+                            <span className="text-[10px] text-muted opacity-0 group-hover:opacity-100 transition-opacity">↗</span>
+                          </Link>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            item.category === "FRESH"
+                              ? "bg-green/15 text-green border-green/30"
+                              : item.is_vol_surge
+                              ? "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+                              : "bg-purple-500/15 text-purple-300 border-purple-500/30"
+                          }`}>
+                            {item.category_badge}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-bold font-mono text-white">${item.price.toFixed(2)}</span>
+                          <span className={`block text-[10px] font-mono font-semibold ${item.dist_from_sma30 >= 0 ? "text-bull" : "text-bear"}`}>
+                            {item.dist_from_sma30 >= 0 ? `+${item.dist_from_sma30}%` : `${item.dist_from_sma30}%`} 30W
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Technical Details */}
+                      <div className="grid grid-cols-2 gap-2 text-[11px] bg-black/30 p-2 rounded-lg border border-border/40 font-mono mb-2">
+                        <div>
+                          <span className="text-muted">30W SMA: </span>
+                          <span className="text-white font-semibold">${item.sma30.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Slope: </span>
+                          <span className="text-bull font-semibold">+{item.slope.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Arrow: </span>
+                          <span className={item.weeks_ago === 0 ? "text-yellow font-bold" : "text-white"}>
+                            {item.weeks_ago === 0 ? "✨ This Week" : `${item.weeks_ago}w ago`}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-muted">Volume: </span>
+                          <span className={item.is_vol_surge ? "text-cyan-300 font-bold" : "text-muted"}>
+                            {item.is_vol_surge ? `🔥 ${item.vol_ratio.toFixed(1)}x` : `${item.vol_ratio.toFixed(1)}x`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Trade Plan: Entry, Stop, T1 */}
+                      <div className="grid grid-cols-3 gap-1.5 text-center text-[10px] font-mono mb-2">
+                        <div className="bg-surface/60 p-1 rounded border border-border/40">
+                          <span className="text-muted block text-[9px]">ENTRY</span>
+                          <span className="text-white font-bold">${item.price.toFixed(2)}</span>
+                        </div>
+                        <div className="bg-bear/10 p-1 rounded border border-bear/30">
+                          <span className="text-bear block text-[9px]">STOP (-{item.risk_pct}%)</span>
+                          <span className="text-bear font-bold">${item.stop_loss.toFixed(2)}</span>
+                        </div>
+                        <div className="bg-bull/10 p-1 rounded border border-bull/30">
+                          <span className="text-bull block text-[9px]">T1 (+{item.reward_pct}%)</span>
+                          <span className="text-bull font-bold">${item.target1.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Options + Chart link footer */}
+                    <div className="pt-2 border-t border-border/30 flex items-center justify-between text-[11px]">
+                      <div className="truncate max-w-[70%]" title={item.options}>
+                        <span className="text-[10px] text-muted">💡 </span>
+                        <code className="text-yellow text-[10px]">{item.options}</code>
+                      </div>
+                      <Link
+                        href={stockHref(item.ticker)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] font-semibold text-purple-300 hover:text-purple-200 flex items-center gap-0.5"
+                      >
+                        30W Chart ↗
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 🏆 Best Swing Trade Pick of the Day Showcase ── */}
       {(bestPicks?.best_pick || rankingLoading) && (
@@ -826,6 +1368,35 @@ export default function ScannerPage() {
                     >
                       <span>{telegramSending ? "⏳" : "✈️"}</span>
                       <span>{telegramSending ? "Sending Triad..." : telegramSentMsg || "Send to Telegram"}</span>
+                    </button>
+                    <button
+                      onClick={sendBreakoutTelegram}
+                      disabled={breakoutSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Scan Default 50 & Momentum 50 for fresh breakouts and dispatch alert to Telegram"
+                    >
+                      <span>{breakoutSending ? "⏳" : "🚀"}</span>
+                      <span>{breakoutSending ? "Scanning..." : breakoutSentMsg || "Breakout Alert (Def 50 + Mom 50)"}</span>
+                    </button>
+                    <button
+                      onClick={sendSweepTelegram}
+                      disabled={sweepSending}
+                      className="px-3 py-1 text-xs rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="Dispatch Post-Market V4/V3 Sweep Reclaim & Reject Setups Digest to Telegram"
+                    >
+                      <span>{sweepSending ? "⏳" : "🎯"}</span>
+                      <span>{sweepSending ? "Sending Sweeps..." : sweepSentMsg || "Sweep Alert (Long & Short)"}</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowCurlSection(true);
+                        if (curlMatches.length === 0) load30wCurls(false);
+                      }}
+                      className="px-3 py-1 text-xs rounded-lg border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 transition-colors font-semibold flex items-center gap-1.5"
+                      title="View all 30-Week MA Curl Up setups on screen"
+                    >
+                      <span>🌀</span>
+                      <span>30W Curls ({curlMatches.length})</span>
                     </button>
                   </div>
                 </div>
@@ -951,7 +1522,9 @@ export default function ScannerPage() {
 
                       <div className="flex items-baseline gap-3 my-2">
                         <Link
-                          href={`/stock/${currentPick.ticker}`}
+                          href={stockHref(currentPick.ticker)}
+                          target="_blank"
+                          rel="noopener noreferrer"
                           className="text-4xl font-extrabold text-white hover:text-accent transition-colors font-mono tracking-tight"
                         >
                           {currentPick.ticker}
@@ -1011,7 +1584,9 @@ export default function ScannerPage() {
                         </div>
                       </div>
                       <Link
-                        href={`/stock/${currentPick.ticker}`}
+                        href={stockHref(currentPick.ticker)}
+                        target="_blank"
+                        rel="noopener noreferrer"
                         className="px-4 py-2 rounded-lg bg-accent text-black font-bold text-xs hover:bg-accent/80 transition-colors flex items-center gap-1"
                       >
                         <span>📈 Open Live Chart</span>
@@ -1125,7 +1700,12 @@ export default function ScannerPage() {
                             >
                               <td className="text-center py-2 px-2.5 text-muted">{idx + 1}</td>
                               <td className="text-left py-2 px-3">
-                                <Link href={`/stock/${item.ticker}`} className="text-white hover:text-accent font-bold">
+                                <Link
+                                  href={stockHref(item.ticker)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-white hover:text-accent font-bold"
+                                >
                                   {item.ticker}
                                 </Link>
                                 {idx === 0 && <span className="ml-1 text-yellow">★</span>}
@@ -1182,7 +1762,12 @@ export default function ScannerPage() {
                               <td className="text-right py-2 px-3 text-green">+{item.swing_reward_pct}%</td>
                               <td className="text-right py-2 px-3 text-accent">{item.swing_rr}x</td>
                               <td className="text-center py-2 px-2.5">
-                                <Link href={`/stock/${item.ticker}`} className="text-accent hover:underline text-[11px]">
+                                <Link
+                                  href={stockHref(item.ticker)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-accent hover:underline text-[11px]"
+                                >
                                   Chart →
                                 </Link>
                               </td>
@@ -1203,7 +1788,7 @@ export default function ScannerPage() {
       {results.length > 0 && (
         <div className="flex flex-wrap gap-4 items-center">
           <div className="flex flex-wrap gap-1 bg-card border border-border rounded-lg p-1">
-            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
+            {(["all", "strength", "emerging", "weakness", "fresh_curl", "curl_vol", "below_va", "sweep_long", "sweep_short", "rank1", "exceptional", "good_rr", "high_short"] as Filter[]).map(f => (
               <button key={f} onClick={() => {
                 setFilter(f);
                 if (f === "good_rr") setSortBy("rr");
@@ -1216,7 +1801,10 @@ export default function ScannerPage() {
                 : f === "emerging"  ? `🚀 Emerging (${results.filter(r => (r.dist_from_high ?? 999) <= 15.0 && (r.sma30_slope ?? 0) > 0 && (r.risk_pct ?? 999) <= 8.5 && (r.verdict ?? "").toUpperCase().includes("BULLISH")).length})`
                 : f === "weakness"  ? `🛡️ Weakness (${results.filter(r => (r.rr_t1 ?? 0) >= 1.8 && (r.dist_from_high ?? 0) >= 3.0).length})`
                 : f === "fresh_curl"? `🎉 Fresh Breakout (${results.filter(r => r.is_fresh_stage2 || r.stage2_status === "FRESH").length})`
-                : f === "curl_vol"  ? `⚡ 30W Advancing (${results.filter(r => r.is_30w_curl).length})`
+                : f === "curl_vol"  ? `🌀 30W Curl (${results.filter(r => r.is_30w_curl || r.is_fresh_stage2 || r.stage2_status === "FRESH" || r.stage2_status === "ADVANCING" || ((r.sma30_slope ?? 0) > 0 && (r.dist_from_sma30 ?? -99) >= -2.0)).length})`
+                : f === "below_va"  ? `🔻 Below VA Surge (${results.filter(r => (r.below_va || (r.val != null && r.price != null && r.price < r.val)) && r.vol_trend === "ACCUMULATING" && (r.vol_surge || (r.vol_ratio != null && r.vol_ratio >= 1.5))).length})`
+                : f === "sweep_long"? `🎯 Sweep Long (${results.filter(isSweepReclaimLong).length})`
+                : f === "sweep_short"? `🛡️ Sweep Short (${results.filter(isSweepReclaimShort).length})`
                 : f === "rank1"     ? `Rank 1 (${results.filter(r => r.mtf_rank === 1).length})`
                 : f === "good_rr"   ? `🎯 Good R/R ≥1.5× (${results.filter(r => (r.rr_t1 ?? 0) >= 1.5).length})`
                 : f === "high_short"? `🔥 High Short (${results.filter(r => (r.short_pct ?? 0) >= 10).length})`
@@ -1349,11 +1937,18 @@ export default function ScannerPage() {
                     <tr key={r.ticker}
                       className="border-b border-border/40 hover:bg-surface/50 transition-colors">
                       <td className="pl-4 pr-3 py-2.5 whitespace-nowrap sticky left-0 bg-card">
-                        <Link href={`/stock/${r.ticker}`}
-                          className="font-bold text-white hover:text-accent transition-colors">
+                        <Link
+                          href={stockHref(r.ticker)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold text-white hover:text-accent transition-colors"
+                        >
                           {r.ticker}
                         </Link>
-                        {r.vol_surge && <span className="ml-1 text-[10px] text-yellow">⚡</span>}
+                        {r.vol_surge && <span className="ml-1 text-[10px] text-yellow" title="Volume Surge (>1.5x)">⚡</span>}
+                        {(r.below_va || (r.val != null && r.price != null && r.price < r.val)) && r.vol_trend === "ACCUMULATING" && (
+                          <span className="ml-1 text-[10px] text-red font-bold" title={`Volume Profile Breakdown: Below VAL ($${r.val ?? "—"}) + Accumulating Vol`}>🔻</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right font-mono text-white whitespace-nowrap">
                         ${r.price?.toFixed(2)}

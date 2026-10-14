@@ -116,6 +116,15 @@ export default function StockPage({ params }: StockPageProps) {
     signal = { rank: 5, signal: "N/A", action: "N/A", key: "N/N/N" },
     fib_levels = {},
     nearest_fib = "N/A",
+    weekly_fib_levels = {},
+    weekly_nearest_fib = "N/A",
+    week_high = null,
+    week_low = null,
+    week_range_label = null,
+    hi_52 = null,
+    lo_52 = null,
+    earnings_fib = null,
+    earnings_prediction = null,
     support_resistance = { support: [], resistance: [] },
     weekly_fib_rsi = { weekly_fib: "N/A", rsi_4h: "N/A" },
     fundamentals = {},
@@ -126,11 +135,12 @@ export default function StockPage({ params }: StockPageProps) {
     direction = "LONG",
     signal_names = [],
     entry_grade = { entry_grade: "D", entry_label: "N/A", expected_wr: 0, expected_avg: 0, grade_color: "#8b949e" },
-    trade = { entry: 0, stop_loss: null, target1: null, target2: null, risk_pct: null, rr_t1: null, rr_t2: null, t1_days: null, t2_days: null, atr: 0 },
+    trade = { entry: 0, stop_loss: null, target1: null, target2: null, risk_pct: null, rr_t1: null, rr_t2: null, t1_days: null, t2_days: null, atr: 0, beta: null, beta_label: null, beta_risk_summary: null },
     volume_profile = null,
     strategy_signals = {},
     options = null,
     stock_verdict = null,
+    final_judgement = null,
     is_backtest = false,
     as_of = null,
     backtest_outcome = null,
@@ -383,9 +393,17 @@ export default function StockPage({ params }: StockPageProps) {
         </div>
 
         {chartView === "daily_plan" ? (
-          <DailyTradeChart ticker={ticker} initialAsOfDate={asOfDate} />
+          <DailyTradeChart
+            ticker={ticker}
+            initialAsOfDate={asOfDate}
+            asOfDate={asOfDate}
+            volumeProfile={volume_profile}
+            entryGrade={entry_grade}
+            verdict={verdict}
+            finalJudgement={final_judgement}
+          />
         ) : (
-          <DualChart ticker={ticker} />
+          <DualChart ticker={ticker} initialAsOfDate={asOfDate} asOfDate={asOfDate} />
         )}
       </div>
 
@@ -404,7 +422,15 @@ export default function StockPage({ params }: StockPageProps) {
           optionsStrategy={options?.strategy ?? null}
         />
         {volume_profile ? (
-          <VolumeProfileCard vp={volume_profile} currentPrice={current_price} />
+          <VolumeProfileCard
+            vp={volume_profile}
+            currentPrice={current_price}
+            hi52={fundamentals?.["52w_high"] && fundamentals["52w_high"] !== "N/A" ? Number(fundamentals["52w_high"]) : strategy_signals?.hi_52}
+            lo52={fundamentals?.["52w_low"] && fundamentals["52w_low"] !== "N/A" ? Number(fundamentals["52w_low"]) : strategy_signals?.lo_52}
+            distFromHigh={strategy_signals?.dist_from_high}
+            distFromLow={strategy_signals?.dist_from_low}
+            finalJudgement={final_judgement}
+          />
         ) : (
           <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-5 flex items-center justify-center text-slate-500 text-sm">
             Volume profile calculated from price bars
@@ -530,10 +556,27 @@ export default function StockPage({ params }: StockPageProps) {
       </div>
 
       {/* ── FIB + S/R + FUNDAMENTALS ─────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <FibTable levels={fib_levels} nearestFib={nearest_fib} currentPrice={current_price} />
-        <SRCard support={support_resistance.support} resistance={support_resistance.resistance} currentPrice={current_price} />
-        <FundamentalsCard f={fundamentals} />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <FibTable
+            levels={fib_levels}
+            nearestFib={nearest_fib}
+            currentPrice={current_price}
+            weeklyLevels={weekly_fib_levels}
+            weeklyNearestFib={weekly_nearest_fib}
+            weekHigh={week_high}
+            weekLow={week_low}
+            weekRangeLabel={week_range_label}
+            hi52={hi_52}
+            lo52={lo_52}
+            earningsFib={earnings_fib}
+            earningsPrediction={earnings_prediction}
+          />
+        </div>
+        <div className="space-y-4">
+          <SRCard support={support_resistance.support} resistance={support_resistance.resistance} currentPrice={current_price} />
+          <FundamentalsCard f={fundamentals} />
+        </div>
       </div>
 
       {/* ── OPTIONS ──────────────────────────────────────────────────────── */}

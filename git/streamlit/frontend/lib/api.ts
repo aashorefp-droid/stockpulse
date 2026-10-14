@@ -58,6 +58,15 @@ export interface StockAnalysis {
   signal:        Signal;
   fib_levels:    Record<string, number>;
   nearest_fib:   string;
+  weekly_fib_levels?:  Record<string, number>;
+  weekly_nearest_fib?: string;
+  week_high?:          number | null;
+  week_low?:           number | null;
+  week_range_label?:   string | null;
+  hi_52?:              number | null;
+  lo_52?:              number | null;
+  earnings_fib?:       EarningsFibData | null;
+  earnings_prediction?: EarningsPredictionData | null;
   support_resistance: {
     support:    number[];
     resistance: number[];
@@ -68,6 +77,103 @@ export interface StockAnalysis {
   };
   fundamentals:  Fundamentals;
   stock_verdict?: StockVerdict | null;
+}
+
+export interface EarningsPredictionData {
+  ticker: string;
+  prediction: string;
+  prediction_status: "ACTIVE" | "NA_NOT_TOMORROW" | string;
+  prediction_badge: string;
+  prediction_color: string;
+  prediction_note: string;
+  is_tomorrow: boolean;
+  days_until_earnings?: number | null;
+  market_cap: {
+    formatted: string;
+    raw?: number | null;
+    category: string;
+  };
+  helpful_earnings_data: {
+    next_earnings_date?: string | null;
+    next_earnings_date_label?: string;
+    next_earnings_time?: string;
+    days_until?: number | null;
+    is_tomorrow: boolean;
+    status_label: string;
+    next_eps_estimate?: number | null;
+    next_revenue_estimate?: string | null;
+    pe_ratio?: number | null;
+    forward_pe?: number | null;
+    last_earnings_eps_actual?: number | null;
+    last_earnings_eps_estimate?: number | null;
+    last_earnings_surprise_pct?: number | null;
+    last_earnings_beat_status?: string;
+    historical_beat_rate_pct?: number | null;
+    expected_move_pct?: number | null;
+  };
+  fib_confluence: {
+    fib_52w: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    fib_week: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    fib_earnings: {
+      stance: string;
+      score: number;
+      description: string;
+    };
+    total_confluence_score: number;
+    predicted_outcome: string;
+    outcome_bias: string;
+    outcome_color: string;
+    rationale: string;
+    upside_target?: number;
+    upside_target_label?: string;
+    upside_target_pct?: number;
+    downside_floor?: number;
+    downside_floor_label?: string;
+    downside_floor_pct?: number;
+  };
+}
+
+export interface EarningsFibData {
+  has_earnings: boolean;
+  ticker?: string;
+  earnings_date?: string;
+  reaction_date?: string;
+  reaction_date_label?: string;
+  is_amc?: boolean;
+  days_since_earnings?: number;
+  earnings_high?: number;
+  earnings_low?: number;
+  earnings_open?: number;
+  earnings_close?: number;
+  earnings_midpoint?: number;
+  earnings_range?: number;
+  current_price?: number;
+  dist_from_high?: number;
+  dist_from_high_pct?: number;
+  dist_from_low?: number;
+  dist_from_low_pct?: number;
+  return_since_earnings_pct?: number;
+  post_cycle_high?: number;
+  post_cycle_low?: number;
+  status?: "EXPANSION" | "CONSOLIDATING" | "BREAKDOWN";
+  status_badge?: string;
+  status_label?: string;
+  status_color?: "emerald" | "amber" | "red";
+  fib_levels?: Record<string, number>;
+  nearest_fib?: string;
+  nearest_fib_val?: number;
+  nearest_fib_desc?: string;
+  nearest_fib_role?: string;
+  nearest_fib_dist_pct?: number;
+  reason?: string;
 }
 
 export interface StockVerdict {
