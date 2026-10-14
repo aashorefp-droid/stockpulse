@@ -1,9 +1,22 @@
 import os
+import sys
 import logging
 from contextlib import asynccontextmanager
+
+if sys.platform == "win32":
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.routers import analysis, scanner, earnings, tracker, macro
+from backend.routers import (
+    analysis, scanner, earnings, tracker, macro,
+    sector, bubble, tos, growth, news, paper, holdings, trades, plan, telegram, agent
+)
 from backend.routers import scheduler as scheduler_router
 from backend.services.scheduler import scheduler, setup_scheduler
 
@@ -23,17 +36,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="StockPulse API", version="1.0.0", lifespan=lifespan)
 
-_cors_env = os.getenv("CORS_ORIGINS", "")
-_cors_origins = (
-    [o.strip() for o in _cors_env.split(",") if o.strip()]
-    if _cors_env
-    else ["http://localhost:3000", "http://localhost:3001",
-          "http://localhost:3002", "http://localhost:3003"]
-)
+_cors_env = os.getenv("CORS_ORIGINS") or os.getenv("CORS_ORIGIN", "")
+_explicit_origins = []
+if _cors_env:
+    for o in _cors_env.split(","):
+        o = o.strip()
+        if not o:
+            continue
+        _explicit_origins.append(o)
+        if not o.startswith("http://") and not o.startswith("https://"):
+            _explicit_origins.append(f"https://{o}")
+            _explicit_origins.append(f"http://{o}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=_explicit_origins if _explicit_origins else ["*"],
+    allow_origin_regex=r"^https?://.*\.vercel\.app$|^https?://.*\.onrender\.com$|^https?://localhost(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -45,6 +63,28 @@ app.include_router(earnings.router)
 app.include_router(tracker.router)
 app.include_router(scheduler_router.router)
 app.include_router(macro.router)
+app.include_router(sector.router)
+app.include_router(bubble.router)
+app.include_router(tos.router)
+app.include_router(growth.router)
+app.include_router(news.router)
+app.include_router(paper.router)
+app.include_router(holdings.router)
+app.include_router(trades.router)
+app.include_router(plan.router)
+app.include_router(telegram.router)
+app.include_router(agent.router)
+
+
+@app.get("/")
+def root():
+    return {
+        "service": "StockPulse API",
+        "status": "online",
+        "docs_url": "/docs",
+        "health_url": "/health",
+        "message": "StockPulse Backend API is running successfully on Render."
+    }
 
 
 @app.get("/health")

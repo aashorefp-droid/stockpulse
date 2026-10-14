@@ -62,3 +62,169 @@ def trigger_momentum_scan():
     from backend.services.scheduler import momentum_scan_job
     momentum_scan_job()
     return {"status": "momentum scan completed"}
+
+
+@router.post("/run-news")
+def trigger_news_summary():
+    """Manually trigger the morning Good/Bad news digest."""
+    from backend.services.scheduler import news_summary_job
+    news_summary_job()
+    return {"status": "news summary completed"}
+
+
+@router.post("/run-news-post")
+def trigger_post_market_news_summary():
+    """Manually trigger the post-market Good/Bad news digest."""
+    from backend.services.scheduler import post_market_news_summary_job
+    post_market_news_summary_job()
+    return {"status": "post-market news summary completed"}
+
+
+@router.post("/run-sweeps")
+def trigger_sweep_digest():
+    """Manually trigger the post-market sweep setup digest."""
+    from backend.services.scheduler import sweep_digest_job
+    sweep_digest_job()
+    return {"status": "sweep digest completed"}
+
+
+@router.post("/run-breakouts")
+def trigger_breakout_digest():
+    """Manually trigger the Default 50 & Momentum 50 breakout scanner & Telegram alert."""
+    from backend.services.scheduler import breakout_digest_job
+    res = breakout_digest_job()
+    return {"status": "breakout alert completed", "result": res}
+
+
+@router.post("/run-exceptional")
+@router.post("/run-exceptional-scan")
+def trigger_exceptional_swing_digest():
+    """Manually trigger the EOD Multi-Timeframe Exceptional Scanner (Default + Momentum + Gmail TOS) alert."""
+    from backend.services.scheduler import eod_exceptional_scan_job
+    res = eod_exceptional_scan_job()
+    return {"status": "eod_exceptional_scan completed", "result": res}
+
+
+@router.post("/run-v3-refresh")
+def trigger_backend_v3_refresh():
+    """Manually trigger the backend V3 refresh, outside the market-window gate."""
+    from backend.services.scheduler import backend_v3_refresh_job
+    backend_v3_refresh_job(force=True)
+    return {"status": "backend V3 refresh completed"}
+
+
+@router.post("/run-holdings")
+def trigger_holdings_summary():
+    """Manually trigger the post-market holdings swing summary."""
+    from backend.services.scheduler import holdings_summary_job
+    holdings_summary_job()
+    return {"status": "holdings summary completed"}
+
+
+@router.post("/run-default50-scan")
+def trigger_default50_scan():
+    """Manually trigger the 8:00 AM Default 50 pre-market scan."""
+    from backend.services.scheduler import default50_premarket_scan_job
+    res = default50_premarket_scan_job()
+    return {
+        "status": "default50_premarket_scan completed",
+        "valid_count": res.get("valid_count", 0),
+        "scanned_count": res.get("scanned_count", 0),
+    }
+
+
+@router.post("/run-default50-near-entry")
+def trigger_default50_near_entry():
+    """Manually trigger the 8:30 AM Default 50 Near Entry check & alert."""
+    from backend.services.scheduler import default50_near_entry_alert_job
+    res = default50_near_entry_alert_job()
+    return {
+        "status": "default50_near_entry_alert completed",
+        "near_count": res.get("count", 0),
+        "items": [
+            {
+                "ticker": item.get("ticker"),
+                "direction": item.get("direction"),
+                "current_price": item.get("current_price"),
+                "entry": item.get("entry"),
+                "stop_loss": item.get("stop_loss"),
+                "target1": item.get("target1"),
+                "target2": item.get("target2"),
+                "diff_pct": item.get("diff_pct"),
+                "scenario": item.get("scenario_label"),
+            }
+            for item in res.get("items", [])
+        ],
+    }
+
+
+@router.post("/run-paper-exit-monitor")
+def trigger_paper_exit_monitor(force: bool = False):
+    """Manually trigger the intraday paper trading exit monitor."""
+    from backend.services.scheduler import paper_exit_monitor_job
+    res = paper_exit_monitor_job(force=force)
+    return {
+        "status": "paper_exit_monitor completed",
+        "result": res,
+    }
+
+
+@router.post("/run-triad")
+def trigger_triad_alert():
+    """Manually trigger the 7:30 PM CST Triad Best Picks + 30W Curl after-market alert."""
+    from backend.services.scheduler import triad_best_picks_alert_job
+    res = triad_best_picks_alert_job()
+    return {"status": "triad_best_picks_alert completed", "result": res}
+
+
+@router.post("/run-tos-poll")
+def trigger_tos_email_poll():
+    """Manually trigger the 7:15 PM CST ThinkOrSwim email poll + 30W Curl alert."""
+    from backend.services.scheduler import tos_email_poll_job
+    res = tos_email_poll_job()
+    return {"status": "tos_email_poll completed", "new_messages": res}
+
+
+@router.post("/run-macro-watch")
+def trigger_macro_regime_watch():
+    """Manually trigger the macro regime watch job."""
+    from backend.services.scheduler import macro_regime_watch_job
+    macro_regime_watch_job()
+    return {"status": "macro_regime_watch completed"}
+
+
+@router.post("/run-gamma")
+def trigger_gamma_jobs():
+    """Manually trigger SPY and sector gamma calculation jobs."""
+    from backend.services.scheduler import spy_gamma_job, sector_gamma_job
+    spy_gamma_job()
+    sector_gamma_job()
+    return {"status": "gamma jobs completed"}
+
+
+@router.post("/run-spy-v4")
+@router.post("/run-v4-spy")
+def trigger_spy_v4_summary():
+    """Manually trigger the SPY Day Trading V4 plan Telegram alert."""
+    from backend.services.scheduler import spy_v4_summary_job
+    spy_v4_summary_job()
+    return {"status": "spy_v4_summary completed"}
+
+
+@router.post("/run-sweeps")
+def trigger_sweep_digest():
+    """Manually trigger the post-market sweep setup digest."""
+    from backend.services.scheduler import sweep_digest_job
+    sweep_digest_job()
+    return {"status": "sweep digest completed"}
+
+
+@router.post("/run-v3-refresh")
+def trigger_backend_v3_refresh():
+    """Manually trigger the backend V3 refresh, outside the market-window gate."""
+    from backend.services.scheduler import backend_v3_refresh_job
+    backend_v3_refresh_job(force=True)
+    return {"status": "backend V3 refresh completed"}
+
+
+

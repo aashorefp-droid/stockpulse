@@ -8,11 +8,13 @@ Estimates:
   - Walk-forward backtest of earnings-day trades
 """
 import numpy as np
+import os
 import pandas as pd
 import requests
 import yfinance as yf
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
+import time
 
 
 # ── Earnings date fetching ─────────────────────────────────────────────────────
@@ -85,6 +87,117 @@ def _earnings_from_history(tk) -> list[dict]:
 
 _YF_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
+_EARNINGS_CALENDAR_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_EARNINGS_CALENDAR_TTL_SECONDS = 30 * 60
+
+
+def _float_or_none(value: Any) -> Optional[float]:
+    if value in (None, "", "-", "N/A"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_ticker(value: Any) -> str:
+    return str(value or "").strip().upper().replace(".", "-")
+
+
+def _parse_calendar_date(value: Any, fallback: str) -> str:
+    raw = str(value or fallback).strip()
+    if "T" in raw:
+        raw = raw.split("T", 1)[0]
+    if " " in raw:
+        raw = raw.split(" ", 1)[0]
+    return raw[:10] if len(raw) >= 10 else fallback
+
+
+def get_earnings_calendar(target_date: str, *, force_refresh: bool = False) -> list[dict]:
+    """
+    Fetch same-day earnings reporters from Benzinga's public calendar in one call.
+    Falls back cleanly so callers can decide whether to use the slower ticker scan.
+    """
+    cache_key = target_date
+    now = time.time()
+    cached = _EARNINGS_CALENDAR_CACHE.get(cache_key)
+    if (
+        cached
+        and not force_refresh
+        and now - cached[0] < _EARNINGS_CALENDAR_TTL_SECONDS
+    ):
+        return [dict(item) for item in cached[1]]
+
+    try:
+        target = datetime.strptime(target_date, "%Y-%m-%d").date()
+        date_to = str(target + timedelta(days=1))
+        bz_headers = {
+            **_YF_HEADERS,
+            "Accept": "application/json",
+            "Referer": "https://www.benzinga.com/",
+        }
+        r = requests.get(
+            "https://www.benzinga.com/api/v1/calendar/earnings",
+            params={
+                "dateFrom": target_date,
+                "dateTo": date_to,
+                "parameters[importance]": 0,
+            },
+            headers=bz_headers,
+            timeout=12,
+        )
+        if not r.ok:
+            return [dict(item) for item in cached[1]] if cached else []
+
+        payload = r.json()
+        raw_items = payload.get("earnings", []) if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            return []
+
+        rows: dict[str, dict] = {}
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            ticker = _normalize_ticker(item.get("ticker") or item.get("symbol"))
+            if not ticker:
+                continue
+            event_date = _parse_calendar_date(
+                item.get("date") or item.get("date_confirmed") or item.get("datetime"),
+                target_date,
+            )
+            try:
+                event_day = datetime.strptime(event_date, "%Y-%m-%d").date()
+                if abs((event_day - target).days) > 1:
+                    continue
+            except Exception:
+                event_date = target_date
+
+            actual = _float_or_none(
+                item.get("eps") or item.get("eps_actual") or item.get("actual_eps")
+            )
+            estimate = _float_or_none(
+                item.get("eps_est") or item.get("eps_estimate") or item.get("estimate")
+            )
+            surprise = None
+            if actual is not None and estimate not in (None, 0):
+                surprise = round((actual - estimate) / abs(estimate) * 100, 1)
+
+            rows[ticker] = {
+                "ticker": ticker,
+                "date": event_date,
+                "time": item.get("time") or item.get("period") or item.get("time_of_day"),
+                "eps_actual": round(actual, 2) if actual is not None else None,
+                "eps_estimate": round(estimate, 2) if estimate is not None else None,
+                "surprise_pct": surprise,
+                "source": "benzinga_calendar",
+            }
+
+        result = sorted(rows.values(), key=lambda x: x["ticker"])
+        _EARNINGS_CALENDAR_CACHE[cache_key] = (now, result)
+        return [dict(item) for item in result]
+    except Exception:
+        return [dict(item) for item in cached[1]] if cached else []
+
 
 def get_eps_fast(ticker: str, target_date: str) -> Optional[dict]:
     """
@@ -129,6 +242,23 @@ def get_eps_fast(ticker: str, target_date: str) -> Optional[dict]:
     # ── Source 2: Benzinga public calendar API ────────────────────────────────
     # Check target_date AND next day — some AMC reporters are listed with next-day date
     try:
+        for item in get_earnings_calendar(target_date):
+            if item.get("ticker") != ticker.upper():
+                continue
+            actual = item.get("eps_actual")
+            if actual is None:
+                continue
+            est = item.get("eps_estimate")
+            return {
+                "eps_actual":   round(float(actual), 2),
+                "eps_estimate": round(float(est), 2) if est is not None else None,
+                "surprise_pct": item.get("surprise_pct"),
+                "source":       item.get("source", "benzinga_calendar"),
+            }
+    except Exception:
+        pass
+
+    try:
         from datetime import timedelta as _td
         _next_day = str((datetime.strptime(target_date, "%Y-%m-%d") + _td(days=1)).date())
         bz_headers = {
@@ -151,12 +281,10 @@ def get_eps_fast(ticker: str, target_date: str) -> Optional[dict]:
             for item in r.json().get("earnings", []):
                 if item.get("ticker", "").upper() != ticker.upper():
                     continue
-                actual = item.get("eps")
-                est    = item.get("eps_est")
-                if actual in (None, "", "-"):
+                actual = _float_or_none(item.get("eps"))
+                est    = _float_or_none(item.get("eps_est"))
+                if actual is None:
                     continue
-                actual = float(actual)
-                est    = float(est) if est not in (None, "", "-") else None
                 surp   = None
                 if est is not None and est != 0:
                     surp = round((actual - est) / abs(est) * 100, 1)
@@ -195,6 +323,42 @@ def get_eps_fast(ticker: str, target_date: str) -> Optional[dict]:
         pass
 
     return None
+
+
+def get_eps_fast_batch(tickers: list[str], target_date: str) -> dict[str, dict]:
+    """
+    Batch EPS lookup for polling. Uses one fresh calendar call first, then only
+    falls back to slower per-ticker sources for names still missing actual EPS.
+    """
+    clean = []
+    seen = set()
+    for t in tickers:
+        ticker = _normalize_ticker(t)
+        if ticker and ticker not in seen:
+            seen.add(ticker)
+            clean.append(ticker)
+
+    results: dict[str, dict] = {}
+    wanted = set(clean)
+    for item in get_earnings_calendar(target_date, force_refresh=True):
+        ticker = item.get("ticker")
+        if ticker not in wanted or item.get("eps_actual") is None:
+            continue
+        results[ticker] = {
+            "eps_actual": item.get("eps_actual"),
+            "eps_estimate": item.get("eps_estimate"),
+            "surprise_pct": item.get("surprise_pct"),
+            "source": item.get("source", "benzinga_calendar"),
+        }
+
+    for ticker in clean:
+        if ticker in results:
+            continue
+        eps = get_eps_fast(ticker, target_date)
+        if eps and eps.get("eps_actual") is not None:
+            results[ticker] = eps
+
+    return results
 
 
 def get_next_earnings_date(ticker: str) -> Optional[str]:
@@ -1219,8 +1383,33 @@ def _check_ticker_for_date(ticker: str, target_date: str) -> Optional[str]:
     return None
 
 
-def find_earnings_reporters(target_date: str) -> list[str]:
-    """Scan POPULAR_TICKERS in parallel and return those that reported on target_date."""
+def _stored_earnings_tickers(target_date: str) -> list[str]:
+    try:
+        from backend.db.earnings_tracker import get_all_for_date, init_db
+        init_db()
+        return [
+            _normalize_ticker(row.get("ticker"))
+            for row in get_all_for_date(target_date)
+            if _normalize_ticker(row.get("ticker"))
+        ]
+    except Exception:
+        return []
+
+
+def _placeholder_earnings_tickers(target_date: str) -> list[str]:
+    try:
+        from backend.db.earnings_placeholder_store import load_placeholders_for_date
+        return [
+            _normalize_ticker(ticker)
+            for ticker in load_placeholders_for_date(target_date)
+            if _normalize_ticker(ticker)
+        ]
+    except Exception:
+        return []
+
+
+def _scan_popular_earnings_reporters(target_date: str) -> list[str]:
+    """Last-resort compatibility fallback when calendar and DB sources miss."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     reporters = []
     with ThreadPoolExecutor(max_workers=20) as executor:
@@ -1230,7 +1419,39 @@ def find_earnings_reporters(target_date: str) -> list[str]:
             result = future.result()
             if result:
                 reporters.append(result)
-    return reporters
+    return sorted(set(reporters))
+
+
+def find_earnings_reporters(target_date: str) -> list[str]:
+    """
+    Return tickers to scan for target_date.
+    Placeholder rows are primary; when none exist, fall back to real discovery.
+    """
+    tickers: list[str] = []
+    seen: set[str] = set()
+
+    def add(values: list[str]) -> None:
+        for value in values:
+            ticker = _normalize_ticker(value)
+            if ticker and ticker not in seen:
+                seen.add(ticker)
+                tickers.append(ticker)
+
+    add(_placeholder_earnings_tickers(target_date))
+    if tickers:
+        return tickers
+
+    add(_stored_earnings_tickers(target_date))
+    if tickers:
+        return tickers
+
+    add([row.get("ticker", "") for row in get_earnings_calendar(target_date)])
+    if tickers:
+        return tickers
+
+    if os.getenv("EARNINGS_SCAN_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "on"}:
+        return _scan_popular_earnings_reporters(target_date)
+    return []
 
 
 def get_earnings_trade_for_date(ticker: str, target_date: str) -> dict:
@@ -1278,7 +1499,7 @@ def get_post_earnings_batch(target_date: str, custom_tickers: list[str] = None) 
 
 # ── Master analysis ────────────────────────────────────────────────────────────
 
-def get_full_earnings_analysis(ticker: str) -> dict:
+def get_full_earnings_analysis(ticker: str, detail: str = "auto") -> dict:
     try:
         tk   = yf.Ticker(ticker)
         hist = tk.history(period="2y", interval="1d")
@@ -1325,14 +1546,22 @@ def get_full_earnings_analysis(ticker: str) -> dict:
             if nd <= lr + timedelta(days=60):
                 next_date = None
 
-        expected_move = get_expected_move(ticker, next_date)
-        stats         = compute_history_stats(earnings_hist)
+        stats = compute_history_stats(earnings_hist)
+        post_mode = recently_reported and detail != "full"
 
-        from backend.services.analysis import get_fundamentals
-        fundamentals   = get_fundamentals(ticker) or {}
-        revisions      = get_estimate_revisions(ticker)
-        rev_beat       = get_revenue_beat_rate(ticker, earnings_hist)
-        news_sentiment = get_news_sentiment(ticker)
+        if post_mode:
+            expected_move = {"skipped": "post_earnings"}
+            fundamentals = {}
+            revisions = None
+            rev_beat = None
+            news_sentiment = None
+        else:
+            expected_move = get_expected_move(ticker, next_date)
+            from backend.services.analysis import get_fundamentals
+            fundamentals   = get_fundamentals(ticker) or {}
+            revisions      = get_estimate_revisions(ticker)
+            rev_beat       = get_revenue_beat_rate(ticker, earnings_hist)
+            news_sentiment = get_news_sentiment(ticker)
 
         direction = get_direction_score(
             ticker, current_price, hist,

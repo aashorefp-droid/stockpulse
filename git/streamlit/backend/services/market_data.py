@@ -66,6 +66,23 @@ def get_hourly_bars_alpaca(ticker: str, start_date: str, end_date: str, api_key:
     return df.set_index("dt_et")[["open", "high", "low", "close", "volume"]]
 
 
+def get_five_min_bars_alpaca(ticker: str, start_date: str, end_date: str, api_key: str, api_secret: str) -> pd.DataFrame:
+    data = alpaca_get(
+        f"/v2/stocks/{ticker}/bars",
+        {"timeframe": "5Min", "start": f"{start_date}T00:00:00Z", "end": f"{end_date}T23:59:59Z",
+         "adjustment": "all", "limit": 10000, "sort": "asc", "feed": "iex"},
+        api_key, api_secret,
+    )
+    bars = data.get("bars", [])
+    if not bars:
+        return pd.DataFrame()
+    df = pd.DataFrame(bars)
+    df["dt_utc"] = pd.to_datetime(df["t"], utc=True)
+    df["dt_et"] = df["dt_utc"].dt.tz_convert("America/New_York")
+    df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"})
+    return df.set_index("dt_et")[["open", "high", "low", "close", "volume"]]
+
+
 def get_hourly_bars_yfinance(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
     try:
         import yfinance as yf
@@ -90,18 +107,27 @@ def get_ohlcv_for_chart(ticker: str, period: str = "6mo") -> list[dict]:
     """Return daily OHLCV as list of dicts for TradingView Lightweight Charts."""
     try:
         import yfinance as yf
+        import math
         df = yf.Ticker(ticker).history(period=period, interval="1d")
         if df.empty:
             return []
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
         result = []
         for ts, row in df.iterrows():
+            o = float(row["Open"])
+            h = float(row["High"])
+            l = float(row["Low"])
+            c = float(row["Close"])
+            v = float(row.get("Volume", 0) or 0)
+            if any(math.isnan(x) for x in (o, h, l, c)):
+                continue
             result.append({
                 "time": ts.strftime("%Y-%m-%d"),
-                "open": round(float(row["Open"]), 2),
-                "high": round(float(row["High"]), 2),
-                "low": round(float(row["Low"]), 2),
-                "close": round(float(row["Close"]), 2),
-                "volume": int(row["Volume"]),
+                "open": round(o, 2),
+                "high": round(h, 2),
+                "low": round(l, 2),
+                "close": round(c, 2),
+                "volume": int(v) if not math.isnan(v) else 0,
             })
         return result
     except Exception:
