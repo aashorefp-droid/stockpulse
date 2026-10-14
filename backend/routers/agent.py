@@ -294,15 +294,26 @@ async def chat_with_agent(req: ChatRequest):
                 "content": f"INSTITUTIONAL TECHNICAL DATA FOR {active_ticker}:\n{json.dumps(tool_data, indent=2)}"
             })
 
-        # Try providers in fallback order
-        stream_succeeded = False
-        last_error = ""
+        # Determine candidate providers based on user request
+        candidate_chain = chain
+        if req.model:
+            requested = req.model.lower().strip()
+            matched = [p for p in chain if p["id"] == requested]
+            if matched:
+                # Put requested provider first, keeping remaining as fallback
+                candidate_chain = matched + [p for p in chain if p["id"] != requested]
+            else:
+                # Direct model name requested (e.g. llama3.2:1b)
+                for p in candidate_chain:
+                    if p["is_local"]:
+                        p["model"] = req.model
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            for idx, provider in enumerate(chain):
+        client_timeout = httpx.Timeout(120.0, connect=10.0, read=120.0)
+        async with httpx.AsyncClient(timeout=client_timeout) as client:
+            for idx, provider in enumerate(candidate_chain):
                 provider_id = provider["id"]
                 provider_name = provider["name"]
-                model_name = req.model or provider["model"]
+                model_name = provider["model"]
                 api_url = provider["url"]
                 headers = provider["headers"]
 
@@ -371,12 +382,12 @@ async def chat_with_agent(req: ChatRequest):
                         break
 
                 except Exception as ex:
-                    last_error = f"{provider_name}: {str(ex)}"
+                    last_error = f"{provider_name}: {type(ex).__name__} ({str(ex) or 'Connection error or timed out on CPU'})"
                     logger.warning(f"Exception calling {provider_name}: {ex}")
                     continue
 
         if not stream_succeeded:
-            msg = f"All 5 AI providers failed or are unconfigured. Last error: {last_error}. Please add a free GROQ_API_KEY or GEMINI_API_KEY in backend/.env."
+            msg = f"All 5 AI providers failed or are unconfigured. Last error: {last_error}. To get instant (~800 t/s) responses, add a 100% free GROQ_API_KEY (from https://console.groq.com) into backend/.env and restart backend."
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
 
         yield "data: [DONE]\n\n"

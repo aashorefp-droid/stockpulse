@@ -45,6 +45,7 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
     },
   ]);
   const [input, setInput] = useState("");
+  const [selectedModel, setSelectedModel] = useState<string>("auto");
   const [entryPrice, setEntryPrice] = useState<string>("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
@@ -64,16 +65,16 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
     fetch(`${API_BASE}/api/agent/status`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.provider === "ollama") {
-          setModelStatus(`🟢 Ollama (${data.recommended_model || "llama3.2:3b"})`);
+        if (data.primary) {
+          setModelStatus(data.primary);
         } else if (data.available) {
-          setModelStatus("🟢 Cloud AI Engine");
+          setModelStatus("🟢 AI Active");
         } else {
-          setModelStatus("🟡 Local Ollama (llama3.2:3b)");
+          setModelStatus("⚪ Local Ollama Offline");
         }
       })
       .catch(() => {
-        setModelStatus("🟢 Local Ollama (llama3.2:3b)");
+        setModelStatus("🟢 Auto Fallback");
       });
   }, []);
 
@@ -102,6 +103,7 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
           ticker: ticker || currentTicker || pathTicker || undefined,
           entry_price: !isNaN(Number(parsedEntry)) ? parsedEntry : undefined,
+          model: selectedModel !== "auto" ? selectedModel : undefined,
         }),
       });
 
@@ -127,8 +129,10 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
               if (eventData.type === "tool_start") {
                 setActiveTool(`Fetching live Volume Profile, Fib levels & Stop Loss for ${eventData.ticker}...`);
               } else if (eventData.type === "tool_done") {
-                setActiveTool(null);
-              } else if (eventData.type === "text_delta") {
+                setActiveTool(`✓ Retrieved analysis for ${eventData.ticker}`);
+              } else if (eventData.type === "status_note") {
+                setActiveTool(`🔄 ${eventData.content}`);
+              } else if (eventData.type === "text_delta" || eventData.type === "token") {
                 setActiveTool(null);
                 assistantReply += eventData.content;
                 setMessages((prev) => {
@@ -275,8 +279,20 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
                     <span className="text-[10px] text-slate-400 font-normal">All Tickers</span>
                   )}
                 </div>
-                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                  {modelStatus}
+                <div className="flex items-center gap-1.5 mt-1">
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="bg-[#151824] border border-slate-700 text-[10px] text-emerald-400 font-mono rounded px-1.5 py-0.5 focus:outline-none cursor-pointer"
+                    title="Select AI Engine"
+                  >
+                    <option value="auto" className="bg-[#151824] text-white">⚡ Auto Fallback</option>
+                    <option value="groq" className="bg-[#151824] text-white">🚀 Groq (800 t/s)</option>
+                    <option value="gemini" className="bg-[#151824] text-white">🧠 Gemini Flash</option>
+                    <option value="cerebras" className="bg-[#151824] text-white">⚡ Cerebras (1800 t/s)</option>
+                    <option value="openrouter" className="bg-[#151824] text-white">🌐 OpenRouter</option>
+                    <option value="ollama" className="bg-[#151824] text-white">💻 Local Ollama</option>
+                  </select>
                 </div>
               </div>
             </div>

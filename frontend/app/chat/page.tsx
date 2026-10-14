@@ -21,13 +21,14 @@ export default function ChatPage() {
     {
       role: "assistant",
       content:
-        "Hello! I am **StockPulse AI**, your institutional trading assistant powered by local Ollama.\n\nI can analyze Volume Profile (POC, VAL, VAH), Fibonacci retracements, systematically evaluate trade entries, and construct institutional risk-managed trade plans.\n\nSelect a ticker or ask me anything below!",
+        "Hello! I am **StockPulse AI**, your institutional trading assistant powered by multi-provider fast AI.\n\nI can analyze Volume Profile (POC, VAL, VAH), Fibonacci retracements, systematically evaluate trade entries, and construct institutional risk-managed trade plans.\n\nSelect a ticker or ask me anything below!",
     },
   ]);
   const [input, setInput] = useState("");
+  const [selectedModel, setSelectedModel] = useState<string>("auto");
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
-  const [modelStatus, setModelStatus] = useState<string>("Checking Ollama...");
+  const [modelStatus, setModelStatus] = useState<string>("Checking AI engine...");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -42,16 +43,16 @@ export default function ChatPage() {
     fetch(`${API_BASE}/api/agent/status`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.provider === "ollama") {
-          setModelStatus(`🟢 Ollama (${data.recommended_model || "llama3.2:3b"})`);
+        if (data.primary) {
+          setModelStatus(data.primary);
         } else if (data.available) {
-          setModelStatus("🟢 Cloud AI Engine");
+          setModelStatus("🟢 AI Engine Active");
         } else {
-          setModelStatus("🟡 Local Ollama (llama3.2:3b)");
+          setModelStatus("⚪ Local Ollama (Offline)");
         }
       })
       .catch(() => {
-        setModelStatus("🟢 Local Ollama (llama3.2:3b)");
+        setModelStatus("🟢 Auto Fallback Mode");
       });
   }, []);
 
@@ -81,6 +82,7 @@ export default function ChatPage() {
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
           ticker: targetTicker || undefined,
           entry_price: !isNaN(Number(parsedEntry)) ? parsedEntry : undefined,
+          model: selectedModel !== "auto" ? selectedModel : undefined,
         }),
       });
 
@@ -115,6 +117,8 @@ export default function ChatPage() {
               setActiveTool(`⚡ Calling ${parsed.tool}(ticker="${parsed.ticker}")...`);
             } else if (parsed.type === "tool_done") {
               setActiveTool(`✓ Retrieved live technicals & trade plan for ${parsed.ticker}`);
+            } else if (parsed.type === "status_note") {
+              setActiveTool(`🔄 ${parsed.content}`);
             } else if (parsed.type === "token") {
               assistantReply += parsed.content;
               setMessages((prev) => {
@@ -271,6 +275,23 @@ export default function ChatPage() {
               onChange={(e) => setEntryPrice(e.target.value)}
               className="w-20 bg-transparent text-white font-mono text-xs focus:outline-none placeholder-slate-600"
             />
+          </div>
+
+          {/* Engine Selector */}
+          <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2 py-1 rounded-lg">
+            <span className="text-[11px] text-slate-400 font-mono">Engine:</span>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="bg-transparent text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer"
+            >
+              <option value="auto" className="bg-[#151824] text-white">⚡ Auto (Automatic Fallback)</option>
+              <option value="groq" className="bg-[#151824] text-white">🚀 Groq (Llama 3.3 70B · 800 t/s)</option>
+              <option value="gemini" className="bg-[#151824] text-white">🧠 Google Gemini Flash</option>
+              <option value="cerebras" className="bg-[#151824] text-white">⚡ Cerebras (1,800 t/s)</option>
+              <option value="openrouter" className="bg-[#151824] text-white">🌐 OpenRouter (Free)</option>
+              <option value="ollama" className="bg-[#151824] text-white">💻 Local Ollama (Offline)</option>
+            </select>
           </div>
 
           <Link
