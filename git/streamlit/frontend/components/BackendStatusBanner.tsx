@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { usePathname } from "next/navigation";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 const CHECK_INTERVAL_MS = 45000; // Auto-verify in background every 45s
@@ -13,6 +14,11 @@ interface HealthDetails {
 }
 
 export default function BackendStatusBanner() {
+  const pathname = usePathname();
+  if (pathname?.startsWith("/chat")) {
+    return null;
+  }
+
   const [status, setStatus] = useState<"checking" | "online" | "offline">("checking");
   const [latency, setLatency] = useState<number | null>(null);
   const [lastChecked, setLastChecked] = useState<string | null>(null);

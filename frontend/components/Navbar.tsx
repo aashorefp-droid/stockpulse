@@ -1,9 +1,14 @@
 "use client";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 
 export default function Navbar() {
+  const pathname = usePathname();
+  if (pathname?.startsWith("/chat")) {
+    return null;
+  }
+
   const [q, setQ] = useState("");
   const [timeStr, setTimeStr] = useState<string>("");
   const [marketOpen, setMarketOpen] = useState<boolean>(false);

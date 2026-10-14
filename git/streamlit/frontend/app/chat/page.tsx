@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
@@ -289,59 +288,19 @@ export default function ChatPage() {
             />
           )}
 
-          {!isGeneral && (
-            <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2.5 py-1 rounded-lg">
-              <span className="text-xs text-slate-400 font-mono">Entry $:</span>
-              <input
-                type="number"
-                step="0.01"
-                placeholder="e.g. 97.78"
-                value={entryPrice}
-                onChange={(e) => setEntryPrice(e.target.value)}
-                className="w-20 bg-transparent text-white font-mono text-xs focus:outline-none placeholder-slate-600"
-              />
-            </div>
-          )}
-
-          {/* Engine Selector */}
-          <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2 py-1 rounded-lg">
-            <span className="text-[11px] text-slate-400 font-mono">Engine:</span>
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="bg-transparent text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer"
-            >
-              <option value="auto" className="bg-[#151824] text-white">⚡ Auto (Automatic Fallback)</option>
-              <option value="groq" className="bg-[#151824] text-white">🚀 Groq (Llama 3.3 70B · 800 t/s)</option>
-              <option value="gemini" className="bg-[#151824] text-white">🧠 Google Gemini Flash</option>
-              <option value="cerebras" className="bg-[#151824] text-white">⚡ Cerebras (1,800 t/s)</option>
-              <option value="openrouter" className="bg-[#151824] text-white">🌐 OpenRouter (Free)</option>
-              <option value="ollama" className="bg-[#151824] text-white">💻 Local Ollama (Offline)</option>
-            </select>
-          </div>
-
-          {!isGeneral && (
-            <Link
-              href={`/stock/${currentActiveTicker}`}
-              className="text-xs text-slate-400 hover:text-[#4d9fff] border border-slate-800 hover:border-[#4d9fff]/50 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-            >
-              <span>View {currentActiveTicker} Chart</span>
-              <span>↗</span>
-            </Link>
-          )}
-
           <button
             onClick={clearChat}
-            className="text-xs text-slate-500 hover:text-red-400 px-2 py-1 rounded transition-colors"
+            className="text-xs text-slate-400 hover:text-red-400 border border-slate-800 hover:border-red-500/30 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 font-medium ml-auto sm:ml-0"
             title="Clear Chat History"
           >
-            Clear
+            <span>🗑️</span>
+            <span>Clear</span>
           </button>
         </div>
       </div>
 
-      {/* ── CHAT WINDOW ─────────────────────────────────────────── */}
-      <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[650px] shadow-2xl relative overflow-hidden">
+      {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
+      <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
         {/* Messages List */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
           {messages.map((m, idx) => (
@@ -443,7 +402,7 @@ export default function ChatPage() {
             </button>
           </div>
           <div className="flex items-center justify-between mt-2 text-[10px] text-slate-500 font-mono">
-            <span>Powered by Ollama llama3.2:3b · Tool Calling Enabled</span>
+            <span>StockPulse AI · Real-Time Institutional Trade Plan Engine</span>
             <span>Shift + Enter for new line</span>
           </div>
         </div>

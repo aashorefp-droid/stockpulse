@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
+import { usePathname } from "next/navigation";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 const REFRESH_MS = 5 * 60 * 1000;
@@ -150,6 +151,11 @@ function opexInfo(today: Date): { tomorrow: boolean; kind: string; tone: string 
 }
 
 export default function MarketRisk() {
+  const pathname = usePathname();
+  if (pathname?.startsWith("/chat")) {
+    return null;
+  }
+
   const [data, setData]           = useState<MacroData | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
   const [loading, setLoading]     = useState(true);

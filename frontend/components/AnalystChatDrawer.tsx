@@ -19,6 +19,10 @@ interface Message {
 
 export default function AnalystChatDrawer({ currentTicker, currentPrice }: AnalystChatDrawerProps) {
   const pathname = usePathname();
+  if (pathname?.startsWith("/chat")) {
+    return null;
+  }
+
   const pathTicker = pathname?.startsWith("/stock/")
     ? pathname.split("/")[2]?.toUpperCase()
     : undefined;
