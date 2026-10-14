@@ -11,17 +11,17 @@ interface Message {
   toolStatus?: string;
 }
 
-const POPULAR_TICKERS = ["AAOI", "SPY", "QQQ", "NVDA", "TSLA", "MDT", "XLF"];
+const POPULAR_TICKERS = ["GENERAL", "AAOI", "SPY", "QQQ", "NVDA", "TSLA", "MDT", "XLF"];
 
 export default function ChatPage() {
-  const [ticker, setTicker] = useState("AAOI");
+  const [ticker, setTicker] = useState("GENERAL");
   const [customTicker, setCustomTicker] = useState("");
   const [entryPrice, setEntryPrice] = useState("");
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
       content:
-        "Hello! I am **StockPulse AI**, your institutional trading assistant powered by multi-provider fast AI.\n\nI can analyze Volume Profile (POC, VAL, VAH), Fibonacci retracements, systematically evaluate trade entries, and construct institutional risk-managed trade plans.\n\nSelect a ticker or ask me anything below!",
+        "Hello! I am **StockPulse AI**, your institutional trading and market mentor powered by multi-provider AI.\n\nAsk me any general market or technical question, scan the **Default 50** core universe, or select any stock ticker (e.g. AAOI, NVDA, SPY) to evaluate live Volume Profile, 52W Fib levels, fundamentals, and systematic trade plans!",
     },
   ]);
   const [input, setInput] = useState("");
@@ -73,7 +73,9 @@ export default function ChatPage() {
     try {
       const endpoint = `${API_BASE}/api/agent/chat`;
       const parsedEntry = entryPrice ? parseFloat(entryPrice) : undefined;
-      const targetTicker = ticker === "CUSTOM" ? customTicker.toUpperCase() : ticker;
+      const targetTicker = ticker === "CUSTOM"
+        ? (customTicker.toUpperCase() || undefined)
+        : (ticker === "GENERAL" ? undefined : ticker);
 
       const response = await fetch(endpoint, {
         method: "POST",
@@ -185,26 +187,46 @@ export default function ChatPage() {
     ]);
   };
 
-  const currentActiveTicker = ticker === "CUSTOM" ? customTicker.toUpperCase() || "AAOI" : ticker;
+  const isGeneral = ticker === "GENERAL";
+  const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
 
-  const quickPrompts = [
-    {
-      title: "Evaluate Setup & Trend",
-      prompt: `Analyze ${currentActiveTicker} setup today: Volume Profile POC/VAL/VAH, 52W Fib levels, and the systematic verdict.`,
-    },
-    {
-      title: "Review Entry & Risk Plan",
-      prompt: `I'm looking at entering ${currentActiveTicker}${entryPrice ? ` around $${entryPrice}` : ""}. Where is the exact line in the sand stop-loss and where should I take profit?`,
-    },
-    {
-      title: "Volume Profile Breakdown",
-      prompt: `Explain the Wyckoff Volume Profile for ${currentActiveTicker}: is it in accumulation or distribution? Where are the high volume nodes?`,
-    },
-    {
-      title: "Beta & Market Correlation",
-      prompt: `How does ${currentActiveTicker} react to market swings (SPY/QQQ)? What is its systematic risk and volatility profile?`,
-    },
-  ];
+  const quickPrompts = isGeneral
+    ? [
+        {
+          title: "Default 50 Best Pick",
+          prompt: "From Default 50 stocks, what is the best swing trade ticker today based on institutional scoring?",
+        },
+        {
+          title: "Wyckoff Volume Profile",
+          prompt: "Explain how Wyckoff Volume Profile POC, VAL, and VAH work for identifying institutional accumulation vs distribution.",
+        },
+        {
+          title: "52W Fib Retracements",
+          prompt: "How do 52-week Fibonacci retracements (61.8% Golden Ratio) determine entry invalidation and target levels?",
+        },
+        {
+          title: "High Beta Risk Management",
+          prompt: "How should a swing trader size positions and manage stop-losses on High Beta stocks (>1.5x SPY)?",
+        },
+      ]
+    : [
+        {
+          title: "Evaluate Setup & Trend",
+          prompt: `Analyze ${currentActiveTicker} setup today: Volume Profile POC/VAL/VAH, 52W Fib levels, fundamentals, and the systematic verdict.`,
+        },
+        {
+          title: "Review Entry & Risk Plan",
+          prompt: `I'm looking at entering ${currentActiveTicker}${entryPrice ? ` around $${entryPrice}` : ""}. Where is the exact line in the sand stop-loss and where should I take profit?`,
+        },
+        {
+          title: "Volume Profile & Fundamentals",
+          prompt: `Explain the Wyckoff Volume Profile and corporate fundamentals (P/E, revenue growth, short float) for ${currentActiveTicker}.`,
+        },
+        {
+          title: "Beta & Market Correlation",
+          prompt: `How does ${currentActiveTicker} react to market swings (SPY/QQQ)? What is its systematic risk and volatility profile?`,
+        },
+      ];
 
   return (
     <div className="max-w-5xl mx-auto space-y-4">
@@ -222,7 +244,9 @@ export default function ChatPage() {
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Institutional swing trade planning with autonomous tool-calling
+              {isGeneral
+                ? "General market mentorship, Default 50 universe scan & conceptual questions"
+                : `Institutional trade plan & technical/fundamental analysis for ${currentActiveTicker}`}
             </p>
           </div>
         </div>
@@ -240,7 +264,7 @@ export default function ChatPage() {
                     : "text-slate-400 hover:text-white hover:bg-slate-800"
                 }`}
               >
-                {t}
+                {t === "GENERAL" ? "🌐 General" : t}
               </button>
             ))}
             <button
@@ -265,17 +289,19 @@ export default function ChatPage() {
             />
           )}
 
-          <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2.5 py-1 rounded-lg">
-            <span className="text-xs text-slate-400 font-mono">Entry $:</span>
-            <input
-              type="number"
-              step="0.01"
-              placeholder="e.g. 97.78"
-              value={entryPrice}
-              onChange={(e) => setEntryPrice(e.target.value)}
-              className="w-20 bg-transparent text-white font-mono text-xs focus:outline-none placeholder-slate-600"
-            />
-          </div>
+          {!isGeneral && (
+            <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2.5 py-1 rounded-lg">
+              <span className="text-xs text-slate-400 font-mono">Entry $:</span>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="e.g. 97.78"
+                value={entryPrice}
+                onChange={(e) => setEntryPrice(e.target.value)}
+                className="w-20 bg-transparent text-white font-mono text-xs focus:outline-none placeholder-slate-600"
+              />
+            </div>
+          )}
 
           {/* Engine Selector */}
           <div className="flex items-center gap-1.5 bg-[#151824] border border-slate-800 px-2 py-1 rounded-lg">
@@ -294,13 +320,15 @@ export default function ChatPage() {
             </select>
           </div>
 
-          <Link
-            href={`/stock/${currentActiveTicker}`}
-            className="text-xs text-slate-400 hover:text-[#4d9fff] border border-slate-800 hover:border-[#4d9fff]/50 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
-          >
-            <span>View {currentActiveTicker} Chart</span>
-            <span>↗</span>
-          </Link>
+          {!isGeneral && (
+            <Link
+              href={`/stock/${currentActiveTicker}`}
+              className="text-xs text-slate-400 hover:text-[#4d9fff] border border-slate-800 hover:border-[#4d9fff]/50 px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+            >
+              <span>View {currentActiveTicker} Chart</span>
+              <span>↗</span>
+            </Link>
+          )}
 
           <button
             onClick={clearChat}

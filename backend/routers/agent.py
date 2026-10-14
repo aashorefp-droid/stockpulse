@@ -23,33 +23,32 @@ except ImportError:
     pass
 
 from backend.routers.analysis import get_stock_analysis
+from backend.services.scanner import WATCHLISTS
 
 logger = logging.getLogger("agent")
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 
-AGENT_SYSTEM_PROMPT = """You are StockPulse AI, an institutional-grade swing trader and risk analyst.
-You specialize in Wyckoff Volume Profile, Fibonacci Retracements, ATR targets, and Systematic Risk (Beta).
+AGENT_SYSTEM_PROMPT = """You are StockPulse AI, an institutional-grade swing trader, market mentor, and quantitative risk analyst.
+You have access to StockPulse's comprehensive multi-module data engine:
+1. Technical Framework: Wyckoff Volume Profile (Point of Control / POC, Value Area High / VAH, Value Area Low / VAL), 52-Week Fibonacci Retracements (61.8% Golden Ratio, 50%, 38.2%), and Stage 2 trend momentum.
+2. Systematic Risk Modeling: Beta vs SPY (systematic volatility scaling), Relative Strength line (RS 1-month trajectory), and ATR-based volatility targets.
+3. Corporate Fundamentals & Valuation: Market Capitalization, Trailing & Forward P/E multiples, Trailing EPS, Profit Margins, YoY Revenue Growth, Short Interest (% of float & short ratio / days to cover), and Wall Street Analyst consensus & price targets.
+4. Core Universe / Default 50 Watchlist: StockPulse's curated 50 high-liquidity stocks and ETFs (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, NFLX, CRM, COIN, etc.).
 
-Your Methodology:
-1. Volume Profile: Evaluate Point of Control (POC), Value Area High (VAH), and Value Area Low (VAL). Identify Bullish Accumulation vs Bearish Distribution.
-2. Fibonacci Retracements: Check 52-week Golden Ratio (61.8%), 38.2%, and 50% levels.
-3. Risk Management: If the user provides an entry price (e.g. "I entered at 97.78"), calculate their exact unrealized P&L%, distance to the nearest support/resistance, and give a 2-step battle plan:
-   - Bounce Target: where to trim/reduce risk (usually POC or nearest Fib).
-   - Invalidation Level: the line in the sand (usually below VAL).
-
-Rules:
-- Be concise, direct, and actionable.
-- Format numbers in clean markdown tables and bold levels.
-- Never guess or hallucinate indicators. Rely strictly on the provided technical data.
+Your Response Guidelines:
+- General Questions & Mentorship: If the user asks general trading questions, asks for explanations of indicators, or asks conceptual or platform questions, answer thoroughly, conversationally, and insightfully as an institutional trading mentor.
+- Universe / Watchlist Questions: If the user asks about the Default 50 universe, screeners, or top swing setups, analyze the provided universe setups and rank them by confluence, risk/reward, and trend alignment.
+- Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
+- Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
 
 AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_stock_technical_analysis",
-            "description": "Fetches live technical analysis, Volume Profile (POC, VAL, VAH), 52W Fibonacci levels, Beta, and Trade Plan (Entry, Stop Loss, Targets) for a stock ticker.",
+            "name": "get_stock_analysis",
+            "description": "Fetches live technical analysis, Volume Profile (POC, VAL, VAH), 52W Fibonacci levels, Beta, Trade Plan (Entry, Stop Loss, Targets), AND corporate fundamentals (P/E, Market Cap, Revenue Growth, Short Float, Wall St targets) for a stock ticker.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -59,6 +58,22 @@ AGENT_TOOLS = [
                     }
                 },
                 "required": ["ticker"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_universe_scan",
+            "description": "Fetches the Default 50 core stock universe and latest scanned trade setups.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "universe": {
+                        "type": "string",
+                        "description": "Watchlist name e.g. default, momentum, tech"
+                    }
+                }
             }
         }
     }
@@ -188,8 +203,22 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     raw = await get_stock_analysis(ticker)
     fj = raw.get("final_judgement") or {}
     tr = raw.get("trade") or {}
+    f = raw.get("fundamentals") or {}
+    vp = raw.get("volume_profile") or {}
+    fib = raw.get("fib_levels") or {}
+
+    rev_growth = f.get("revenue_growth")
+    rev_str = f"{round(rev_growth * 100, 1)}% YoY" if rev_growth is not None else "N/A"
+    short_pct = f.get("short_pct_float")
+    short_str = f"{short_pct}% of float" if short_pct is not None else "N/A"
+    upside = f.get("target_upside")
+    upside_str = f"{upside}%" if upside is not None else "N/A"
+
     return {
         "ticker": ticker,
+        "company_name": f.get("name") or ticker,
+        "sector": f.get("sector") or "N/A",
+        "industry": f.get("industry") or "N/A",
         "price": raw.get("current_price"),
         "verdict": raw.get("verdict"),
         "final_judgement": {
@@ -211,7 +240,72 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
             "rs_1m_change": tr.get("rs_1m_change"),
             "rs_trend": tr.get("rs_trend"),
         },
-        "nearest_fib": raw.get("nearest_fib"),
+        "volume_profile": {
+            "poc": vp.get("poc"),
+            "val": vp.get("val"),
+            "vah": vp.get("vah"),
+            "trend": vp.get("vol_trend_label"),
+            "bias": vp.get("vol_bias"),
+            "volume_ratio": vp.get("vol_ratio"),
+            "summary": vp.get("detail"),
+        },
+        "fibonacci_retracements": {
+            "golden_ratio_618": fib.get("fib_618") or fib.get("61.8%"),
+            "half_500": fib.get("fib_500") or fib.get("50.0%"),
+            "pullback_382": fib.get("fib_382") or fib.get("38.2%"),
+            "nearest_fib": raw.get("nearest_fib"),
+        },
+        "fundamentals_and_valuation": {
+            "market_cap": f.get("market_cap", "N/A"),
+            "pe_ratio": f.get("pe_ratio", "N/A"),
+            "forward_pe": f.get("forward_pe", "N/A"),
+            "eps": f.get("eps", "N/A"),
+            "profit_margin": f"{f.get('profit_margin')}%" if f.get("profit_margin") is not None else "N/A",
+            "revenue_growth": rev_str,
+            "short_interest": short_str,
+            "short_ratio_days_to_cover": f.get("short_ratio", "N/A"),
+            "analyst_recommendation": f.get("recommendation", "N/A"),
+            "analyst_price_target": f.get("analyst_target") or f.get("target_price", "N/A"),
+            "target_upside": upside_str,
+        },
+    }
+
+
+def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:
+    name = (watchlist_name or "default").lower().strip()
+    tickers = WATCHLISTS.get(name, WATCHLISTS.get("default", []))
+
+    # Read cached scan items if available
+    data_dir = Path(__file__).resolve().parent.parent.parent / "data"
+    cache_path = data_dir / "default50_premarket_cache.json"
+    cached_setups = []
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as fp:
+                cdata = json.load(fp)
+                cached_setups = cdata.get("items", [])
+        except Exception:
+            pass
+
+    top_picks = []
+    for s in cached_setups[:8]:
+        top_picks.append({
+            "ticker": s.get("ticker"),
+            "verdict": s.get("verdict"),
+            "score": s.get("score"),
+            "price": s.get("price"),
+            "entry": s.get("entry"),
+            "stop": s.get("stop"),
+            "target1": s.get("t1"),
+            "reward_risk": s.get("rr_t1"),
+        })
+
+    return {
+        "universe_name": f"Default 50 Core Universe ({len(tickers)} stocks)",
+        "sample_tickers": tickers,
+        "total_tickers": len(tickers),
+        "cached_top_setups": top_picks if top_picks else "No premarket cache file found; all 50 tickers are tracked in real-time.",
+        "note": "Default 50 consists of 50 high-beta and mega-cap leaders. The best setups feature Stage 2 breakout momentum, confluence score >= 2, and favorable R:R."
     }
 
 
@@ -276,28 +370,61 @@ async def chat_with_agent(req: ChatRequest):
     """
     chain = get_configured_providers()
 
-    # Determine ticker if mentioned in prompt or request
-    active_ticker = req.ticker
-    if len(req.messages) > 0:
-        last_user_text = req.messages[-1].content
-        dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
-        if dollar_tickers:
-            active_ticker = dollar_tickers[0].upper()
-        elif not active_ticker:
-            stop_words = {
-                "WHAT", "HOW", "WHEN", "WHERE", "WHY", "TODAY", "SELL", "BUY", "HOLD",
-                "CALL", "PUTS", "TRADE", "PLAN", "RISK", "PRICE", "AI", "LEVEL", "STOP",
-                "LOSS", "THE", "AND", "FOR", "CAN", "YOU", "SEE", "GOOD", "BAD", "ENTRY"
-            }
-            caps = [w for w in re.findall(r"\b[A-Z]{2,5}\b", last_user_text) if w not in stop_words]
-            if caps:
-                active_ticker = caps[0].upper()
+    # Determine intent: Universe query, General/Meta query, or Ticker-specific query
+    last_user_text = req.messages[-1].content if req.messages else ""
+    user_lower = last_user_text.lower().strip()
+
+    is_universe_query = any(k in user_lower for k in [
+        "default 50", "default50", "watchlist", "best swing", "top pick",
+        "top swing", "screener", "scanner", "rank", "which stock", "best trade",
+        "best ticker", "universe"
+    ])
+
+    is_general_query = any(user_lower.startswith(w) for w in [
+        "hello", "hi", "hey", "who are you", "what is", "how do", "explain",
+        "help", "why is chat", "what can you do", "tell me about", "what are"
+    ]) or "only aaoi" in user_lower or "general chat" in user_lower
+
+    # Explicit ticker mentioned in text
+    dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
+    explicit_ticker = None
+    if dollar_tickers:
+        explicit_ticker = dollar_tickers[0].upper()
+    else:
+        tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
+        known_stocks = set(WATCHLISTS.get("default", []) + ["AAOI", "MDT", "XLF", "SPY", "QQQ", "IWM"])
+        stop_words = {
+            "WHAT", "HOW", "WHEN", "WHERE", "WHY", "TODAY", "SELL", "BUY", "HOLD",
+            "CALL", "PUTS", "TRADE", "PLAN", "RISK", "PRICE", "AI", "LEVEL", "STOP",
+            "LOSS", "THE", "AND", "FOR", "CAN", "YOU", "SEE", "GOOD", "BAD", "ENTRY",
+            "FROM", "BEST", "ONLY", "INFO", "WORK"
+        }
+        for token in tokens:
+            up = token.upper()
+            if up in known_stocks and up not in stop_words:
+                explicit_ticker = up
+                break
+
+    active_ticker = explicit_ticker
+    if is_general_query or is_universe_query:
+        active_ticker = None
+    elif not active_ticker:
+        raw_req_t = (req.ticker or "").upper().strip()
+        if raw_req_t not in ["", "ALL", "GENERAL", "NONE", "AUTO", "CUSTOM"]:
+            active_ticker = raw_req_t
 
     async def sse_stream():
-        # Execute stock tool if ticker is relevant
         tool_data = None
-        if active_ticker:
-            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_stock_technical_analysis', 'ticker': active_ticker})}\n\n"
+        universe_data = None
+
+        if is_universe_query:
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_universe_scan', 'ticker': 'Default 50 Universe'})}\n\n"
+            universe_data = get_universe_tool("default")
+            t_cnt = universe_data.get("total_tickers", 50)
+            yield f"data: {json.dumps({'type': 'tool_done', 'ticker': 'Default 50 Universe', 'summary': f'Retrieved {t_cnt} tickers and top setups'})}\n\n"
+
+        elif active_ticker:
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_stock_analysis', 'ticker': active_ticker})}\n\n"
             try:
                 tool_data = await execute_stock_tool(active_ticker)
                 if req.entry_price:
@@ -316,15 +443,20 @@ async def chat_with_agent(req: ChatRequest):
         for m in req.messages:
             base_messages.append({"role": m.role, "content": m.content})
 
-        if tool_data:
+        if universe_data:
             base_messages.append({
                 "role": "system",
-                "content": f"INSTITUTIONAL TECHNICAL DATA FOR {active_ticker}:\n{json.dumps(tool_data, indent=2)}"
+                "content": f"INSTITUTIONAL UNIVERSE DATA (DEFAULT 50 CORE WATCHLIST):\n{json.dumps(universe_data, indent=2)}"
+            })
+        elif tool_data:
+            base_messages.append({
+                "role": "system",
+                "content": f"INSTITUTIONAL TECHNICAL & FUNDAMENTAL DATA FOR {active_ticker}:\n{json.dumps(tool_data, indent=2)}"
             })
 
         # Determine candidate providers based on user request
         candidate_chain = chain
-        if req.model:
+        if req.model and req.model.lower().strip() not in ["auto", "default", "none", ""]:
             requested = req.model.lower().strip()
             matched = [p for p in chain if p["id"] == requested]
             if matched:

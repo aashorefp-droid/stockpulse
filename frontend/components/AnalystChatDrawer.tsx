@@ -272,11 +272,16 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
                 <div className="text-xs font-bold text-white flex items-center gap-1.5 font-mono">
                   <span>StockPulse AI</span>
                   {ticker ? (
-                    <span className="px-1.5 py-0.2 rounded bg-[#00e5a0]/20 text-[#00e5a0] text-[10px] font-bold">
-                      {ticker}
-                    </span>
+                    <button
+                      onClick={() => setTicker("")}
+                      className="px-1.5 py-0.5 rounded bg-[#00e5a0]/20 text-[#00e5a0] text-[10px] font-bold hover:bg-red-500/20 hover:text-red-400 transition-all flex items-center gap-1"
+                      title="Switch to General Chat"
+                    >
+                      <span>{ticker}</span>
+                      <span className="text-[9px] opacity-70">✕</span>
+                    </button>
                   ) : (
-                    <span className="text-[10px] text-slate-400 font-normal">All Tickers</span>
+                    <span className="text-[10px] text-emerald-400/80 font-normal">🌐 General Chat</span>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 mt-1">
