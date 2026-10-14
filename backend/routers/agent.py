@@ -40,6 +40,7 @@ Your Response Guidelines:
 - General Questions & Mentorship: If the user asks general trading questions, asks for explanations of indicators, or asks conceptual or platform questions, answer thoroughly, conversationally, and insightfully as an institutional trading mentor.
 - Universe / Watchlist Questions: If the user asks about the Default 50 universe, screeners, or top swing setups, analyze the provided universe setups and rank them by confluence, risk/reward, and trend alignment.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
+- Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
 
@@ -385,28 +386,48 @@ async def chat_with_agent(req: ChatRequest):
         "help", "why is chat", "what can you do", "tell me about", "what are"
     ]) or "only aaoi" in user_lower or "general chat" in user_lower
 
-    # Explicit ticker mentioned in text
+    # Dynamic Ticker Detection for any US stock (SPCX, NVDA, TSLA, PLTR, AAOI, etc.)
     dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
     explicit_ticker = None
     if dollar_tickers:
         explicit_ticker = dollar_tickers[0].upper()
     else:
         tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
-        known_stocks = set(WATCHLISTS.get("default", []) + ["AAOI", "MDT", "XLF", "SPY", "QQQ", "IWM"])
-        stop_words = {
-            "WHAT", "HOW", "WHEN", "WHERE", "WHY", "TODAY", "SELL", "BUY", "HOLD",
-            "CALL", "PUTS", "TRADE", "PLAN", "RISK", "PRICE", "AI", "LEVEL", "STOP",
-            "LOSS", "THE", "AND", "FOR", "CAN", "YOU", "SEE", "GOOD", "BAD", "ENTRY",
-            "FROM", "BEST", "ONLY", "INFO", "WORK"
+        ticker_stop_words = {
+            "WHAT", "WHEN", "WHERE", "WHICH", "HOW", "WHY", "WHO", "WHOSE",
+            "TODAY", "YESTERDAY", "TOMORROW", "NOW", "LATER", "SOON",
+            "BUY", "SELL", "HOLD", "TRADE", "SWING", "LONG", "SHORT",
+            "CALL", "CALLS", "PUT", "PUTS", "OPTION", "OPTIONS",
+            "STOCK", "STOCKS", "SHARE", "SHARES", "TICKER", "TICKERS",
+            "PRICE", "PRICES", "LEVEL", "LEVELS", "TARGET", "TARGETS",
+            "STOP", "STOPS", "LOSS", "LOSSES", "RISK", "REWARD", "PLAN",
+            "ENTRY", "ENTRIES", "EXIT", "EXITS", "POINT", "POINTS",
+            "POC", "VAL", "VAH", "FIB", "FIBS", "BETA", "RSI", "MACD", "EMA", "SMA",
+            "GOOD", "BAD", "BEST", "WORST", "TOP", "BOTTOM", "HIGH", "LOW",
+            "MORE", "LESS", "MUCH", "MANY", "SOME", "ANY", "ALL", "NONE",
+            "WITH", "FROM", "INTO", "OVER", "UNDER", "ABOVE", "BELOW",
+            "THIS", "THAT", "THESE", "THOSE", "THEIR", "THERE", "HERE",
+            "THE", "AND", "OR", "BUT", "FOR", "NOR", "YET", "SO",
+            "CAN", "COULD", "WILL", "WOULD", "SHALL", "SHOULD", "MAY", "MIGHT", "MUST",
+            "HAVE", "HAS", "HAD", "BEEN", "BEING", "WERE", "WAS", "ARE", "IS", "AM",
+            "GIVE", "SHOW", "TELL", "FIND", "LOOK", "SEEK", "WANT", "NEED",
+            "CHAT", "LIVE", "DATA", "INFO", "WORK", "PAGE", "USER", "AI",
+            "WRONG", "RIGHT", "TRUE", "FALSE", "REAL", "FAKE", "LAST", "NOTE",
+            "DEFAULT", "UNIVERSE", "WATCH", "LIST", "VIEW", "CHART", "OPEN", "DROP",
+            "ABOUT", "ONLY", "ITS", "IT", "NOT", "YES", "NO", "SURE", "FINE",
+            "HELP", "LIKE", "NEWS", "AUTO", "TECH", "EDIT", "TEST", "TIME",
+            "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW"
         }
         for token in tokens:
             up = token.upper()
-            if up in known_stocks and up not in stop_words:
+            if up not in ticker_stop_words:
                 explicit_ticker = up
                 break
 
     active_ticker = explicit_ticker
-    if is_general_query or is_universe_query:
+    if is_universe_query:
+        active_ticker = None
+    elif is_general_query and not dollar_tickers:
         active_ticker = None
     elif not active_ticker:
         raw_req_t = (req.ticker or "").upper().strip()
