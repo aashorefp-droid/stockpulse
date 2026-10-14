@@ -4,7 +4,7 @@ import json
 import logging
 import httpx
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -13,9 +13,6 @@ from backend.routers.analysis import get_stock_analysis
 logger = logging.getLogger("agent")
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
-
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 AGENT_SYSTEM_PROMPT = """You are StockPulse AI, an institutional-grade swing trader and risk analyst.
 You specialize in Wyckoff Volume Profile, Fibonacci Retracements, ATR targets, and Systematic Risk (Beta).
@@ -66,6 +63,98 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+def get_configured_providers() -> List[Dict[str, Any]]:
+    """
+    Returns the 5-provider fallback chain in priority order:
+    1. Groq (~800 t/s, 100% Free): https://console.groq.com
+    2. Google Gemini Flash (1,500 req/day Free): https://aistudio.google.com
+    3. Cerebras (~1,800 t/s Free Tier): https://cloud.cerebras.ai
+    4. OpenRouter (Free community models): https://openrouter.ai
+    5. Local Ollama (Offline fallback on your machine): http://localhost:11434
+    """
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    cerebras_key = os.getenv("CEREBRAS_API_KEY", "").strip()
+    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
+
+    chain = []
+
+    # Priority 1: Groq Cloud (Recommended: ~800 t/s)
+    if groq_key:
+        chain.append({
+            "id": "groq",
+            "name": "Groq Cloud",
+            "model": "llama-3.3-70b-versatile",
+            "url": "https://api.groq.com/openai/v1/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            },
+            "speed": "~800 t/s",
+            "is_local": False
+        })
+
+    # Priority 2: Google Gemini Flash (1,500 req/day)
+    if gemini_key:
+        chain.append({
+            "id": "gemini",
+            "name": "Google Gemini",
+            "model": "gemini-1.5-flash",
+            "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {gemini_key}",
+                "Content-Type": "application/json"
+            },
+            "speed": "~150 t/s",
+            "is_local": False
+        })
+
+    # Priority 3: Cerebras Cloud (~1,800 t/s)
+    if cerebras_key:
+        chain.append({
+            "id": "cerebras",
+            "name": "Cerebras Cloud",
+            "model": "llama3.1-8b",
+            "url": "https://api.cerebras.ai/v1/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {cerebras_key}",
+                "Content-Type": "application/json"
+            },
+            "speed": "~1,800 t/s",
+            "is_local": False
+        })
+
+    # Priority 4: OpenRouter Free Models
+    if openrouter_key:
+        chain.append({
+            "id": "openrouter",
+            "name": "OpenRouter",
+            "model": "meta-llama/llama-3.3-70b-instruct:free",
+            "url": "https://openrouter.ai/api/v1/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json"
+            },
+            "speed": "Cloud Free",
+            "is_local": False
+        })
+
+    # Priority 5: Local Ollama (Always included as offline fallback)
+    chain.append({
+        "id": "ollama",
+        "name": "Local Ollama",
+        "model": ollama_model,
+        "url": f"{ollama_host}/api/chat",
+        "headers": {"Content-Type": "application/json"},
+        "speed": "Local CPU",
+        "is_local": True
+    })
+
+    return chain
+
+
 async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     ticker = ticker.upper().strip()
     raw = await get_stock_analysis(ticker)
@@ -100,250 +189,196 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
 
 @router.get("/status")
 async def get_agent_status():
-    """Checks if Groq (ultra fast free tier), OpenRouter, or local Ollama is active."""
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    """
+    Returns active primary AI provider and all configured fallbacks.
+    """
+    chain = get_configured_providers()
+    primary = chain[0] if chain else None
 
-    if groq_key:
-        return {
-            "provider": "groq",
-            "available": True,
-            "recommended_model": "llama-3.3-70b-versatile",
-            "label": "Groq Cloud (800 t/s · Llama 3.3 70B)",
-        }
-
-    if openrouter_key:
-        return {
-            "provider": "openrouter",
-            "available": True,
-            "recommended_model": "meta-llama/llama-3.3-70b-instruct:free",
-            "label": "OpenRouter Free (Llama 3.3 70B)",
-        }
-
+    # Check local Ollama connectivity
+    ollama_online = False
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            resp = await client.get(f"{OLLAMA_HOST}/api/tags")
-            if resp.status_code == 200:
-                data = resp.json()
-                models = [m.get("name") for m in data.get("models", [])]
-                return {
-                    "provider": "ollama",
-                    "available": True,
-                    "host": OLLAMA_HOST,
-                    "models": models,
-                    "recommended_model": DEFAULT_OLLAMA_MODEL if DEFAULT_OLLAMA_MODEL in models else (models[0] if models else DEFAULT_OLLAMA_MODEL),
-                    "label": f"Local Ollama ({DEFAULT_OLLAMA_MODEL})",
-                }
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            r = await client.get(f"{ollama_host}/api/tags")
+            ollama_online = (r.status_code == 200)
     except Exception:
-        pass
+        ollama_online = False
+
+    chain_summary = []
+    for p in chain:
+        if p["id"] == "ollama":
+            status = "🟢 Online" if ollama_online else "⚪ Offline"
+        else:
+            status = "🟢 Configured"
+        chain_summary.append({
+            "id": p["id"],
+            "name": p["name"],
+            "model": p["model"],
+            "speed": p["speed"],
+            "status": status,
+        })
+
+    primary_label = f"{primary['name']} ({primary['model']})" if primary else "None"
+    if primary and primary["id"] == "groq":
+        primary_label = "🟢 Groq Cloud (~800 t/s · Llama 3.3 70B)"
+    elif primary and primary["id"] == "gemini":
+        primary_label = "🟢 Google Gemini Flash (~150 t/s)"
+    elif primary and primary["id"] == "cerebras":
+        primary_label = "🟢 Cerebras Cloud (~1,800 t/s)"
+    elif primary and primary["id"] == "openrouter":
+        primary_label = "🟢 OpenRouter (Llama 3.3 70B Free)"
+    elif primary and primary["id"] == "ollama":
+        primary_label = f"{'🟢' if ollama_online else '⚪'} Local Ollama ({primary['model']})"
 
     return {
-        "provider": "none",
-        "available": False,
-        "label": "No provider connected",
-        "message": "Add free GROQ_API_KEY in backend/.env for 800 t/s speed, or run Ollama locally."
+        "available": bool(len(chain) > 1 or ollama_online),
+        "primary": primary_label,
+        "primary_id": primary["id"] if primary else None,
+        "chain": chain_summary,
+        "fallback_count": len(chain) - 1,
     }
 
 
 @router.post("/chat")
 async def chat_with_agent(req: ChatRequest):
     """
-    Real-time streaming agent chat with tool-calling for stock analysis.
-    Supports Groq (free 800 t/s Llama 3.3 70B), OpenRouter, and Local Ollama.
+    Streaming chat endpoint with 5-provider automatic fallback:
+    Groq -> Gemini Flash -> Cerebras -> OpenRouter -> Local Ollama
     """
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    chain = get_configured_providers()
 
-    if groq_key:
-        provider = "groq"
-        api_url = "https://api.groq.com/openai/v1/chat/completions"
-        auth_header = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-        model_name = req.model or "llama-3.3-70b-versatile"
-    elif openrouter_key:
-        provider = "openrouter"
-        api_url = "https://openrouter.ai/api/v1/chat/completions"
-        auth_header = {"Authorization": f"Bearer {openrouter_key}", "Content-Type": "application/json"}
-        model_name = req.model or "meta-llama/llama-3.3-70b-instruct:free"
-    else:
-        provider = "ollama"
-        api_url = f"{OLLAMA_HOST}/api/chat"
-        auth_header = {"Content-Type": "application/json"}
-        model_name = req.model or DEFAULT_OLLAMA_MODEL
-
-    formatted_messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
-    for m in req.messages:
-        formatted_messages.append({"role": m.role, "content": m.content})
+    # Determine ticker if mentioned in prompt or request
+    active_ticker = req.ticker
+    if len(req.messages) > 0:
+        last_user_text = req.messages[-1].content
+        dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
+        if dollar_tickers:
+            active_ticker = dollar_tickers[0].upper()
+        elif not active_ticker:
+            stop_words = {
+                "WHAT", "HOW", "WHEN", "WHERE", "WHY", "TODAY", "SELL", "BUY", "HOLD",
+                "CALL", "PUTS", "TRADE", "PLAN", "RISK", "PRICE", "AI", "LEVEL", "STOP",
+                "LOSS", "THE", "AND", "FOR", "CAN", "YOU", "SEE", "GOOD", "BAD", "ENTRY"
+            }
+            caps = [w for w in re.findall(r"\b[A-Z]{2,5}\b", last_user_text) if w not in stop_words]
+            if caps:
+                active_ticker = caps[0].upper()
 
     async def sse_stream():
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # 1. First call to determine tool-calling
-            if provider in ["groq", "openrouter"]:
-                payload = {
-                    "model": model_name,
-                    "messages": formatted_messages,
-                    "tools": AGENT_TOOLS,
-                    "tool_choice": "auto",
-                    "stream": False,
-                }
-            else:
-                payload = {
-                    "model": model_name,
-                    "messages": formatted_messages,
-                    "tools": AGENT_TOOLS,
-                    "stream": False,
-                }
-
+        # Execute stock tool if ticker is relevant
+        tool_data = None
+        if active_ticker:
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_stock_technical_analysis', 'ticker': active_ticker})}\n\n"
             try:
-                resp = await client.post(api_url, json=payload, headers=auth_header)
+                tool_data = await execute_stock_tool(active_ticker)
+                if req.entry_price:
+                    tool_data["user_entry_price"] = req.entry_price
+                    diff = tool_data["price"] - req.entry_price
+                    diff_pct = (diff / req.entry_price) * 100
+                    tool_data["user_unrealized_pnl"] = f"{diff:+.2f} ({diff_pct:+.2f}%)"
+
+                yield f"data: {json.dumps({'type': 'tool_done', 'ticker': active_ticker, 'summary': tool_data.get('final_judgement', {}).get('summary')})}\n\n"
             except Exception as e:
-                err_msg = f"Cannot reach AI engine ({provider}): {str(e)}."
-                yield f"data: {json.dumps({'type': 'error', 'content': err_msg})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+                logger.error(f"Error executing stock tool for {active_ticker}: {e}")
+                tool_data = {"error": f"Failed to retrieve data for {active_ticker}: {str(e)}"}
 
-            if resp.status_code != 200:
-                yield f"data: {json.dumps({'type': 'error', 'content': f'{provider} error ({resp.status_code}): {resp.text}'})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+        # Prepare messages
+        base_messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}]
+        for m in req.messages:
+            base_messages.append({"role": m.role, "content": m.content})
 
-            data = resp.json()
+        if tool_data:
+            base_messages.append({
+                "role": "system",
+                "content": f"INSTITUTIONAL TECHNICAL DATA FOR {active_ticker}:\n{json.dumps(tool_data, indent=2)}"
+            })
 
-            # Parse tool calls across providers
-            if provider in ["groq", "openrouter"]:
-                choice = (data.get("choices") or [{}])[0]
-                assistant_msg = choice.get("message", {})
-                tool_calls = assistant_msg.get("tool_calls", [])
-            else:
-                assistant_msg = data.get("message", {})
-                tool_calls = assistant_msg.get("tool_calls", [])
+        # Try providers in fallback order
+        stream_succeeded = False
+        last_error = ""
 
-            # Check if user mentioned a ticker in context or query
-            active_ticker = req.ticker
-            if not tool_calls and len(req.messages) > 0:
-                last_user_text = req.messages[-1].content
-                dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
-                inferred = dollar_tickers[0].upper() if dollar_tickers else None
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            for idx, provider in enumerate(chain):
+                provider_id = provider["id"]
+                provider_name = provider["name"]
+                model_name = req.model or provider["model"]
+                api_url = provider["url"]
+                headers = provider["headers"]
 
-                if not inferred:
-                    stop_words = {
-                        "WHAT", "HOW", "WHEN", "WHERE", "WHY", "TODAY", "SELL", "BUY", "HOLD",
-                        "CALL", "PUTS", "TRADE", "PLAN", "RISK", "PRICE", "AI", "LEVEL", "STOP",
-                        "LOSS", "THE", "AND", "FOR", "CAN", "YOU", "SEE", "GOOD", "BAD", "ENTRY"
-                    }
-                    caps = [w for w in re.findall(r"\b[A-Z]{2,5}\b", last_user_text) if w not in stop_words]
-                    if caps:
-                        inferred = caps[0].upper()
+                if idx > 0:
+                    yield f"data: {json.dumps({'type': 'status_note', 'content': f'Failing over to {provider_name} ({model_name})...' })}\n\n"
 
-                if not inferred and active_ticker:
-                    inferred = active_ticker.upper()
+                try:
+                    if provider["is_local"]:
+                        # Local Ollama native streaming
+                        payload = {
+                            "model": model_name,
+                            "messages": base_messages,
+                            "stream": True,
+                        }
+                        async with client.stream("POST", api_url, json=payload, headers=headers) as resp:
+                            if resp.status_code != 200:
+                                last_error = f"{provider_name} HTTP {resp.status_code}"
+                                continue
 
-                if inferred:
-                    user_upper = last_user_text.upper()
-                    trigger_keywords = [
-                        "ANALYZE", "LOOKING", "SHOULD I", "BOUGHT", "ENTERED", "SUPPORT",
-                        "RESISTANCE", "SETUP", "TARGET", "LEVELS", "FIB", "HOW IS", "HOW DID",
-                        "WHAT ABOUT", "OPINION", "THINK OF", "REVIEW", "CHART", "STOCK"
-                    ]
-                    if active_ticker or any(k in user_upper for k in trigger_keywords) or dollar_tickers:
-                        tool_calls = [{
-                            "id": "call_stock_tool",
-                            "type": "function",
-                            "function": {
-                                "name": "get_stock_technical_analysis",
-                                "arguments": json.dumps({"ticker": inferred}) if provider != "ollama" else {"ticker": inferred}
-                            }
-                        }]
-                        active_ticker = inferred
-
-            # 2. Execute requested tools
-            if tool_calls:
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    fn_name = fn.get("name")
-                    fn_args = fn.get("arguments", {})
-                    if isinstance(fn_args, str):
-                        try:
-                            fn_args = json.loads(fn_args)
-                        except Exception:
-                            fn_args = {}
-                    target_ticker = fn_args.get("ticker") or active_ticker or "SPY"
-
-                    yield f"data: {json.dumps({'type': 'tool_start', 'tool': fn_name, 'ticker': target_ticker})}\n\n"
-
-                    try:
-                        tool_data = await execute_stock_tool(target_ticker)
-                        if req.entry_price:
-                            tool_data["user_entry_price"] = req.entry_price
-                            diff = tool_data["price"] - req.entry_price
-                            diff_pct = (diff / req.entry_price) * 100
-                            tool_data["user_unrealized_pnl"] = f"{diff:+.2f} ({diff_pct:+.2f}%)"
-
-                        if provider in ["groq", "openrouter"]:
-                            formatted_messages.append(assistant_msg)
-                            formatted_messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id", "call_stock_tool"),
-                                "content": json.dumps(tool_data)
-                            })
-                        else:
-                            formatted_messages.append(assistant_msg if assistant_msg.get("content") or assistant_msg.get("tool_calls") else {
-                                "role": "assistant",
-                                "content": f"Looking up institutional technical analysis for {target_ticker}..."
-                            })
-                            formatted_messages.append({
-                                "role": "tool",
-                                "content": json.dumps(tool_data)
-                            })
-
-                        yield f"data: {json.dumps({'type': 'tool_done', 'ticker': target_ticker, 'summary': tool_data.get('final_judgement', {}).get('summary')})}\n\n"
-                    except Exception as e:
-                        logger.error(f"Error executing stock tool: {e}")
-                        formatted_messages.append({
-                            "role": "tool",
-                            "content": json.dumps({"error": f"Failed to retrieve data for {target_ticker}: {str(e)}"})
-                        })
-
-                # 3. Stream final synthesized response
-                synth_payload = {
-                    "model": model_name,
-                    "messages": formatted_messages,
-                    "stream": True,
-                }
-
-                async with client.stream("POST", api_url, json=synth_payload, headers=auth_header) as stream_resp:
-                    async for line in stream_resp.aiter_lines():
-                        if not line:
-                            continue
-
-                        if provider in ["groq", "openrouter"]:
-                            if line.startswith("data: "):
-                                chunk_str = line.replace("data: ", "").strip()
-                                if chunk_str == "[DONE]":
-                                    break
+                            async for line in resp.aiter_lines():
+                                if not line:
+                                    continue
                                 try:
-                                    chunk = json.loads(chunk_str)
-                                    delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-                                    delta_text = delta.get("content", "")
-                                    if delta_text:
-                                        yield f"data: {json.dumps({'type': 'token', 'content': delta_text})}\n\n"
+                                    chunk = json.loads(line)
+                                    delta = chunk.get("message", {}).get("content", "")
+                                    if delta:
+                                        stream_succeeded = True
+                                        yield f"data: {json.dumps({'type': 'token', 'content': delta})}\n\n"
+                                    if chunk.get("done"):
+                                        break
                                 except Exception:
                                     pass
-                        else:
-                            try:
-                                chunk = json.loads(line)
-                                delta_text = chunk.get("message", {}).get("content", "")
-                                if delta_text:
-                                    yield f"data: {json.dumps({'type': 'token', 'content': delta_text})}\n\n"
-                                if chunk.get("done"):
-                                    break
-                            except Exception:
-                                pass
-            else:
-                # Direct reply without tools
-                content = assistant_msg.get("content", "")
-                if content:
-                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
 
-            yield "data: [DONE]\n\n"
+                    else:
+                        # Cloud OpenAI-compatible streaming (Groq, Gemini, Cerebras, OpenRouter)
+                        payload = {
+                            "model": model_name,
+                            "messages": base_messages,
+                            "stream": True,
+                        }
+                        async with client.stream("POST", api_url, json=payload, headers=headers) as resp:
+                            if resp.status_code != 200:
+                                err_body = await resp.aread()
+                                last_error = f"{provider_name} HTTP {resp.status_code}: {err_body.decode(errors='ignore')[:120]}"
+                                logger.warning(f"Provider {provider_name} failed: {last_error}")
+                                continue
+
+                            async for line in resp.aiter_lines():
+                                if not line:
+                                    continue
+                                if line.startswith("data: "):
+                                    chunk_str = line.replace("data: ", "").strip()
+                                    if chunk_str == "[DONE]":
+                                        break
+                                    try:
+                                        chunk = json.loads(chunk_str)
+                                        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
+                                        delta_text = delta.get("content", "")
+                                        if delta_text:
+                                            stream_succeeded = True
+                                            yield f"data: {json.dumps({'type': 'token', 'content': delta_text})}\n\n"
+                                    except Exception:
+                                        pass
+
+                    if stream_succeeded:
+                        break
+
+                except Exception as ex:
+                    last_error = f"{provider_name}: {str(ex)}"
+                    logger.warning(f"Exception calling {provider_name}: {ex}")
+                    continue
+
+        if not stream_succeeded:
+            msg = f"All 5 AI providers failed or are unconfigured. Last error: {last_error}. Please add a free GROQ_API_KEY or GEMINI_API_KEY in backend/.env."
+            yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
+
+        yield "data: [DONE]\n\n"
 
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
