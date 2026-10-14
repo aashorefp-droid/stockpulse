@@ -2,11 +2,25 @@ import os
 import re
 import json
 import logging
-import httpx
+import asyncio
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+import httpx
+
+# Ensure local .env is loaded
+try:
+    from dotenv import load_dotenv
+    _backend_env = Path(__file__).resolve().parent.parent / ".env"
+    _root_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    if _backend_env.exists():
+        load_dotenv(_backend_env, override=True)
+    if _root_env.exists():
+        load_dotenv(_root_env, override=False)
+except ImportError:
+    pass
 
 from backend.routers.analysis import get_stock_analysis
 
@@ -63,14 +77,28 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
 
 
+def is_valid_key(val: str, prefix: str = "") -> bool:
+    if not val:
+        return False
+    clean = val.strip().strip('"').strip("'")
+    if clean in [
+        "GROQ_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY",
+        "OPENROUTER_API_KEY", "your_key_here", "gsk_your_actual_key_here"
+    ]:
+        return False
+    if prefix and not clean.startswith(prefix):
+        return False
+    return len(clean) >= 12
+
+
 def get_configured_providers() -> List[Dict[str, Any]]:
     """
-    Returns the 5-provider fallback chain in priority order:
-    1. Groq (~800 t/s, 100% Free): https://console.groq.com
-    2. Google Gemini Flash (1,500 req/day Free): https://aistudio.google.com
-    3. Cerebras (~1,800 t/s Free Tier): https://cloud.cerebras.ai
-    4. OpenRouter (Free community models): https://openrouter.ai
-    5. Local Ollama (Offline fallback on your machine): http://localhost:11434
+    Returns active AI providers in priority order:
+    1. Groq Cloud (Recommended: ~800 t/s)
+    2. Google Gemini (Live tested with user key: ~150 t/s)
+    3. Cerebras Cloud (~1,800 t/s)
+    4. OpenRouter (Free models: nemotron-3.5-lightning:free / liquid:free)
+    5. Local Ollama (Always included as offline fallback)
     """
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -81,8 +109,8 @@ def get_configured_providers() -> List[Dict[str, Any]]:
 
     chain = []
 
-    # Priority 1: Groq Cloud (Recommended: ~800 t/s)
-    if groq_key:
+    # Priority 1: Groq Cloud
+    if is_valid_key(groq_key, prefix="gsk_"):
         chain.append({
             "id": "groq",
             "name": "Groq Cloud",
@@ -96,12 +124,12 @@ def get_configured_providers() -> List[Dict[str, Any]]:
             "is_local": False
         })
 
-    # Priority 2: Google Gemini Flash (1,500 req/day)
-    if gemini_key:
+    # Priority 2: Google Gemini (Active with user's key)
+    if is_valid_key(gemini_key):
         chain.append({
             "id": "gemini",
             "name": "Google Gemini",
-            "model": "gemini-1.5-flash",
+            "model": "gemini-3.8-flash",
             "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             "headers": {
                 "Authorization": f"Bearer {gemini_key}",
@@ -111,8 +139,8 @@ def get_configured_providers() -> List[Dict[str, Any]]:
             "is_local": False
         })
 
-    # Priority 3: Cerebras Cloud (~1,800 t/s)
-    if cerebras_key:
+    # Priority 3: Cerebras Cloud
+    if is_valid_key(cerebras_key):
         chain.append({
             "id": "cerebras",
             "name": "Cerebras Cloud",
@@ -127,11 +155,11 @@ def get_configured_providers() -> List[Dict[str, Any]]:
         })
 
     # Priority 4: OpenRouter Free Models
-    if openrouter_key:
+    if is_valid_key(openrouter_key, prefix="sk-or-v1-"):
         chain.append({
             "id": "openrouter",
             "name": "OpenRouter",
-            "model": "meta-llama/llama-3.3-70b-instruct:free",
+            "model": "nvidia/nemotron-3.5-lightning:free",
             "url": "https://openrouter.ai/api/v1/chat/completions",
             "headers": {
                 "Authorization": f"Bearer {openrouter_key}",
@@ -210,7 +238,7 @@ async def get_agent_status():
         if p["id"] == "ollama":
             status = "🟢 Online" if ollama_online else "⚪ Offline"
         else:
-            status = "🟢 Configured"
+            status = "🟢 Ready"
         chain_summary.append({
             "id": p["id"],
             "name": p["name"],
@@ -223,11 +251,11 @@ async def get_agent_status():
     if primary and primary["id"] == "groq":
         primary_label = "🟢 Groq Cloud (~800 t/s · Llama 3.3 70B)"
     elif primary and primary["id"] == "gemini":
-        primary_label = "🟢 Google Gemini Flash (~150 t/s)"
+        primary_label = "🟢 Google Gemini (~150 t/s · Flash)"
     elif primary and primary["id"] == "cerebras":
         primary_label = "🟢 Cerebras Cloud (~1,800 t/s)"
     elif primary and primary["id"] == "openrouter":
-        primary_label = "🟢 OpenRouter (Llama 3.3 70B Free)"
+        primary_label = "🟢 OpenRouter (Cloud Free)"
     elif primary and primary["id"] == "ollama":
         primary_label = f"{'🟢' if ollama_online else '⚪'} Local Ollama ({primary['model']})"
 
@@ -300,13 +328,14 @@ async def chat_with_agent(req: ChatRequest):
             requested = req.model.lower().strip()
             matched = [p for p in chain if p["id"] == requested]
             if matched:
-                # Put requested provider first, keeping remaining as fallback
                 candidate_chain = matched + [p for p in chain if p["id"] != requested]
             else:
-                # Direct model name requested (e.g. llama3.2:1b)
                 for p in candidate_chain:
                     if p["is_local"]:
                         p["model"] = req.model
+
+        stream_succeeded = False
+        last_error = ""
 
         client_timeout = httpx.Timeout(120.0, connect=10.0, read=120.0)
         async with httpx.AsyncClient(timeout=client_timeout) as client:
@@ -348,35 +377,40 @@ async def chat_with_agent(req: ChatRequest):
                                     pass
 
                     else:
-                        # Cloud OpenAI-compatible streaming (Groq, Gemini, Cerebras, OpenRouter)
+                        # Cloud provider (Groq, Gemini, Cerebras, OpenRouter)
+                        # We try non-streaming first or direct streaming:
                         payload = {
                             "model": model_name,
                             "messages": base_messages,
-                            "stream": True,
+                            "stream": False,
                         }
-                        async with client.stream("POST", api_url, json=payload, headers=headers) as resp:
-                            if resp.status_code != 200:
-                                err_body = await resp.aread()
-                                last_error = f"{provider_name} HTTP {resp.status_code}: {err_body.decode(errors='ignore')[:120]}"
-                                logger.warning(f"Provider {provider_name} failed: {last_error}")
-                                continue
+                        resp = await client.post(api_url, json=payload, headers=headers)
+                        if resp.status_code != 200:
+                            err_body = resp.text[:120]
+                            last_error = f"{provider_name} HTTP {resp.status_code}: {err_body}"
+                            logger.warning(f"Provider {provider_name} failed: {last_error}")
+                            continue
 
-                            async for line in resp.aiter_lines():
-                                if not line:
-                                    continue
-                                if line.startswith("data: "):
-                                    chunk_str = line.replace("data: ", "").strip()
-                                    if chunk_str == "[DONE]":
-                                        break
-                                    try:
-                                        chunk = json.loads(chunk_str)
-                                        delta = (chunk.get("choices") or [{}])[0].get("delta", {})
-                                        delta_text = delta.get("content", "")
-                                        if delta_text:
-                                            stream_succeeded = True
-                                            yield f"data: {json.dumps({'type': 'token', 'content': delta_text})}\n\n"
-                                    except Exception:
-                                        pass
+                        data = resp.json()
+                        reply_content = ""
+                        # Handle OpenAI format choices
+                        choices = data.get("choices") or []
+                        if choices:
+                            reply_content = choices[0].get("message", {}).get("content", "")
+                        # Handle native Gemini candidates if applicable
+                        elif "candidates" in data:
+                            cands = data.get("candidates") or []
+                            if cands:
+                                parts = cands[0].get("content", {}).get("parts") or []
+                                reply_content = "".join(p.get("text", "") for p in parts)
+
+                        if reply_content:
+                            stream_succeeded = True
+                            # Stream in small words/tokens for a lively typing effect
+                            words = re.findall(r"\S+|\s+", reply_content)
+                            for w in words:
+                                yield f"data: {json.dumps({'type': 'token', 'content': w})}\n\n"
+                                await asyncio.sleep(0.01)
 
                     if stream_succeeded:
                         break
@@ -387,7 +421,7 @@ async def chat_with_agent(req: ChatRequest):
                     continue
 
         if not stream_succeeded:
-            msg = f"All 5 AI providers failed or are unconfigured. Last error: {last_error}. To get instant (~800 t/s) responses, add a 100% free GROQ_API_KEY (from https://console.groq.com) into backend/.env and restart backend."
+            msg = f"All 5 AI providers failed or are unconfigured. Last error: {last_error}."
             yield f"data: {json.dumps({'type': 'error', 'content': msg})}\n\n"
 
         yield "data: [DONE]\n\n"
