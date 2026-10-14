@@ -17,6 +17,7 @@ import TradeCard from "@/components/TradeCard";
 import VolumeProfileCard from "@/components/VolumeProfileCard";
 import OptionsCard from "@/components/OptionsCard";
 import StockVerdictCard from "@/components/StockVerdictCard";
+import AnalystChatDrawer from "@/components/AnalystChatDrawer";
 
 interface StockPageProps {
   params: { ticker: string };
@@ -587,6 +588,9 @@ export default function StockPage({ params }: StockPageProps) {
           isExceptional={options.is_exceptional ?? false}
         />
       )}
+
+      {/* ── AI ANALYST CHAT DRAWER (OLLAMA / CLOUD) ────────────────────── */}
+      <AnalystChatDrawer currentTicker={ticker} currentPrice={current_price} />
 
     </div>
   );
