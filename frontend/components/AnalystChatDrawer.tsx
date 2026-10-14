@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { usePathname } from "next/navigation";
+import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
@@ -16,13 +18,28 @@ interface Message {
 }
 
 export default function AnalystChatDrawer({ currentTicker, currentPrice }: AnalystChatDrawerProps) {
+  const pathname = usePathname();
+  const pathTicker = pathname?.startsWith("/stock/")
+    ? pathname.split("/")[2]?.toUpperCase()
+    : undefined;
+
+  const [ticker, setTicker] = useState<string>(currentTicker || pathTicker || "");
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    if (currentTicker) {
+      setTicker(currentTicker);
+    } else if (pathTicker) {
+      setTicker(pathTicker);
+    }
+  }, [currentTicker, pathTicker]);
+
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
       content: `Hello! I am **StockPulse AI**, your institutional trading assistant. ${
-        currentTicker
-          ? `I'm tracking **${currentTicker}**${currentPrice ? ` at **$${currentPrice.toFixed(2)}**` : ""}. How can I assist with your setup or risk plan?`
+        currentTicker || pathTicker
+          ? `I'm tracking **${currentTicker || pathTicker}**${currentPrice ? ` at **$${currentPrice.toFixed(2)}**` : ""}. How can I assist with your setup or risk plan?`
           : "Ask me to analyze any stock ticker, review an entry risk, or explain Volume Profile levels!"
       }`,
     },
@@ -83,7 +100,7 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
-          ticker: currentTicker,
+          ticker: ticker || currentTicker || pathTicker || undefined,
           entry_price: !isNaN(Number(parsedEntry)) ? parsedEntry : undefined,
         }),
       });
@@ -212,6 +229,10 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
     });
   };
 
+  if (pathname === "/chat") {
+    return null;
+  }
+
   return (
     <>
       {/* ── Floating Action Trigger Button ──────────────────────────── */}
@@ -227,7 +248,7 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
       >
         <span className="text-lg">🤖</span>
         <span className="text-xs tracking-wide">
-          {isOpen ? "Close Analyst" : currentTicker ? `Ask AI about ${currentTicker}` : "AI Trade Analyst"}
+          {isOpen ? "Close Analyst" : ticker ? `Ask AI about ${ticker}` : "AI Trade Analyst"}
         </span>
         {!isOpen && (
           <span className="w-2 h-2 rounded-full bg-emerald-950 animate-ping" />
@@ -245,11 +266,13 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
               </span>
               <div>
                 <div className="text-xs font-bold text-white flex items-center gap-1.5 font-mono">
-                  <span>StockPulse AI Analyst</span>
-                  {currentTicker && (
+                  <span>StockPulse AI</span>
+                  {ticker ? (
                     <span className="px-1.5 py-0.2 rounded bg-[#00e5a0]/20 text-[#00e5a0] text-[10px] font-bold">
-                      {currentTicker}
+                      {ticker}
                     </span>
+                  ) : (
+                    <span className="text-[10px] text-slate-400 font-normal">All Tickers</span>
                   )}
                 </div>
                 <div className="text-[10px] text-slate-400 font-mono mt-0.5">
@@ -258,33 +281,42 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
               </div>
             </div>
 
-            <button
-              onClick={() => setIsOpen(false)}
-              className="w-7 h-7 rounded-lg bg-surface border border-border flex items-center justify-center text-slate-400 hover:text-white transition-all text-xs"
-              title="Close window"
-            >
-              ✕
-            </button>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/chat"
+                className="text-[11px] text-emerald-400 hover:text-white px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 transition-all font-mono"
+                title="Open full-screen AI chat page"
+              >
+                Expand ↗
+              </Link>
+              <button
+                onClick={() => setIsOpen(false)}
+                className="w-7 h-7 rounded-lg bg-surface border border-border flex items-center justify-center text-slate-400 hover:text-white transition-all text-xs"
+                title="Close window"
+              >
+                ✕
+              </button>
+            </div>
           </div>
 
           {/* Quick Action Suggestion Chips */}
           <div className="px-3 py-2 border-b border-[#1a1d2e]/60 bg-[#0a0b14]/70 flex items-center gap-1.5 overflow-x-auto text-[11px] font-mono no-scrollbar">
-            {currentTicker ? (
+            {ticker ? (
               <>
                 <button
-                  onClick={() => handleSend(`How is ${currentTicker} looking today? What is the Volume Profile and Fib level?`)}
+                  onClick={() => handleSend(`How is ${ticker} looking today? What is the Volume Profile and Fib level?`)}
                   className="px-2.5 py-1 rounded-md bg-[#131625] text-slate-300 hover:text-[#00e5a0] hover:border-[#00e5a0]/40 border border-[#1a1d2e] whitespace-nowrap transition-all"
                 >
-                  📈 How is {currentTicker} looking?
+                  📈 How is {ticker} looking?
                 </button>
                 <button
-                  onClick={() => handleSend(`I entered ${currentTicker} at ${entryPrice ? `$${entryPrice}` : "current price"}. What is my risk and profit target plan?`)}
+                  onClick={() => handleSend(`I entered ${ticker} at ${entryPrice ? `$${entryPrice}` : "current price"}. What is my risk and profit target plan?`)}
                   className="px-2.5 py-1 rounded-md bg-[#131625] text-slate-300 hover:text-[#38bdf8] hover:border-[#38bdf8]/40 border border-[#1a1d2e] whitespace-nowrap transition-all"
                 >
                   🎯 Entry & Target Plan
                 </button>
                 <button
-                  onClick={() => handleSend(`Explain the Volume Profile POC, VAL, and VAH for ${currentTicker}.`)}
+                  onClick={() => handleSend(`Explain the Volume Profile POC, VAL, and VAH for ${ticker}.`)}
                   className="px-2.5 py-1 rounded-md bg-[#131625] text-slate-300 hover:text-amber-400 hover:border-amber-400/40 border border-[#1a1d2e] whitespace-nowrap transition-all"
                 >
                   📊 Volume Profile Breakdown

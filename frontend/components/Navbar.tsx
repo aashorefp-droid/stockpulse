@@ -81,6 +81,9 @@ export default function Navbar() {
 
         <div className="flex gap-4 text-xs lg:text-sm text-muted hidden md:flex items-center overflow-x-auto">
           <Link href="/" className="hover:text-white transition-colors whitespace-nowrap">Dashboard</Link>
+          <Link href="/chat" className="text-emerald-400 font-semibold hover:text-white transition-colors whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20">
+            <span>🤖</span> AI Analyst
+          </Link>
           <Link href="/stock-analysis" className="text-accent font-semibold hover:text-white transition-colors whitespace-nowrap">🔬 Stock Analysis</Link>
           <Link href="/stock/SPY" className="hover:text-white transition-colors whitespace-nowrap">Chart & Deep Dive</Link>
           <Link href="/scanner" className="hover:text-white transition-colors whitespace-nowrap">Strategy Scanner</Link>
