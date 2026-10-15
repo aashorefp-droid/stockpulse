@@ -39,12 +39,14 @@ export default function ChatPage() {
   }, [messages, activeTool]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/agent/status`)
-      .then((r) => {
+    const fetchStatus = async () => {
+      try {
+        let r = await fetch("/api/agent/status", { cache: "no-store" }).catch(() => null);
+        if (!r || !r.ok) {
+          r = await fetch(`${API_BASE}/api/agent/status`, { cache: "no-store" });
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
+        const data = await r.json();
         if (data?.primary) {
           setModelStatus(data.primary);
         } else if (data?.available) {
@@ -52,10 +54,11 @@ export default function ChatPage() {
         } else {
           setModelStatus("🟢 Multi-Provider AI (Auto)");
         }
-      })
-      .catch(() => {
+      } catch {
         setModelStatus("🟢 Multi-Provider AI (Auto)");
-      });
+      }
+    };
+    fetchStatus();
   }, []);
 
   const handleSend = async (customPrompt?: string) => {
@@ -73,22 +76,36 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
     try {
-      const endpoint = `${API_BASE}/api/agent/chat`;
       const parsedEntry = entryPrice ? parseFloat(entryPrice) : undefined;
       const targetTicker = ticker === "CUSTOM"
         ? (customTicker.toUpperCase() || undefined)
         : (ticker === "GENERAL" ? undefined : ticker);
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
-          ticker: targetTicker || undefined,
-          entry_price: !isNaN(Number(parsedEntry)) ? parsedEntry : undefined,
-          model: selectedModel !== "auto" ? selectedModel : undefined,
-        }),
-      });
+      const requestPayload = {
+        messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+        ticker: targetTicker || undefined,
+        entry_price: !isNaN(Number(parsedEntry)) ? parsedEntry : undefined,
+        model: selectedModel !== "auto" ? selectedModel : undefined,
+      };
+
+      // Try local/Vercel proxy route first (injects Vercel env keys), fallback to direct backend
+      let response: Response;
+      try {
+        response = await fetch("/api/agent/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestPayload),
+        });
+        if (!response.ok && response.status === 404) {
+          throw new Error("Proxy 404");
+        }
+      } catch {
+        response = await fetch(`${API_BASE}/api/agent/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestPayload),
+        });
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);

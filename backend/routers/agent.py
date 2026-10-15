@@ -5,7 +5,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
@@ -106,15 +106,31 @@ def is_valid_key(val: str, prefix: str = "") -> bool:
     return len(clean) >= 10
 
 
-def get_configured_providers() -> List[Dict[str, Any]]:
-    """
-    Returns active AI providers in priority order:
-    1. Groq Cloud (Recommended: ~800 t/s)
-    2. Google Gemini (Live tested with user key: ~150 t/s)
-    3. Cerebras Cloud (~1,800 t/s)
-    4. OpenRouter (Free models: nemotron-3.5-lightning:free / liquid:free)
-    5. Local Ollama (Always included as offline fallback)
-    """
+def load_all_environment_sources(headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    discovered = {}
+    secret_paths = []
+
+    # 1. Inspect request headers if provided (forwarded from Vercel / clients)
+    if headers:
+        for hk, v in headers.items():
+            if not v:
+                continue
+            clean_hk = hk.lower().replace("-", "_")
+            val_str = str(v).strip().strip('"').strip("'")
+            if "groq" in clean_hk and is_valid_key(val_str):
+                os.environ["GROQ_API_KEY"] = val_str
+                discovered["groq"] = "request_header"
+            elif ("gemini" in clean_hk or "google" in clean_hk) and is_valid_key(val_str):
+                os.environ["GEMINI_API_KEY"] = val_str
+                discovered["gemini"] = "request_header"
+            elif "openrouter" in clean_hk and is_valid_key(val_str):
+                os.environ["OPENROUTER_API_KEY"] = val_str
+                discovered["openrouter"] = "request_header"
+            elif "cerebras" in clean_hk and is_valid_key(val_str):
+                os.environ["CEREBRAS_API_KEY"] = val_str
+                discovered["cerebras"] = "request_header"
+
+    # 2. Try loading dotenv from standard paths
     try:
         from dotenv import load_dotenv
         for p in [
@@ -129,11 +145,88 @@ def get_configured_providers() -> List[Dict[str, Any]]:
                 load_dotenv(p, override=True)
             elif p.is_dir() and (p / ".env").exists():
                 load_dotenv(p / ".env", override=True)
-        load_dotenv(override=True)
     except Exception:
         pass
 
-    # Unpack any keys pasted in KEY=VALUE format into Render
+    # 3. Thoroughly scan /etc/secrets and subdirectories/symlinks (Render secret files)
+    scan_dirs = [Path("/etc/secrets"), Path("/secrets"), Path("/run/secrets")]
+    for sdir in scan_dirs:
+        if not sdir.exists():
+            continue
+        try:
+            for root, dirs, files in os.walk(str(sdir), followlinks=True):
+                for d in dirs:
+                    secret_paths.append(f"[dir] {Path(root) / d}")
+                for fname in files:
+                    fpath = Path(root) / fname
+                    try:
+                        sz = fpath.stat().st_size
+                        secret_paths.append(f"{fpath} ({sz}b)")
+                        content = fpath.read_text(encoding="utf-8", errors="ignore").strip()
+                        if not content:
+                            continue
+
+                        # Match regex patterns for known keys directly in the text
+                        groq_m = re.findall(r"gsk_[A-Za-z0-9_-]{20,}", content)
+                        if groq_m and not os.getenv("GROQ_API_KEY"):
+                            os.environ["GROQ_API_KEY"] = groq_m[0]
+                            discovered["groq"] = f"secret_regex:{fname}"
+
+                        gemini_m = re.findall(r"AIzaSy[A-Za-z0-9_-]{30,}", content)
+                        if gemini_m and not os.getenv("GEMINI_API_KEY"):
+                            os.environ["GEMINI_API_KEY"] = gemini_m[0]
+                            discovered["gemini"] = f"secret_regex:{fname}"
+
+                        or_m = re.findall(r"sk-or-[A-Za-z0-9_-]{20,}", content)
+                        if or_m and not os.getenv("OPENROUTER_API_KEY"):
+                            os.environ["OPENROUTER_API_KEY"] = or_m[0]
+                            discovered["openrouter"] = f"secret_regex:{fname}"
+
+                        csk_m = re.findall(r"csk-[A-Za-z0-9_-]{20,}", content)
+                        if csk_m and not os.getenv("CEREBRAS_API_KEY"):
+                            os.environ["CEREBRAS_API_KEY"] = csk_m[0]
+                            discovered["cerebras"] = f"secret_regex:{fname}"
+
+                        # Line by line KEY=VALUE
+                        for line in content.splitlines():
+                            line = line.strip()
+                            if "=" in line and not line.startswith("#"):
+                                k, v = line.split("=", 1)
+                                k = k.strip()
+                                v = v.strip().strip('"').strip("'")
+                                if k and v:
+                                    os.environ[k] = v
+                                    upper_k = k.upper()
+                                    if "GROQ" in upper_k:
+                                        discovered["groq"] = f"secret_kv:{fname}"
+                                    elif "GEMINI" in upper_k or "GOOGLE" in upper_k:
+                                        discovered["gemini"] = f"secret_kv:{fname}"
+                                    elif "OPENROUTER" in upper_k:
+                                        discovered["openrouter"] = f"secret_kv:{fname}"
+                                    elif "CEREBRAS" in upper_k:
+                                        discovered["cerebras"] = f"secret_kv:{fname}"
+
+                        # If filename itself is GROQ_API_KEY, GEMINI_API_KEY, etc.
+                        upper_fname = fname.upper()
+                        if "GROQ" in upper_fname and is_valid_key(content):
+                            os.environ["GROQ_API_KEY"] = content
+                            discovered["groq"] = f"secret_filename:{fname}"
+                        elif ("GEMINI" in upper_fname or "GOOGLE" in upper_fname) and is_valid_key(content):
+                            os.environ["GEMINI_API_KEY"] = content
+                            discovered["gemini"] = f"secret_filename:{fname}"
+                        elif "OPENROUTER" in upper_fname and is_valid_key(content):
+                            os.environ["OPENROUTER_API_KEY"] = content
+                            discovered["openrouter"] = f"secret_filename:{fname}"
+                        elif "CEREBRAS" in upper_fname and is_valid_key(content):
+                            os.environ["CEREBRAS_API_KEY"] = content
+                            discovered["cerebras"] = f"secret_filename:{fname}"
+
+                    except Exception as fe:
+                        secret_paths.append(f"{fpath} (read_error: {fe})")
+        except Exception as de:
+            secret_paths.append(f"{sdir} (walk_error: {de})")
+
+    # 4. Unpack any keys pasted in KEY=VALUE format into os.environ
     for k, v in list(os.environ.items()):
         if "=" in k:
             parts = k.split("=", 1)
@@ -141,20 +234,48 @@ def get_configured_providers() -> List[Dict[str, Any]]:
             sub_v = (parts[1] or v).strip().strip('"').strip("'")
             if sub_k and sub_v:
                 os.environ[sub_k] = sub_v
+                upper_sk = sub_k.upper()
+                if "GROQ" in upper_sk:
+                    discovered["groq"] = "env_unpacked"
+                elif "GEMINI" in upper_sk or "GOOGLE" in upper_sk:
+                    discovered["gemini"] = "env_unpacked"
+                elif "OPENROUTER" in upper_sk:
+                    discovered["openrouter"] = "env_unpacked"
+                elif "CEREBRAS" in upper_sk:
+                    discovered["cerebras"] = "env_unpacked"
 
-    def _env(names: List[str]) -> str:
-        for n in names:
-            v = os.getenv(n)
-            if v and str(v).strip():
-                c = str(v).strip().strip('"').strip("'")
-                if c:
-                    return c
-        return ""
+    return {
+        "discovered": discovered,
+        "secret_paths": secret_paths,
+    }
 
-    groq_key = _env(["GROQ_API_KEY", "GROQ_KEY", "GROQ"])
-    gemini_key = _env(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY", "GOOGLE_GEMINI_API_KEY", "GEMINI"])
-    cerebras_key = _env(["CEREBRAS_API_KEY", "CEREBRAS_KEY", "CEREBRAS"])
-    openrouter_key = _env(["OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER"])
+
+def get_env_flexible(prefixes: List[str]) -> str:
+    clean_prefixes = [p.upper().replace("-", "_").replace(" ", "") for p in prefixes]
+    for k, v in os.environ.items():
+        clean_k = k.upper().replace("-", "_").replace(" ", "")
+        for p in clean_prefixes:
+            if clean_k == p or clean_k == f"{p}_KEY" or clean_k == f"{p}_API_KEY" or clean_k.endswith(f"_{p}") or p in clean_k:
+                if is_valid_key(v):
+                    return str(v).strip().strip('"').strip("'")
+    return ""
+
+
+def get_configured_providers(headers: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """
+    Returns active AI providers in priority order:
+    1. Groq Cloud (Recommended: ~800 t/s)
+    2. Google Gemini (Live tested with user key: ~150 t/s)
+    3. Cerebras Cloud (~1,800 t/s)
+    4. OpenRouter (Free models: nemotron-3.5-lightning:free / liquid:free)
+    5. Local Ollama (Always included as offline fallback)
+    """
+    load_all_environment_sources(headers)
+
+    groq_key = get_env_flexible(["GROQ"])
+    gemini_key = get_env_flexible(["GEMINI", "GOOGLE_GEMINI", "GOOGLE_API"])
+    cerebras_key = get_env_flexible(["CEREBRAS"])
+    openrouter_key = get_env_flexible(["OPENROUTER"])
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
 
@@ -358,11 +479,13 @@ def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:
 
 
 @router.get("/status")
-async def get_agent_status():
+async def get_agent_status(request: Request):
     """
     Returns active primary AI provider and all configured fallbacks.
     """
-    chain = get_configured_providers()
+    headers_dict = dict(request.headers)
+    diag = load_all_environment_sources(headers_dict)
+    chain = get_configured_providers(headers_dict)
     primary = chain[0] if chain else None
 
     # Check local Ollama connectivity
@@ -391,7 +514,9 @@ async def get_agent_status():
 
     primary_label = f"{primary['name']} ({primary['model']})" if primary else "None"
     if primary and primary["id"] == "groq":
-        primary_label = "🟢 Groq Cloud (~800 t/s · Llama 3.3 70B)"
+        primary_label = "🟢 Groq Cloud (~800 t/s · GPT-OSS 120B)"
+    elif primary and primary["id"] == "groq-qwen":
+        primary_label = "🟢 Groq Cloud (~900 t/s · Qwen 27B)"
     elif primary and primary["id"] == "gemini":
         primary_label = "🟢 Google Gemini (~150 t/s · Flash)"
     elif primary and primary["id"] == "cerebras":
@@ -401,9 +526,6 @@ async def get_agent_status():
     elif primary and primary["id"] == "ollama":
         primary_label = f"{'🟢' if ollama_online else '⚪'} Local Ollama ({primary['model']})"
 
-    secrets_dir = Path("/etc/secrets")
-    secrets_files = [f.name for f in secrets_dir.iterdir()] if secrets_dir.exists() else []
-
     return {
         "available": bool(len(chain) > 1 or ollama_online),
         "primary": primary_label,
@@ -412,22 +534,24 @@ async def get_agent_status():
         "fallback_count": len(chain) - 1,
         "diagnostics": {
             "all_env_keys": sorted([k for k in os.environ.keys() if not k.startswith("npm_")]),
-            "secrets_files": secrets_files,
-            "has_gemini": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_KEY")),
-            "has_groq": bool(os.getenv("GROQ_API_KEY") or os.getenv("GROQ_KEY")),
-            "has_openrouter": bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY")),
-            "has_cerebras": bool(os.getenv("CEREBRAS_API_KEY") or os.getenv("CEREBRAS_KEY")),
+            "secret_paths": diag.get("secret_paths", []),
+            "discovered": diag.get("discovered", {}),
+            "has_gemini": bool(get_env_flexible(["GEMINI", "GOOGLE_GEMINI", "GOOGLE_API"])),
+            "has_groq": bool(get_env_flexible(["GROQ"])),
+            "has_openrouter": bool(get_env_flexible(["OPENROUTER"])),
+            "has_cerebras": bool(get_env_flexible(["CEREBRAS"])),
         }
     }
 
 
 @router.post("/chat")
-async def chat_with_agent(req: ChatRequest):
+async def chat_with_agent(req: ChatRequest, request: Request):
     """
     Streaming chat endpoint with 5-provider automatic fallback:
     Groq -> Gemini Flash -> Cerebras -> OpenRouter -> Local Ollama
     """
-    chain = get_configured_providers()
+    headers_dict = dict(request.headers)
+    chain = get_configured_providers(headers_dict)
 
     # Determine intent: Universe query, General/Meta query, or Ticker-specific query
     last_user_text = req.messages[-1].content if req.messages else ""
