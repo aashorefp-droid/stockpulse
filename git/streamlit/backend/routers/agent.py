@@ -83,6 +83,21 @@ AGENT_TOOLS = [
     }
 ]
 
+TICKER_ALIASES = {
+    "TSMC": "TSM",
+    "GOOGLE": "GOOGL",
+    "FACEBOOK": "META",
+    "FB": "META",
+    "TWITTER": "X",
+    "BERKSHIRE": "BRK-B",
+    "BRKB": "BRK-B",
+    "SPX": "SPY",
+    "NDX": "QQQ",
+    "DOW": "DIA",
+    "DJIA": "DIA",
+    "RUT": "IWM",
+}
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -372,6 +387,7 @@ def get_configured_providers(headers: Optional[Dict[str, str]] = None) -> List[D
 
 async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     ticker = ticker.upper().strip()
+    ticker = TICKER_ALIASES.get(ticker, ticker)
     raw = await get_stock_analysis(ticker)
     fj = raw.get("final_judgement") or {}
     tr = raw.get("trade") or {}
@@ -476,8 +492,8 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
                 for h in ea_hist[-6:]
                 if h.get("date") and h.get("eps_actual") is not None
             ],
-            "post_earnings_signal": ea.get("post_earnings", {}).get("reaction", "N/A"),
-            "suggested_play": ea.get("post_earnings", {}).get("suggested_play", "N/A"),
+            "post_earnings_signal": (ea.get("post_earnings") or {}).get("reaction", "N/A"),
+            "suggested_play": (ea.get("post_earnings") or {}).get("suggested_play", "N/A"),
         },
     }
 
@@ -688,6 +704,9 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         raw_req_t = (req.ticker or "").upper().strip()
         if raw_req_t not in ["", "ALL", "GENERAL", "NONE", "AUTO", "CUSTOM"]:
             active_ticker = raw_req_t
+
+    if active_ticker:
+        active_ticker = TICKER_ALIASES.get(active_ticker, active_ticker)
 
     async def sse_stream():
         tool_data = None
