@@ -117,11 +117,30 @@ def get_configured_providers() -> List[Dict[str, Any]]:
     """
     try:
         from dotenv import load_dotenv
-        _backend_env = Path(__file__).resolve().parent.parent / ".env"
-        if _backend_env.exists():
-            load_dotenv(_backend_env, override=True)
+        for p in [
+            Path("/etc/secrets/.env"),
+            Path("/etc/secrets"),
+            Path.cwd() / ".env",
+            Path(__file__).resolve().parent.parent / ".env",
+            Path(__file__).resolve().parent.parent.parent / ".env",
+            Path(__file__).resolve().parent / ".env",
+        ]:
+            if p.is_file() and p.exists():
+                load_dotenv(p, override=True)
+            elif p.is_dir() and (p / ".env").exists():
+                load_dotenv(p / ".env", override=True)
+        load_dotenv(override=True)
     except Exception:
         pass
+
+    # Unpack any keys pasted in KEY=VALUE format into Render
+    for k, v in list(os.environ.items()):
+        if "=" in k:
+            parts = k.split("=", 1)
+            sub_k = parts[0].strip()
+            sub_v = (parts[1] or v).strip().strip('"').strip("'")
+            if sub_k and sub_v:
+                os.environ[sub_k] = sub_v
 
     def _env(names: List[str]) -> str:
         for n in names:
@@ -141,18 +160,30 @@ def get_configured_providers() -> List[Dict[str, Any]]:
 
     chain = []
 
-    # Priority 1: Groq Cloud
+    # Priority 1: Groq Cloud (Ultra-Fast 120B / 27B)
     if is_valid_key(groq_key):
         chain.append({
             "id": "groq",
-            "name": "Groq Cloud",
-            "model": "llama-3.3-70b-versatile",
+            "name": "Groq Cloud (120B)",
+            "model": "openai/gpt-oss-120b",
             "url": "https://api.groq.com/openai/v1/chat/completions",
             "headers": {
                 "Authorization": f"Bearer {groq_key}",
                 "Content-Type": "application/json"
             },
             "speed": "~800 t/s",
+            "is_local": False
+        })
+        chain.append({
+            "id": "groq-qwen",
+            "name": "Groq Cloud (Qwen 27B)",
+            "model": "qwen/qwen3.8-27b",
+            "url": "https://api.groq.com/openai/v1/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json"
+            },
+            "speed": "~900 t/s",
             "is_local": False
         })
 
