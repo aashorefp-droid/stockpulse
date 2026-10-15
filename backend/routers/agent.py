@@ -386,6 +386,17 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     upside = f.get("target_upside")
     upside_str = f"{upside}%" if upside is not None else "N/A"
 
+    # Fetch earnings profile
+    ea = {}
+    try:
+        from backend.services.earnings import get_full_earnings_analysis
+        ea = await asyncio.to_thread(get_full_earnings_analysis, ticker)
+    except Exception as ee:
+        logger.warning(f"Error fetching earnings for {ticker}: {ee}")
+
+    ea_stats = ea.get("stats") or {}
+    ea_hist = ea.get("history") or []
+
     return {
         "ticker": ticker,
         "company_name": f.get("name") or ticker,
@@ -439,6 +450,34 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
             "analyst_recommendation": f.get("recommendation", "N/A"),
             "analyst_price_target": f.get("analyst_target") or f.get("target_price", "N/A"),
             "target_upside": upside_str,
+        },
+        "earnings_analysis": {
+            "next_earnings_date": ea.get("next_earnings") or (ea_hist[-1].get("date") if ea_hist and ea_hist[-1].get("eps_actual") is None else "N/A"),
+            "recently_reported": ea.get("recently_reported", False),
+            "last_reported_date": ea.get("last_reported", "N/A"),
+            "estimated_move": f"±{ea.get('estimated_move')}%" if ea.get("estimated_move") else "N/A",
+            "historical_stats": {
+                "avg_abs_move": f"±{ea_stats.get('avg_abs_move')}%" if ea_stats.get("avg_abs_move") is not None else "N/A",
+                "max_move": f"±{ea_stats.get('max_move')}%" if ea_stats.get("max_move") is not None else "N/A",
+                "bull_reaction_rate": f"{ea_stats.get('bull_rate')}%" if ea_stats.get("bull_rate") is not None else "N/A",
+                "eps_beat_rate": f"{ea_stats.get('beat_rate')}%" if ea_stats.get("beat_rate") is not None else "N/A",
+                "avg_5d_post_earnings_drift": f"{ea_stats.get('avg_5d_drift'):+}%" if ea_stats.get("avg_5d_drift") is not None else "N/A",
+            },
+            "recent_surprises_and_reactions": [
+                {
+                    "date": h.get("date"),
+                    "eps_est": h.get("eps_estimate"),
+                    "eps_act": h.get("eps_actual"),
+                    "surprise": f"{h.get('surprise_pct'):+}%" if h.get("surprise_pct") is not None else "N/A",
+                    "earnings_day_change": f"{h.get('day_pct'):+}%" if h.get("day_pct") is not None else "N/A",
+                    "post_5d_drift": f"{h.get('five_day_pct'):+}%" if h.get("five_day_pct") is not None else "N/A",
+                    "reaction": h.get("direction", "N/A"),
+                }
+                for h in ea_hist[-6:]
+                if h.get("date") and h.get("eps_actual") is not None
+            ],
+            "post_earnings_signal": ea.get("post_earnings", {}).get("reaction", "N/A"),
+            "suggested_play": ea.get("post_earnings", {}).get("suggested_play", "N/A"),
         },
     }
 
