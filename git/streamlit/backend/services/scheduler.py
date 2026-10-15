@@ -1446,6 +1446,39 @@ def spy_v4_summary_job():
             f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}",
         ]
 
+        # ── SPY News Sentiment (Good / Bad / Neutral) ──────────────────────
+        try:
+            import news_sentiment
+            news_res = news_sentiment.get_news_details("SPY")
+            raw_label = (news_res.get("label") or "No").strip()
+            g_score = news_res.get("good_score", 0)
+            b_score = news_res.get("bad_score", 0)
+
+            if raw_label == "Good":
+                sent_badge = f"🟢 Good (+{g_score} / -{b_score})"
+            elif raw_label == "Bad":
+                sent_badge = f"🔴 Bad (+{g_score} / -{b_score})"
+            else:
+                sent_badge = f"⚪ Neutral ({g_score} Good / {b_score} Bad)"
+
+            msg_lines.append(f"📰 <b>SPY News Sentiment:</b> {sent_badge}")
+
+            headlines = news_res.get("headlines") or []
+            shown = 0
+            for item in headlines:
+                hl_text = (item.get("headline") or "").strip()
+                if hl_text:
+                    hl_sent = item.get("sentiment", "Neutral")
+                    hl_icon = "🟢" if hl_sent == "Good" else "🔴" if hl_sent == "Bad" else "⚪"
+                    escaped_hl = html.escape(hl_text[:120])
+                    msg_lines.append(f"  • {hl_icon} <i>\"{escaped_hl}\"</i>")
+                    shown += 1
+                    if shown >= 2:
+                        break
+        except Exception as _ne:
+            logger.warning(f"[scheduler] SPY news sentiment fetch failed: {_ne}")
+            msg_lines.append("📰 <b>SPY News Sentiment:</b> ⚪ Neutral")
+
         if not range_wait:
             level = html.escape(str(row.get("dt4_level") or "—"))
             msg_lines.append(
