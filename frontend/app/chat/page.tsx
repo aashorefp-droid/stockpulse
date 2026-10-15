@@ -212,16 +212,16 @@ export default function ChatPage() {
   const quickPrompts = isGeneral
     ? [
         {
+          title: "🌐 Market Overview Today",
+          prompt: "How is market today? Provide a comprehensive institutional breakdown of major indices (SPY, QQQ, IWM), VIX, sector rotations, and key levels.",
+        },
+        {
           title: "Default 50 Best Pick",
           prompt: "From Default 50 stocks, what is the best swing trade ticker today based on institutional scoring?",
         },
         {
           title: "Wyckoff Volume Profile",
           prompt: "Explain how Wyckoff Volume Profile POC, VAL, and VAH work for identifying institutional accumulation vs distribution.",
-        },
-        {
-          title: "52W Fib Retracements",
-          prompt: "How do 52-week Fibonacci retracements (61.8% Golden Ratio) determine entry invalidation and target levels?",
         },
         {
           title: "High Beta Risk Management",

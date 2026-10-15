@@ -23,6 +23,7 @@ except ImportError:
     pass
 
 from backend.routers.analysis import get_stock_analysis
+from backend.routers.macro import macro_snapshot
 from backend.services.scanner import WATCHLISTS
 
 logger = logging.getLogger("agent")
@@ -35,9 +36,11 @@ You have access to StockPulse's comprehensive multi-module data engine:
 2. Systematic Risk Modeling: Beta vs SPY (systematic volatility scaling), Relative Strength line (RS 1-month trajectory), and ATR-based volatility targets.
 3. Corporate Fundamentals & Valuation: Market Capitalization, Trailing & Forward P/E multiples, Trailing EPS, Profit Margins, YoY Revenue Growth, Short Interest (% of float & short ratio / days to cover), and Wall Street Analyst consensus & price targets.
 4. Core Universe / Default 50 Watchlist: StockPulse's curated 50 high-liquidity stocks and ETFs (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, NFLX, CRM, COIN, etc.).
+5. Broad-Market Macro & Sector Barometer: Major US indices (SPY, QQQ, DIA, IWM), VIX volatility, commodity & bond benchmarks (GLD, TLT, USO, BTC), 11 S&P sector ETFs (XLK, XLF, XLE, etc.), SPY GEX (Gamma levels), Buy-The-Dip indicator, and high-impact economic calendar events.
 
 Your Response Guidelines:
 - General Questions & Mentorship: If the user asks general trading questions, asks for explanations of indicators, or asks conceptual or platform questions, answer thoroughly, conversationally, and insightfully as an institutional trading mentor.
+- Market Overview & Macro Status: When the user asks about the overall market, today's market, or broad indices (e.g. 'How is market today?'), analyze the provided live macro instruments (SPY, QQQ, DIA, IWM, VIX, TLT, GLD), sector rotations, SPY Volume Profile levels, and macro risk score. Summarize market posture (Risk-On vs Risk-Off), leading/lagging sectors, key support/resistance levels, and institutional takeaways.
 - Universe / Watchlist Questions: If the user asks about the Default 50 universe, screeners, or top swing setups, analyze the provided universe setups and rank them by confluence, risk/reward, and trend alignment.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
@@ -553,20 +556,29 @@ async def chat_with_agent(req: ChatRequest, request: Request):
     headers_dict = dict(request.headers)
     chain = get_configured_providers(headers_dict)
 
-    # Determine intent: Universe query, General/Meta query, or Ticker-specific query
+    # Determine intent: Market Overview, Universe query, General/Meta query, or Ticker-specific query
     last_user_text = req.messages[-1].content if req.messages else ""
     user_lower = last_user_text.lower().strip()
 
-    is_universe_query = any(k in user_lower for k in [
+    is_market_query = any(k in user_lower for k in [
+        "how is market", "how is the market", "how's market", "how's the market",
+        "how are markets", "how are the markets", "market today", "markets today",
+        "market overview", "market snapshot", "market status", "market update",
+        "macro snapshot", "overall market", "indices today", "index moves",
+        "what is market doing", "what's market doing", "what is the market doing",
+        "state of the market", "broad market", "market breadth"
+    ]) or user_lower in ["market", "markets", "macro", "indices", "how is market today", "how is market today?"]
+
+    is_universe_query = not is_market_query and any(k in user_lower for k in [
         "default 50", "default50", "watchlist", "best swing", "top pick",
         "top swing", "screener", "scanner", "rank", "which stock", "best trade",
         "best ticker", "universe"
     ])
 
-    is_general_query = any(user_lower.startswith(w) for w in [
+    is_general_query = not is_market_query and (any(user_lower.startswith(w) for w in [
         "hello", "hi", "hey", "who are you", "what is", "how do", "explain",
         "help", "why is chat", "what can you do", "tell me about", "what are"
-    ]) or "only aaoi" in user_lower or "general chat" in user_lower
+    ]) or "only aaoi" in user_lower or "general chat" in user_lower)
 
     # Dynamic Ticker Detection for any US stock (AAOI, SPCX, NVDA, TSLA, PLTR, etc.)
     ticker_stop_words = {
@@ -592,42 +604,44 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "DEFAULT", "UNIVERSE", "WATCH", "LIST", "VIEW", "CHART", "OPEN", "DROP",
         "ABOUT", "ONLY", "ITS", "IT", "NOT", "YES", "NO", "SURE", "FINE",
         "HELP", "LIKE", "NEWS", "AUTO", "TECH", "EDIT", "TEST", "TIME",
-        "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW", "SETUP", "SETUPS"
+        "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW", "SETUP", "SETUPS",
+        "MARKET", "MARKETS", "INDICES", "INDEX", "MACRO"
     }
 
     explicit_ticker = None
 
-    # Stage 1: Explicit dollar sign (e.g. $AAOI, $SPCX)
-    dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
-    if dollar_tickers:
-        explicit_ticker = dollar_tickers[0].upper()
+    if not is_market_query:
+        # Stage 1: Explicit dollar sign (e.g. $AAOI, $SPCX)
+        dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
+        if dollar_tickers:
+            explicit_ticker = dollar_tickers[0].upper()
 
-    # Stage 2: Phrases like "for AAOI", "on NVDA", "about TSLA", "ticker MDT"
-    if not explicit_ticker:
-        phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
-        if phrase_matches:
-            cand = phrase_matches[0].upper()
-            if cand not in ticker_stop_words:
-                explicit_ticker = cand
+        # Stage 2: Phrases like "for AAOI", "on NVDA", "about TSLA", "ticker MDT"
+        if not explicit_ticker:
+            phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
+            if phrase_matches:
+                cand = phrase_matches[0].upper()
+                if cand not in ticker_stop_words:
+                    explicit_ticker = cand
 
-    # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA) - skipping stop words
-    if not explicit_ticker:
-        raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
-        caps_tokens = [t.upper() for t in raw_tokens if t.isupper() and t.upper() not in ticker_stop_words]
-        if caps_tokens:
-            explicit_ticker = caps_tokens[-1]
+        # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA) - skipping stop words
+        if not explicit_ticker:
+            raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
+            caps_tokens = [t.upper() for t in raw_tokens if t.isupper() and t.upper() not in ticker_stop_words]
+            if caps_tokens:
+                explicit_ticker = caps_tokens[-1]
 
-    # Stage 4: Fallback for short queries (e.g. "aaoi", "aaoi setup", "analyze aaoi")
-    if not explicit_ticker and not is_general_query and not is_universe_query:
-        raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
-        for t in raw_tokens:
-            up = t.upper()
-            if up not in ticker_stop_words and len(up) >= 2:
-                explicit_ticker = up
-                break
+        # Stage 4: Fallback for short queries (e.g. "aaoi", "aaoi setup", "analyze aaoi")
+        if not explicit_ticker and not is_general_query and not is_universe_query:
+            raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
+            for t in raw_tokens:
+                up = t.upper()
+                if up not in ticker_stop_words and len(up) >= 2:
+                    explicit_ticker = up
+                    break
 
     active_ticker = explicit_ticker
-    if is_universe_query:
+    if is_market_query or is_universe_query:
         active_ticker = None
     elif is_general_query and not explicit_ticker:
         active_ticker = None
@@ -639,8 +653,22 @@ async def chat_with_agent(req: ChatRequest, request: Request):
     async def sse_stream():
         tool_data = None
         universe_data = None
+        macro_data = None
 
-        if is_universe_query:
+        if is_market_query:
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_macro_snapshot', 'ticker': 'Major Indices & Sectors'})}\n\n"
+            try:
+                macro_data = await asyncio.to_thread(macro_snapshot)
+                spy_tool = await execute_stock_tool("SPY")
+                macro_data["spy_technical_framework"] = spy_tool
+                risk_lbl = macro_data.get("risk", {}).get("label", "Active")
+                spy_px = spy_tool.get("price", "N/A")
+                yield f"data: {json.dumps({'type': 'tool_done', 'ticker': 'Major Indices & Sectors', 'summary': f'Market Risk: {risk_lbl} | SPY ${spy_px}'})}\n\n"
+            except Exception as me:
+                logger.error(f"Error fetching macro snapshot: {me}")
+                macro_data = {"error": f"Failed to retrieve macro data: {str(me)}"}
+
+        elif is_universe_query:
             yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_universe_scan', 'ticker': 'Default 50 Universe'})}\n\n"
             universe_data = get_universe_tool("default")
             t_cnt = universe_data.get("total_tickers", 50)
@@ -666,7 +694,12 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         for m in req.messages:
             base_messages.append({"role": m.role, "content": m.content})
 
-        if universe_data:
+        if macro_data:
+            base_messages.append({
+                "role": "system",
+                "content": f"INSTITUTIONAL BROAD MARKET & MACRO DATA:\n{json.dumps(macro_data, indent=2)}"
+            })
+        elif universe_data:
             base_messages.append({
                 "role": "system",
                 "content": f"INSTITUTIONAL UNIVERSE DATA (DEFAULT 50 CORE WATCHLIST):\n{json.dumps(universe_data, indent=2)}"
