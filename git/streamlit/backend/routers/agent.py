@@ -401,10 +401,8 @@ async def get_agent_status():
     elif primary and primary["id"] == "ollama":
         primary_label = f"{'🟢' if ollama_online else '⚪'} Local Ollama ({primary['model']})"
 
-    matching_env_keys = [
-        k for k in os.environ.keys()
-        if any(w in k.upper() for w in ["GEMINI", "GROQ", "OPENROUTER", "CEREBRAS", "AI_KEY", "OLLAMA"])
-    ]
+    secrets_dir = Path("/etc/secrets")
+    secrets_files = [f.name for f in secrets_dir.iterdir()] if secrets_dir.exists() else []
 
     return {
         "available": bool(len(chain) > 1 or ollama_online),
@@ -413,7 +411,8 @@ async def get_agent_status():
         "chain": chain_summary,
         "fallback_count": len(chain) - 1,
         "diagnostics": {
-            "found_keys_in_env": matching_env_keys,
+            "all_env_keys": sorted([k for k in os.environ.keys() if not k.startswith("npm_")]),
+            "secrets_files": secrets_files,
             "has_gemini": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_KEY")),
             "has_groq": bool(os.getenv("GROQ_API_KEY") or os.getenv("GROQ_KEY")),
             "has_openrouter": bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY")),
