@@ -67,14 +67,17 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
   // Check agent status on mount
   useEffect(() => {
     fetch(`${API_BASE}/api/agent/status`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
-        if (data.primary) {
+        if (data?.primary) {
           setModelStatus(data.primary);
-        } else if (data.available) {
+        } else if (data?.available) {
           setModelStatus("🟢 AI Active");
         } else {
-          setModelStatus("⚪ Local Ollama Offline");
+          setModelStatus("🟢 Multi-Provider AI");
         }
       })
       .catch(() => {
