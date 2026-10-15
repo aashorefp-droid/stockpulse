@@ -370,12 +370,24 @@ async def get_agent_status():
     elif primary and primary["id"] == "ollama":
         primary_label = f"{'🟢' if ollama_online else '⚪'} Local Ollama ({primary['model']})"
 
+    matching_env_keys = [
+        k for k in os.environ.keys()
+        if any(w in k.upper() for w in ["GEMINI", "GROQ", "OPENROUTER", "CEREBRAS", "AI_KEY", "OLLAMA"])
+    ]
+
     return {
         "available": bool(len(chain) > 1 or ollama_online),
         "primary": primary_label,
         "primary_id": primary["id"] if primary else None,
         "chain": chain_summary,
         "fallback_count": len(chain) - 1,
+        "diagnostics": {
+            "found_keys_in_env": matching_env_keys,
+            "has_gemini": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_KEY")),
+            "has_groq": bool(os.getenv("GROQ_API_KEY") or os.getenv("GROQ_KEY")),
+            "has_openrouter": bool(os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY")),
+            "has_cerebras": bool(os.getenv("CEREBRAS_API_KEY") or os.getenv("CEREBRAS_KEY")),
+        }
     }
 
 
