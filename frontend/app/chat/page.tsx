@@ -27,7 +27,9 @@ export default function ChatPage() {
   const [selectedModel, setSelectedModel] = useState<string>("auto");
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
-  const [modelStatus, setModelStatus] = useState<string>("Checking AI engine...");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
+  const [keyInput, setKeyInput] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -38,27 +40,54 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages, activeTool]);
 
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        let r = await fetch("/api/agent/status", { cache: "no-store" }).catch(() => null);
-        if (!r || !r.ok) {
-          r = await fetch(`${API_BASE}/api/agent/status`, { cache: "no-store" });
-        }
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
-        if (data?.primary) {
-          setModelStatus(data.primary);
-        } else if (data?.available) {
-          setModelStatus("🟢 AI Engine Active");
-        } else {
-          setModelStatus("🟢 Multi-Provider AI (Auto)");
-        }
-      } catch {
+  const fetchStatus = async (overrideKey?: string) => {
+    try {
+      const activeKey =
+        overrideKey !== undefined
+          ? overrideKey
+          : typeof window !== "undefined"
+          ? localStorage.getItem("stockpulse_ai_key") || ""
+          : "";
+
+      const headers: Record<string, string> = {};
+      if (activeKey) {
+        headers["x-groq-api-key"] = activeKey;
+      }
+
+      let r = await fetch("/api/agent/status", { cache: "no-store", headers }).catch(() => null);
+      if (!r || !r.ok) {
+        r = await fetch(`${API_BASE}/api/agent/status`, { cache: "no-store", headers });
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (data?.primary) {
+        setModelStatus(data.primary);
+      } else if (data?.available) {
+        setModelStatus("🟢 AI Engine Active");
+      } else {
         setModelStatus("🟢 Multi-Provider AI (Auto)");
       }
-    };
-    fetchStatus();
+    } catch {
+      setModelStatus("🟢 Multi-Provider AI (Auto)");
+    }
+  };
+
+  useEffect(() => {
+    let keyToUse = "";
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlKey = params.get("k") || params.get("key") || params.get("groq_key");
+      if (urlKey && urlKey.trim().length > 10) {
+        keyToUse = urlKey.trim();
+        localStorage.setItem("stockpulse_ai_key", keyToUse);
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      } else {
+        keyToUse = localStorage.getItem("stockpulse_ai_key") || "";
+      }
+      setApiKey(keyToUse);
+    }
+    fetchStatus(keyToUse);
   }, []);
 
   const handleSend = async (customPrompt?: string) => {
@@ -88,12 +117,21 @@ export default function ChatPage() {
         model: selectedModel !== "auto" ? selectedModel : undefined,
       };
 
+      const currentKey =
+        apiKey || (typeof window !== "undefined" ? localStorage.getItem("stockpulse_ai_key") || "" : "");
+      const reqHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (currentKey) {
+        reqHeaders["x-groq-api-key"] = currentKey;
+      }
+
       // Try local/Vercel proxy route first (injects Vercel env keys), fallback to direct backend
       let response: Response;
       try {
         response = await fetch("/api/agent/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: reqHeaders,
           body: JSON.stringify(requestPayload),
         });
         if (!response.ok && response.status === 404) {
@@ -102,7 +140,7 @@ export default function ChatPage() {
       } catch {
         response = await fetch(`${API_BASE}/api/agent/chat`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: reqHeaders,
           body: JSON.stringify(requestPayload),
         });
       }
@@ -309,6 +347,22 @@ export default function ChatPage() {
           )}
 
           <button
+            onClick={() => {
+              setKeyInput(apiKey);
+              setShowKeyModal(true);
+            }}
+            className={`text-xs border px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 font-mono ${
+              apiKey
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                : "text-slate-400 hover:text-white border-slate-800 hover:border-slate-700 bg-[#151824]"
+            }`}
+            title="Configure AI Cloud Key (Groq / Gemini / OpenRouter)"
+          >
+            <span>🔑</span>
+            <span>{apiKey ? "Key Active" : "Set AI Key"}</span>
+          </button>
+
+          <button
             onClick={clearChat}
             className="text-xs text-slate-400 hover:text-red-400 border border-slate-800 hover:border-red-500/30 px-3 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 font-medium ml-auto sm:ml-0"
             title="Clear Chat History"
@@ -427,6 +481,87 @@ export default function ChatPage() {
           </div>
         </div>
       </div>
+
+      {/* ── API KEY CONFIG MODAL ────────────────────────────────────────── */}
+      {showKeyModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121520] border border-[#1e2337] rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🔑</span>
+                <h3 className="text-base font-bold text-white">AI Engine Key Setup</h3>
+              </div>
+              <button
+                onClick={() => setShowKeyModal(false)}
+                className="text-slate-400 hover:text-white text-sm p-1 rounded-md hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Connect your cloud AI provider (e.g. Groq ~800 t/s, Gemini Flash, or OpenRouter) for instant institutional responses. Your key is saved locally in your browser and sent securely with your inference requests.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
+                API Key (Groq / Gemini / OpenRouter)
+              </label>
+              <input
+                type="password"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value.trim())}
+                placeholder="gsk_... or sk-or-..."
+                className="w-full bg-[#0a0c13] border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-[#4d9fff]"
+              />
+            </div>
+
+            <div className="flex items-center justify-between pt-2">
+              {apiKey ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    localStorage.removeItem("stockpulse_ai_key");
+                    setApiKey("");
+                    setKeyInput("");
+                    setShowKeyModal(false);
+                    fetchStatus("");
+                  }}
+                  className="text-xs text-red-400 hover:text-red-300 font-medium px-3 py-1.5 rounded-lg border border-red-500/20 hover:border-red-500/40"
+                >
+                  Clear Key
+                </button>
+              ) : (
+                <span />
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowKeyModal(false)}
+                  className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-slate-800 hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (keyInput) {
+                      localStorage.setItem("stockpulse_ai_key", keyInput);
+                      setApiKey(keyInput);
+                      fetchStatus(keyInput);
+                    }
+                    setShowKeyModal(false);
+                  }}
+                  className="text-xs font-semibold bg-[#4d9fff] text-black px-4 py-1.5 rounded-lg hover:bg-[#3b82f6] transition-colors"
+                >
+                  Save & Connect
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

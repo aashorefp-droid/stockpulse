@@ -9,7 +9,18 @@ export async function GET(req: NextRequest) {
     "https://stockpulse-pkpj.onrender.com"
   ).replace(/\/+$/, "");
 
-  const forwardHeaders: Record<string, string> = {};
+  // 1. Forward any incoming AI key headers from client
+  const incomingGroq = req.headers.get("x-groq-api-key");
+  const incomingGemini = req.headers.get("x-gemini-api-key");
+  const incomingOpenRouter = req.headers.get("x-openrouter-api-key");
+  const incomingCerebras = req.headers.get("x-cerebras-api-key");
+
+  if (incomingGroq) forwardHeaders["x-groq-api-key"] = incomingGroq.trim();
+  if (incomingGemini) forwardHeaders["x-gemini-api-key"] = incomingGemini.trim();
+  if (incomingOpenRouter) forwardHeaders["x-openrouter-api-key"] = incomingOpenRouter.trim();
+  if (incomingCerebras) forwardHeaders["x-cerebras-api-key"] = incomingCerebras.trim();
+
+  // 2. Fallback to Vercel / server environment variables if not passed by client
   const groq = process.env.GROQ_API_KEY || process.env.GROQ_KEY;
   const gemini =
     process.env.GEMINI_API_KEY ||
@@ -19,10 +30,10 @@ export async function GET(req: NextRequest) {
     process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY;
   const cerebras = process.env.CEREBRAS_API_KEY || process.env.CEREBRAS_KEY;
 
-  if (groq) forwardHeaders["x-groq-api-key"] = groq.trim();
-  if (gemini) forwardHeaders["x-gemini-api-key"] = gemini.trim();
-  if (openrouter) forwardHeaders["x-openrouter-api-key"] = openrouter.trim();
-  if (cerebras) forwardHeaders["x-cerebras-api-key"] = cerebras.trim();
+  if (!forwardHeaders["x-groq-api-key"] && groq) forwardHeaders["x-groq-api-key"] = groq.trim();
+  if (!forwardHeaders["x-gemini-api-key"] && gemini) forwardHeaders["x-gemini-api-key"] = gemini.trim();
+  if (!forwardHeaders["x-openrouter-api-key"] && openrouter) forwardHeaders["x-openrouter-api-key"] = openrouter.trim();
+  if (!forwardHeaders["x-cerebras-api-key"] && cerebras) forwardHeaders["x-cerebras-api-key"] = cerebras.trim();
 
   try {
     const upstreamResp = await fetch(`${backendBase}/api/agent/status`, {
