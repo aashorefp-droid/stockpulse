@@ -39,6 +39,14 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
 
   # ── 2. Frontend UI (Next.js) ────────────────────────────────────────────────
   - type: web

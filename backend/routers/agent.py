@@ -96,15 +96,14 @@ class ChatRequest(BaseModel):
 def is_valid_key(val: str, prefix: str = "") -> bool:
     if not val:
         return False
-    clean = val.strip().strip('"').strip("'")
-    if clean in [
-        "GROQ_API_KEY", "GEMINI_API_KEY", "CEREBRAS_API_KEY",
-        "OPENROUTER_API_KEY", "your_key_here", "gsk_your_actual_key_here"
+    clean = str(val).strip().strip('"').strip("'")
+    if clean.upper() in [
+        "GROQ_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "CEREBRAS_API_KEY",
+        "OPENROUTER_API_KEY", "YOUR_KEY_HERE", "GSK_YOUR_ACTUAL_KEY_HERE",
+        "NONE", "NULL", "UNDEFINED", "FALSE", ""
     ]:
         return False
-    if prefix and not clean.startswith(prefix):
-        return False
-    return len(clean) >= 12
+    return len(clean) >= 10
 
 
 def get_configured_providers() -> List[Dict[str, Any]]:
@@ -124,17 +123,26 @@ def get_configured_providers() -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-    cerebras_key = os.getenv("CEREBRAS_API_KEY", "").strip()
-    openrouter_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    def _env(names: List[str]) -> str:
+        for n in names:
+            v = os.getenv(n)
+            if v and str(v).strip():
+                c = str(v).strip().strip('"').strip("'")
+                if c:
+                    return c
+        return ""
+
+    groq_key = _env(["GROQ_API_KEY", "GROQ_KEY", "GROQ"])
+    gemini_key = _env(["GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_KEY", "GOOGLE_GEMINI_API_KEY", "GEMINI"])
+    cerebras_key = _env(["CEREBRAS_API_KEY", "CEREBRAS_KEY", "CEREBRAS"])
+    openrouter_key = _env(["OPENROUTER_API_KEY", "OPENROUTER_KEY", "OPENROUTER"])
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
 
     chain = []
 
     # Priority 1: Groq Cloud
-    if is_valid_key(groq_key, prefix="gsk_"):
+    if is_valid_key(groq_key):
         chain.append({
             "id": "groq",
             "name": "Groq Cloud",
@@ -148,7 +156,7 @@ def get_configured_providers() -> List[Dict[str, Any]]:
             "is_local": False
         })
 
-    # Priority 2: Google Gemini (Active with user's key)
+    # Priority 2: Google Gemini
     if is_valid_key(gemini_key):
         chain.append({
             "id": "gemini",
@@ -179,7 +187,7 @@ def get_configured_providers() -> List[Dict[str, Any]]:
         })
 
     # Priority 4: OpenRouter Free Models
-    if is_valid_key(openrouter_key, prefix="sk-or-v1-"):
+    if is_valid_key(openrouter_key):
         chain.append({
             "id": "openrouter",
             "name": "OpenRouter",
