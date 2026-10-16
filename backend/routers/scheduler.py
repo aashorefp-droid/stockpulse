@@ -193,6 +193,14 @@ def trigger_macro_regime_watch():
     return {"status": "macro_regime_watch completed"}
 
 
+@router.post("/run-macro-hourly")
+def trigger_macro_hourly_checkin():
+    """Manually trigger the hourly macro regime check-in."""
+    from backend.services.scheduler import macro_hourly_checkin_job
+    macro_hourly_checkin_job()
+    return {"status": "macro_hourly_checkin completed"}
+
+
 @router.post("/run-gamma")
 def trigger_gamma_jobs():
     """Manually trigger SPY and sector gamma calculation jobs."""

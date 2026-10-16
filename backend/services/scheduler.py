@@ -1329,6 +1329,109 @@ def macro_regime_watch_job():
     _save_macro_state(state)
 
 
+def macro_hourly_checkin_job():
+    """
+    Hourly Market Hours Status Check-In (Mon-Fri 9:00 AM - 3:00 PM CST).
+    Sends a concise status heartbeat to Telegram confirming current macro regime
+    even on quiet days where no sudden regime flip has occurred.
+    """
+    if not _MACRO_ALERTS_ENABLED:
+        return
+    import html
+    from datetime import datetime, timezone
+
+    try:
+        from backend.routers.macro import macro_snapshot
+        snap = macro_snapshot()
+    except Exception as e:
+        logger.warning(f"[macro_hourly] snapshot failed: {e}")
+        return
+
+    gex = snap.get("gex") or {}
+    btd = snap.get("btd") or {}
+    risk = snap.get("risk") or {}
+    gex_avail = gex.get("available") is True
+    gex_regime = gex.get("regime") if gex_avail else None
+    btd_state = btd.get("btd_state")
+    btd_zone = btd.get("btd_zone")
+    risk_score = int(risk.get("score") or 0)
+    risk_label = risk.get("label") or "?"
+    verdict, reason = _compute_day_verdict(
+        gex_regime, btd_state, btd_zone, risk_score
+    )
+
+    state = _load_macro_state()
+    now_dt = datetime.now(CST)
+    now_str = now_dt.strftime("%I:%M %p CT")
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # If an emergency change alert fired in the last 15 minutes, skip this hourly heartbeat to avoid redundant alerts
+    last_alert_iso = state.get("last_alerted_at")
+    if last_alert_iso:
+        try:
+            last = datetime.fromisoformat(last_alert_iso)
+            age_s = (datetime.now(timezone.utc) - last).total_seconds()
+            if age_s < 900:
+                logger.info(f"[macro_hourly] suppressed — regime alert fired {int(age_s)}s ago")
+                return
+        except Exception:
+            pass
+
+    e_curr = _verdict_emoji(verdict)
+    spy_info = ""
+    vix_info = ""
+    for it in snap.get("items", []):
+        if it.get("ticker") == "SPY":
+            spy_px = it.get("price", 0)
+            spy_1d = it.get("chg_1d", 0)
+            spy_5d = it.get("chg_5d", 0)
+            spy_info = f"SPY ${spy_px:.2f} ({spy_1d:+.1f}% 1d · {spy_5d:+.1f}% 5d)"
+        elif it.get("ticker") == "^VIX":
+            vix_px = it.get("price", 0)
+            vix_1d = it.get("chg_1d", 0)
+            vix_info = f"VIX {vix_px:.1f} ({vix_1d:+.1f}% 1d)"
+
+    gamma_lbl = gex_regime or "N/A"
+    lines = [
+        f"🏛️ <b>Market Regime Hourly Status ({now_str})</b>",
+        f"<b>Regime:</b> {e_curr} <b>{html.escape(verdict)}</b> ({html.escape(gamma_lbl)}) · <i>Monitoring for flips</i>",
+        f"<i>{html.escape(reason)}</i>",
+        "",
+        "<b>Macro Barometer:</b>",
+    ]
+    if spy_info:
+        lines.append(f"• {html.escape(spy_info)}")
+    if vix_info:
+        lines.append(f"• {html.escape(vix_info)}")
+    lines.append(f"• <b>Risk Score:</b> {risk_score}/5 ({html.escape(risk_label)})")
+    if btd_state:
+        lines.append(f"• <b>BTD State:</b> {html.escape(btd_state)}")
+    lines.append("")
+    lines.append("🔄 <i>Active monitor polling every 5m for regime flips & gamma reversals.</i>")
+
+    msg = "\n".join(lines)
+
+    try:
+        chat_id, thread_id = _telegram_target(TELEGRAM_MACRO_MESSAGE_THREAD_ID)
+        send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info(f"[macro_hourly] dispatched hourly status: {verdict} ({gex_regime})")
+    except Exception as e:
+        logger.warning(f"[macro_hourly] telegram send failed: {e}")
+
+    state.update(
+        verdict=verdict, gex_regime=gex_regime,
+        btd_state=btd_state, btd_zone=btd_zone,
+        risk_score=risk_score,
+        last_changed_at=now_iso,
+    )
+    _save_macro_state(state)
+
+
 # ── V4 & V3 Day Trading Scheduler Jobs ────────────────────────────────────────
 
 def spy_v4_summary_job():
@@ -1445,6 +1548,16 @@ def spy_v4_summary_job():
             f"PDH {_money(row.get('dt4_pdh'))} | PDL {_money(row.get('dt4_pdl'))} | "
             f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}",
         ]
+
+        # ── Macro Market Regime Baseline ──────────────────────────────────
+        try:
+            m_state = _load_macro_state()
+            v_label = m_state.get("verdict") or "Active"
+            v_emoji = _verdict_emoji(v_label)
+            g_regime = m_state.get("gex_regime") or "Active"
+            msg_lines.append(f"🏛️ <b>Regime:</b> {v_emoji} <b>{html.escape(v_label)}</b> ({html.escape(g_regime)}) · <i>Monitoring for flips</i>")
+        except Exception:
+            pass
 
         # ── SPY News Sentiment (Good / Bad / Neutral) ──────────────────────
         try:
@@ -1935,6 +2048,14 @@ def setup_scheduler():
             macro_regime_watch_job,
             CronTrigger(day_of_week="mon-fri", hour="8-15", minute="*/5", timezone=CST),
             id="macro_regime_watch",
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+        # Macro regime hourly check-in — hourly status during market hours (Mon-Fri 9:00 AM - 3:00 PM CST)
+        scheduler.add_job(
+            macro_hourly_checkin_job,
+            CronTrigger(day_of_week="mon-fri", hour="9-15", minute=0, timezone=CST),
+            id="macro_hourly_checkin",
             replace_existing=True,
             misfire_grace_time=300,
         )
