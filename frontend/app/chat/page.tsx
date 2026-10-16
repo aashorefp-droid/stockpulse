@@ -31,6 +31,8 @@ export default function ChatPage() {
   const [modelStatus, setModelStatus] = useState<string>("🟢 AI Engine Active");
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [keyInput, setKeyInput] = useState<string>("");
+  const [spyOutcome, setSpyOutcome] = useState<any>(null);
+  const [spyLoading, setSpyLoading] = useState<boolean>(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -249,6 +251,27 @@ export default function ChatPage() {
   const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
   const isSpy = currentActiveTicker === "SPY";
 
+  useEffect(() => {
+    if (isSpy) {
+      setSpyLoading(true);
+      fetch("/api/agent/spy-outcome")
+        .then((res) => {
+          if (!res.ok) throw new Error("Proxy error");
+          return res.json();
+        })
+        .catch(() => fetch(`${API_BASE}/api/agent/spy-outcome`).then((r) => r.json()))
+        .then((data) => {
+          if (data && !data.error) {
+            setSpyOutcome(data);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setSpyLoading(false));
+    } else {
+      setSpyOutcome(null);
+    }
+  }, [isSpy]);
+
   const quickPrompts = isGeneral
     ? [
         {
@@ -396,6 +419,89 @@ export default function ChatPage() {
 
       {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
       <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
+        {/* SPY Automatic Post-Open Outcome & Trade Plan Banner */}
+        {isSpy && (
+          <div className="bg-[#0d111d] border-b border-[#1f273d] p-3 sm:p-4 px-4 sm:px-6 transition-all">
+            {spyLoading && !spyOutcome ? (
+              <div className="flex items-center gap-2 text-xs font-mono text-slate-400 py-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>Calculating live SPY post-open outcome & trade levels from 8:00 AM Playbook...</span>
+              </div>
+            ) : spyOutcome ? (
+              <div className="space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🎯</span>
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      8:35 AM Post-Open Valid Outcome
+                    </span>
+                    <span
+                      className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-semibold border ${
+                        spyOutcome.valid_outcome?.includes("Outcome 1") || spyOutcome.trade_idea?.action?.includes("CALLS")
+                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
+                          : spyOutcome.valid_outcome?.includes("Outcome 2") || spyOutcome.trade_idea?.action?.includes("PUTS")
+                          ? "bg-red-500/15 border-red-500/40 text-red-400"
+                          : "bg-amber-500/15 border-amber-500/40 text-amber-400"
+                      }`}
+                    >
+                      {spyOutcome.valid_outcome}
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono text-slate-400 flex items-center gap-2">
+                    <span>
+                      SPY: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b>
+                    </span>
+                    <span>·</span>
+                    <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
+                    <span>·</span>
+                    <span>PDL: <b>${spyOutcome.key_levels?.pdl?.toFixed(2)}</b></span>
+                    <span>·</span>
+                    <span>Mid: <b>${spyOutcome.key_levels?.pd_mid?.toFixed(2)}</b></span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#121626] border border-[#1d243b] rounded-lg p-2.5 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-mono">RECOMMENDED CONTRACT</span>
+                    <span className="font-bold text-white font-mono">{spyOutcome.trade_idea?.suggested_contract || "SPY ATM"}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-mono">ENTRY TRIGGER</span>
+                    <span className="font-semibold text-emerald-400 font-mono">${spyOutcome.trade_idea?.entry_level?.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-mono">STOP LOSS</span>
+                    <span className="font-semibold text-red-400 font-mono">${spyOutcome.trade_idea?.stop_loss?.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-mono">TARGETS (R:R {spyOutcome.trade_idea?.reward_risk})</span>
+                    <span className="font-semibold text-cyan-400 font-mono">
+                      ${spyOutcome.trade_idea?.target_1?.toFixed(2)} / ${spyOutcome.trade_idea?.target_2?.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
+                  <p className="text-[11px] text-slate-400 line-clamp-1 italic">
+                    💡 {spyOutcome.trade_idea?.rationale}
+                  </p>
+                  <button
+                    onClick={() =>
+                      handleSend(
+                        "What is the valid outcome for SPY based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for SPY Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation."
+                      )
+                    }
+                    disabled={isStreaming}
+                    className="text-[11px] font-semibold text-[#4d9fff] hover:text-[#7bb7ff] flex items-center gap-1 hover:underline ml-auto"
+                  >
+                    <span>💬 Deep Dive in Chat →</span>
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
         {/* Messages List */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
           {messages.map((m, idx) => (

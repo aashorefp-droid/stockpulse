@@ -619,6 +619,21 @@ async def get_agent_status(request: Request):
     }
 
 
+@router.get("/spy-outcome")
+async def get_spy_outcome_endpoint():
+    """
+    Returns the live SPY 5-minute post-open valid outcome, key levels,
+    and actionable CALLS vs PUTS trade plan directly from the V4 engine.
+    """
+    try:
+        from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
+        res = await asyncio.to_thread(get_spy_valid_outcome_and_trade_idea)
+        return res
+    except Exception as e:
+        logger.error(f"Error fetching SPY outcome: {e}")
+        return {"error": str(e)}
+
+
 @router.post("/chat")
 async def chat_with_agent(req: ChatRequest, request: Request):
     """
