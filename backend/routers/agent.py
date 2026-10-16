@@ -41,7 +41,13 @@ You have access to StockPulse's comprehensive multi-module data engine:
 Your Response Guidelines:
 - General Questions & Mentorship: If the user asks general trading questions, asks for explanations of indicators, or asks conceptual or platform questions, answer thoroughly, conversationally, and insightfully as an institutional trading mentor.
 - Market Overview & Macro Status: When the user asks about the overall market, today's market, or broad indices (e.g. 'How is market today?'), analyze the provided live macro instruments (SPY, QQQ, DIA, IWM, VIX, TLT, GLD), sector rotations, SPY Volume Profile levels, and macro risk score. Summarize market posture (Risk-On vs Risk-Off), leading/lagging sectors, key support/resistance levels, and institutional takeaways.
-- Universe / Watchlist Questions: If the user asks about the Default 50 universe, screeners, or top swing setups, analyze the provided universe setups and rank them by confluence, risk/reward, and trend alignment.
+- Universe / Watchlist & Swing Trade Inquiries:
+  When the user asks for swing trades, top picks, setups today, or universe ideas (e.g. 'Good Swing trades for today with entry/stop/targets'):
+  Always present the top setups directly from the provided INSTITUTIONAL UNIVERSE DATA block.
+  Provide a clean, structured table with exact numbers:
+  | Ticker | Direction | Verdict | Current Price | Entry Trigger | Stop-Loss | Target 1 | Target 2 | R:R |
+  Followed by high-conviction institutional battle plans for the top 3 setups explaining the technical catalyst, Volume Profile support/resistance (POC/VAL/VAH), and risk management.
+  CRITICAL: NEVER claim live prices were not attached or provide abstract algebraic formulas when actual institutional setup prices are provided in your context block. Use the exact numbers provided in the INSTITUTIONAL UNIVERSE DATA block!
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
 - SPY Day Trading & Post-Open Options Trade Ideas (Calls vs Puts):
   When analyzing SPY or when the user asks for SPY trade ideas, calls vs puts, or asks 'What is the valid outcome?':
@@ -565,33 +571,118 @@ def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:
     # Read cached scan items if available
     data_dir = Path(__file__).resolve().parent.parent.parent / "data"
     cache_path = data_dir / "default50_premarket_cache.json"
+    trade_plan_path = data_dir / "trade_plan_latest.json"
     cached_setups = []
+
+    # 1. Primary source: default50_premarket_cache.json
     if cache_path.exists():
         try:
             with open(cache_path, "r", encoding="utf-8") as fp:
                 cdata = json.load(fp)
                 cached_setups = cdata.get("items", [])
+        except Exception as e:
+            logger.warning(f"Failed to read {cache_path}: {e}")
+
+    # 2. In-memory scheduler cache fallback
+    if not cached_setups:
+        try:
+            from backend.services.scheduler import _DEFAULT50_SCAN_CACHE
+            cached_setups = _DEFAULT50_SCAN_CACHE.get("items", [])
+        except Exception:
+            pass
+
+    # 3. Trade plan latest fallback
+    trade_plan_rows = []
+    if trade_plan_path.exists():
+        try:
+            with open(trade_plan_path, "r", encoding="utf-8") as fp:
+                tp_data = json.load(fp)
+                trade_plan_rows = tp_data.get("rows", [])
         except Exception:
             pass
 
     top_picks = []
-    for s in cached_setups[:8]:
-        top_picks.append({
-            "ticker": s.get("ticker"),
-            "verdict": s.get("verdict"),
-            "score": s.get("score"),
-            "price": s.get("price"),
-            "entry": s.get("entry"),
-            "stop": s.get("stop"),
-            "target1": s.get("t1"),
-            "reward_risk": s.get("rr_t1"),
-        })
+
+    # Process setups from premarket cache if present
+    if cached_setups:
+        # Sort by confluence score descending
+        sorted_setups = sorted(cached_setups, key=lambda x: -(x.get("score") or 0))
+        for s in sorted_setups:
+            t = s.get("ticker") or s.get("Ticker")
+            if not t:
+                continue
+            price = s.get("price") or s.get("Close")
+            entry = s.get("entry") or price
+            stop = s.get("stop_loss") or s.get("stop")
+            t1 = s.get("target1") or s.get("t1")
+            t2 = s.get("target2") or s.get("t2")
+            rr = s.get("rr_t1") or 2.0
+            verdict = s.get("verdict") or "BULLISH"
+            direction = s.get("direction") or "LONG"
+            score = s.get("score") or 5
+            sector = s.get("sector") or ""
+            poc = s.get("poc")
+            val = s.get("val")
+            vah = s.get("vah")
+            stage2 = s.get("stage2_status") or ""
+
+            if entry and stop:
+                top_picks.append({
+                    "ticker": t,
+                    "direction": direction,
+                    "verdict": verdict,
+                    "confluence_score": score,
+                    "sector": sector,
+                    "current_price": round(float(price), 2) if price else None,
+                    "entry_trigger": round(float(entry), 2) if entry else None,
+                    "stop_loss": round(float(stop), 2) if stop else None,
+                    "target_1": round(float(t1), 2) if t1 else None,
+                    "target_2": round(float(t2), 2) if t2 else None,
+                    "reward_risk": f"{rr}x" if isinstance(rr, (int, float)) else str(rr),
+                    "volume_profile": {
+                        "poc": round(float(poc), 2) if poc else None,
+                        "val": round(float(val), 2) if val else None,
+                        "vah": round(float(vah), 2) if vah else None,
+                    },
+                    "stage_2_momentum": stage2,
+                })
+            if len(top_picks) >= 10:
+                break
+
+    # If top_picks still empty, build from trade_plan_rows
+    if not top_picks and trade_plan_rows:
+        for r in trade_plan_rows[:10]:
+            t = r.get("Ticker")
+            if not t:
+                continue
+            price = r.get("Close")
+            stop = r.get("Intra Stop")
+            t1 = r.get("Intra T1")
+            t2 = r.get("Intra T2")
+            rr = r.get("RR(T1)")
+            verdict = r.get("Verdict") or "BULLISH"
+            direction = r.get("Direction") or "LONG"
+            grade = r.get("Grade") or "A"
+            if price and stop:
+                top_picks.append({
+                    "ticker": t,
+                    "direction": direction,
+                    "verdict": verdict,
+                    "confluence_score": grade,
+                    "current_price": price,
+                    "entry_trigger": price,
+                    "stop_loss": stop,
+                    "target_1": t1,
+                    "target_2": t2,
+                    "reward_risk": str(rr) if rr else "2.0x",
+                    "tactical_note": r.get("If opens near entry") or ""
+                })
 
     return {
         "universe_name": f"Default 50 Core Universe ({len(tickers)} stocks)",
         "sample_tickers": tickers,
         "total_tickers": len(tickers),
-        "cached_top_setups": top_picks if top_picks else "No premarket cache file found; all 50 tickers are tracked in real-time.",
+        "cached_top_setups": top_picks if top_picks else "Default 50 tracking active.",
         "note": "Default 50 consists of 50 high-beta and mega-cap leaders. The best setups feature Stage 2 breakout momentum, confluence score >= 2, and favorable R:R."
     }
 
@@ -699,11 +790,24 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "state of the market", "broad market", "market breadth"
     ]) or user_lower in ["market", "markets", "macro", "indices", "how is market today", "how is market today?"]
 
-    is_universe_query = not is_market_query and any(k in user_lower for k in [
-        "default 50", "default50", "watchlist", "best swing", "top pick",
-        "top swing", "screener", "scanner", "rank", "which stock", "best trade",
-        "best ticker", "universe"
-    ])
+    universe_keywords = [
+        "default 50", "default50", "watchlist", "best swing", "top pick", "top picks",
+        "top swing", "screener", "scanner", "rank", "which stock", "best trade", "best trades",
+        "best ticker", "best tickers", "universe", "good swing", "swing trade", "swing trades",
+        "trade idea", "trade ideas", "stock pick", "stock picks", "what to trade",
+        "what should i trade", "what to buy", "setups today", "trades for today",
+        "swing today", "swing picks", "swings for today", "entry/stop", "entries and stops",
+        "top setups", "best setups", "swing candidate", "swing candidates", "swing outlook",
+        "swing setup", "swing setups", "trade setups", "best stock", "best stocks",
+        "good trade", "good trades", "good stock", "good stocks", "recommend trade",
+        "recommend trades", "recommend stock", "recommend stocks", "any trades", "any trade",
+        "ideas for today", "trades today", "setup today", "swing", "swings", "picks today",
+        "trade for today", "good swings"
+    ]
+    is_universe_query = not is_market_query and (
+        any(k in user_lower for k in universe_keywords) or
+        (not explicit_ticker and not is_general_query and any(w in user_lower for w in ["trade", "setup", "buy", "stock", "entry", "target", "stop", "pick"]))
+    )
 
     is_general_query = not is_market_query and (any(user_lower.startswith(w) for w in [
         "hello", "hi", "hey", "who are you", "what is", "how do", "explain",

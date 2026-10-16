@@ -24,7 +24,9 @@ env/
 *.log
 .gmail_cache/
 **/.gmail_cache/
-data/
+data/*
+!data/default50_premarket_cache.json
+!data/trade_plan_latest.json
 
 # ── Large Archives & Heavy Folders ──────────────────
 *.zip
