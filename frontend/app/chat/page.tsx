@@ -101,6 +101,8 @@ export default function ChatPage() {
         keyToUse = localStorage.getItem("stockpulse_ai_key") || "";
       }
       setApiKey(keyToUse);
+      const savedModel = localStorage.getItem("stockpulse_ai_model");
+      if (savedModel) setSelectedModel(savedModel);
     }
     fetchStatus(keyToUse);
   }, []);
@@ -364,8 +366,29 @@ export default function ChatPage() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-base font-bold text-white tracking-wide">StockPulse AI Analyst</h1>
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
-                {modelStatus}
+              <span className={`text-[11px] font-mono px-2.5 py-0.5 rounded-full border ${
+                (apiKey || selectedModel.startsWith("gemini") || selectedModel === "groq")
+                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 font-semibold"
+                  : "bg-slate-800 border-slate-700 text-slate-300"
+              }`}>
+                {(() => {
+                  if (selectedModel === "gemini" || selectedModel === "gemini-2") {
+                    return apiKey ? "🟢 Google Gemini (Flash)" : "🟡 Gemini (Key Needed)";
+                  }
+                  if (selectedModel === "groq") {
+                    return apiKey ? "🟢 Groq Cloud (120B)" : "🟡 Groq (Key Needed)";
+                  }
+                  if (apiKey?.startsWith("AIza")) {
+                    return "🟢 Google Gemini (Flash)";
+                  }
+                  if (apiKey?.startsWith("gsk_")) {
+                    return "🟢 Groq Cloud (120B)";
+                  }
+                  if (apiKey) {
+                    return "🟢 Cloud AI Active";
+                  }
+                  return modelStatus;
+                })()}
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -414,6 +437,33 @@ export default function ChatPage() {
             />
           )}
 
+          {/* Model Selector Dropdown */}
+          <div className="flex items-center">
+            <select
+              value={selectedModel}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedModel(val);
+                if (typeof window !== "undefined") {
+                  localStorage.setItem("stockpulse_ai_model", val);
+                }
+                if (val !== "auto" && !apiKey) {
+                  setShowKeyModal(true);
+                }
+              }}
+              className="bg-[#151824] border border-slate-700 text-xs text-emerald-400 font-mono rounded-lg px-2.5 py-1.5 focus:outline-none cursor-pointer hover:border-slate-600 transition-colors"
+              title="Select AI Engine Provider"
+            >
+              <option value="auto" className="bg-[#151824] text-white">⚡ Auto Fallback</option>
+              <option value="gemini" className="bg-[#151824] text-white">🧠 Gemini 1.5 Flash</option>
+              <option value="gemini-2" className="bg-[#151824] text-white">🧠 Gemini 2.0 Flash</option>
+              <option value="groq" className="bg-[#151824] text-white">🚀 Groq Cloud (120B)</option>
+              <option value="cerebras" className="bg-[#151824] text-white">⚡ Cerebras (1800 t/s)</option>
+              <option value="openrouter" className="bg-[#151824] text-white">🌐 OpenRouter (Free)</option>
+              <option value="ollama" className="bg-[#151824] text-white">💻 Local Ollama</option>
+            </select>
+          </div>
+
           <button
             onClick={() => {
               setKeyInput(apiKey);
@@ -424,10 +474,18 @@ export default function ChatPage() {
                 ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
                 : "text-slate-400 hover:text-white border-slate-800 hover:border-slate-700 bg-[#151824]"
             }`}
-            title="Configure AI Cloud Key (Groq / Gemini / OpenRouter)"
+            title="Configure AI Cloud Key (Gemini / Groq / OpenRouter)"
           >
             <span>🔑</span>
-            <span>{apiKey ? "Key Active" : "Set AI Key"}</span>
+            <span>
+              {apiKey?.startsWith("AIza")
+                ? "Gemini Active"
+                : apiKey?.startsWith("gsk_")
+                ? "Groq Active"
+                : apiKey
+                ? "Key Active"
+                : "Set AI Key"}
+            </span>
           </button>
 
           <button
@@ -656,15 +714,30 @@ export default function ChatPage() {
 
             <div className="space-y-1.5">
               <label className="text-[11px] font-mono text-slate-400 uppercase tracking-wider">
-                API Key (Groq / Gemini / OpenRouter)
+                API Key (Gemini / Groq / OpenRouter)
               </label>
               <input
                 type="password"
                 value={keyInput}
                 onChange={(e) => setKeyInput(e.target.value.trim())}
-                placeholder="gsk_... or sk-or-..."
+                placeholder="AIzaSy... (Gemini) or gsk_... (Groq) or sk-or-..."
                 className="w-full bg-[#0a0c13] border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-[#4d9fff]"
               />
+              {keyInput && (
+                <div className="text-[11px] font-mono pt-0.5">
+                  {keyInput.startsWith("AIza") ? (
+                    <span className="text-emerald-400 font-semibold">✓ Google Gemini Key Recognized</span>
+                  ) : keyInput.startsWith("gsk_") ? (
+                    <span className="text-emerald-400 font-semibold">✓ Groq Cloud Key Recognized</span>
+                  ) : keyInput.startsWith("sk-or-") ? (
+                    <span className="text-emerald-400 font-semibold">✓ OpenRouter Key Recognized</span>
+                  ) : keyInput.startsWith("csk-") ? (
+                    <span className="text-emerald-400 font-semibold">✓ Cerebras Key Recognized</span>
+                  ) : (
+                    <span className="text-slate-400">ℹ️ Custom Key Entered</span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between pt-2">
@@ -700,6 +773,13 @@ export default function ChatPage() {
                     if (keyInput) {
                       localStorage.setItem("stockpulse_ai_key", keyInput);
                       setApiKey(keyInput);
+                      if (keyInput.startsWith("AIza")) {
+                        setSelectedModel("gemini");
+                        localStorage.setItem("stockpulse_ai_model", "gemini");
+                      } else if (keyInput.startsWith("gsk_")) {
+                        setSelectedModel("groq");
+                        localStorage.setItem("stockpulse_ai_model", "groq");
+                      }
                       fetchStatus(keyInput);
                     }
                     setShowKeyModal(false);
