@@ -363,18 +363,32 @@ def get_configured_providers(headers: Optional[Dict[str, str]] = None) -> List[D
             "is_local": False
         })
 
-    # Priority 2: Google Gemini
+    # Priority 2: Google Gemini (Gemini 1.5 Flash & Gemini 2.0 Flash)
     if is_valid_key(gemini_key):
         chain.append({
             "id": "gemini",
-            "name": "Google Gemini",
-            "model": "gemini-flash-latest",
+            "name": "Google Gemini (1.5 Flash)",
+            "model": "gemini-1.5-flash",
             "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
             "headers": {
                 "Authorization": f"Bearer {gemini_key}",
+                "x-goog-api-key": gemini_key,
                 "Content-Type": "application/json"
             },
             "speed": "~150 t/s",
+            "is_local": False
+        })
+        chain.append({
+            "id": "gemini-2",
+            "name": "Google Gemini (2.0 Flash)",
+            "model": "gemini-2.0-flash",
+            "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "headers": {
+                "Authorization": f"Bearer {gemini_key}",
+                "x-goog-api-key": gemini_key,
+                "Content-Type": "application/json"
+            },
+            "speed": "~200 t/s",
             "is_local": False
         })
 
@@ -621,7 +635,7 @@ async def get_agent_status(request: Request):
         primary_label = "🟢 Groq Cloud (~800 t/s · GPT-OSS 120B)"
     elif primary and primary["id"] == "groq-qwen":
         primary_label = "🟢 Groq Cloud (~900 t/s · Qwen 27B)"
-    elif primary and primary["id"] == "gemini":
+    elif primary and primary["id"] in ("gemini", "gemini-2"):
         primary_label = "🟢 Google Gemini (~150 t/s · Flash)"
     elif primary and primary["id"] == "cerebras":
         primary_label = "🟢 Cerebras Cloud (~1,800 t/s)"
@@ -896,6 +910,24 @@ async def chat_with_agent(req: ChatRequest, request: Request):
                             "stream": False,
                         }
                         resp = await client.post(api_url, json=payload, headers=headers)
+                        if resp.status_code != 200 and provider_id.startswith("gemini"):
+                            # Try official native Google Gemini generateContent endpoint
+                            gem_key = gemini_key or headers.get("x-goog-api-key") or ""
+                            if gem_key:
+                                nat_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gem_key}"
+                                nat_payload = {
+                                    "contents": [
+                                        {
+                                            "role": "user" if m["role"] in ("user", "system") else "model",
+                                            "parts": [{"text": m["content"]}],
+                                        }
+                                        for m in base_messages
+                                    ]
+                                }
+                                nat_resp = await client.post(nat_url, json=nat_payload, headers={"Content-Type": "application/json"})
+                                if nat_resp.status_code == 200:
+                                    resp = nat_resp
+
                         if resp.status_code != 200:
                             err_body = resp.text[:120]
                             last_error = f"{provider_name} HTTP {resp.status_code}: {err_body}"
