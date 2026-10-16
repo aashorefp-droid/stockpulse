@@ -12,7 +12,9 @@ import pandas as pd
 from fastapi import APIRouter, Query, UploadFile, File, Body
 from fastapi.responses import StreamingResponse
 
-from backend.services.scanner import WATCHLISTS, scan_single, get_short_squeeze_tickers
+from backend.services.scanner import (
+    WATCHLISTS, scan_single, get_short_squeeze_tickers, get_momentum_tickers
+)
 from backend.services.best_pick import analyze_and_rank_stocks, dispatch_triad_telegram_alert
 from backend.services.curl_scanner import scan_30w_curl_candidates, dispatch_30w_curl_telegram
 from backend.services.gmail_watchlist import (
@@ -25,10 +27,22 @@ router = APIRouter(prefix="/api/scanner", tags=["scanner"])
 @router.get("/watchlists")
 def get_watchlists(subjects: str = Query(""), days: int = Query(1)):
     res = {k: len(v) for k, v in WATCHLISTS.items()}
+    res["momentum"] = len(get_momentum_tickers())
     try:
         res["tos_email"] = len(fetch_today_watchlist(subjects=subjects, days=days))
     except Exception:
         res["tos_email"] = 0
+    return res
+
+
+@router.post("/momentum/refresh")
+def refresh_momentum_watchlist(limit: int = Query(50)):
+    """Re-run Stage-2 Momentum Screener and persist Top-N momentum stocks."""
+    from backend.services.momentum_screener import pick_momentum_top_n, save_momentum_list
+    res = pick_momentum_top_n(n=limit)
+    if res.get("tickers"):
+        save_momentum_list(res)
+        WATCHLISTS["momentum"] = res["tickers"]
     return res
 
 
@@ -203,6 +217,8 @@ async def stream_scan(
         ticker_list = await loop.run_in_executor(None, fetch_today_watchlist, subjects, days)
     elif watchlist == "short_squeeze":
         ticker_list = await loop.run_in_executor(None, get_short_squeeze_tickers)
+    elif watchlist == "momentum":
+        ticker_list = get_momentum_tickers()
     else:
         ticker_list = WATCHLISTS.get(watchlist, WATCHLISTS["default"])
     tickers = ticker_list

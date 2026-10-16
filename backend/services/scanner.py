@@ -20,10 +20,19 @@ from backend.config import ALPACA_API_KEY, ALPACA_API_SECRET
 
 # ── Watchlists ────────────────────────────────────────────────────────────────
 
+ETF_SECTORS: dict[str, str] = {
+    "SPY": "S&P 500", "QQQ": "Nasdaq 100", "DIA": "Dow 30", "IWM": "Russell 2000",
+    "XLK": "Technology", "XLF": "Financials", "XLE": "Energy", "XLV": "Health Care",
+    "XLI": "Industrials", "XLY": "Consumer Disc", "XLP": "Consumer Staples",
+    "XLU": "Utilities", "XLB": "Materials", "XLRE": "Real Estate", "XLC": "Comm Services",
+    "SOXX": "Semiconductors", "SMH": "Semiconductors", "ARKK": "Innovation",
+    "GLD": "Gold", "SLV": "Silver", "TLT": "20Y Treasury", "HYG": "High Yield",
+}
+
 WATCHLISTS: dict[str, list[str]] = {
     "default": [
         "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD", "NFLX", "CRM",
-        "ORCL", "ADBE", "INTC", "PYPL", "SQ", "SHOP", "COIN", "UBER", "ABNB", "SNOW",
+        "ORCL", "ADBE", "INTC", "PYPL", "XYZ", "SHOP", "COIN", "UBER", "ABNB", "SNOW",
         "BA", "CAT", "GS", "JPM", "V", "MA", "DIS", "NKE", "SBUX", "MCD",
         "XOM", "CVX", "PFE", "JNJ", "UNH", "MRNA", "LLY", "ABBV", "BMY", "MRK",
         "SPY", "QQQ", "DIA", "XLF", "XLE", "XLK", "ARKK", "SOXX", "SMH", "MRVL",
@@ -42,11 +51,11 @@ WATCHLISTS: dict[str, list[str]] = {
         "XLI", "SOXX", "SMH", "GLD", "SLV", "TLT", "HYG", "UVXY", "SQQQ", "TQQQ",
     ],
     "momentum": [
-        "NVDA", "MRVL", "AVGO", "ARM", "PLTR", "CRWD", "DDOG", "NET", "SMCI", "TSLA",
-        "META", "AMZN", "GOOGL", "MSFT", "AMD", "SNOW", "ZS", "SHOP", "COIN", "UBER",
-        "MSTR", "APP", "CEG", "VST", "HOOD", "TSM", "ANET", "DECK", "AXON", "HIMS",
-        "SOFI", "AFRM", "RDDT", "SPOT", "DKNG", "CVNA", "SE", "WING", "BBAI", "IONQ",
-        "RKLB", "ASTS", "CAVA", "PANW", "NOW", "PATH", "CELH", "DUOL", "TTD", "FSLR",
+        "MRNA", "TEAM", "CRM", "PLTR", "ZS", "NOW", "SHOP", "U", "MSFT", "TEM",
+        "PFE", "GILD", "ABNB", "CRWD", "CVX", "AMGN", "XOM", "HPE", "REGN", "MRK",
+        "MDT", "DIS", "MA", "DUOL", "V", "SNOW", "TGT", "ABBV", "DELL", "META",
+        "IOT", "CART", "DE", "MRVL", "NET", "PG", "SPOT", "LLY", "FTNT", "PATH",
+        "AAPL", "TOST", "VRTX", "ADI", "NVDA", "PYPL", "URI", "ANET", "AMZN", "MU",
     ],
     # Fallback only — overridden at runtime by get_short_squeeze_tickers()
     "short_squeeze": [
@@ -57,8 +66,46 @@ WATCHLISTS: dict[str, list[str]] = {
     ],
 }
 
+SWING_UNIVERSE_PRESETS: dict[str, list[str]] = {
+    "swing_core": WATCHLISTS["default"],
+    "swing_momentum": WATCHLISTS["momentum"],
+}
 
-# ── Live short-squeeze fetcher ─────────────────────────────────────────────────
+
+def get_momentum_tickers(refresh: bool = False, limit: int = 50) -> list[str]:
+    """Return latest Stage-2 screened momentum watchlist (or refresh live if requested)."""
+    try:
+        from backend.services.momentum_screener import (
+            load_momentum_list, pick_momentum_top_n, save_momentum_list,
+        )
+        if refresh:
+            res = pick_momentum_top_n(n=limit)
+            if res.get("tickers"):
+                save_momentum_list(res)
+                WATCHLISTS["momentum"] = res["tickers"]
+                return res["tickers"]
+        loaded = load_momentum_list()
+        if loaded and loaded.get("tickers"):
+            WATCHLISTS["momentum"] = loaded["tickers"][:limit]
+            return WATCHLISTS["momentum"]
+    except Exception:
+        pass
+    return WATCHLISTS["momentum"][:limit]
+
+
+def get_swing_universe_tickers(preset: str = "swing_core") -> list[str]:
+    if preset == "swing_momentum":
+        return get_momentum_tickers()
+    return SWING_UNIVERSE_PRESETS.get(preset, WATCHLISTS["default"])
+
+
+def get_earnings_watchlist() -> list[str]:
+    try:
+        from backend.db.earnings_tracker import get_watchlist
+        return get_watchlist()
+    except Exception:
+        return []
+
 
 def get_short_squeeze_tickers(min_short_pct: float = 10.0, limit: int = 40) -> list[str]:
     """
