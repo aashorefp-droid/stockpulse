@@ -1559,6 +1559,18 @@ def spy_v4_summary_job():
         except Exception:
             pass
 
+        # ── Upcoming Week Economic Focus ───────────────────────────────────
+        try:
+            from backend.routers.macro import _economic_events
+            upcoming_econ = _economic_events(days_ahead=7)
+            high_impact = [e for e in upcoming_econ if e.get("impact") == "High" and "No major" not in e.get("title", "")]
+            if high_impact:
+                top_econ = high_impact[0]
+                t_str = f" at {top_econ.get('time')}" if top_econ.get("time") else ""
+                msg_lines.append(f"📅 <b>Econ Focus:</b> {html.escape(top_econ.get('day', ''))} — <b>{html.escape(top_econ.get('title', ''))}</b>{html.escape(t_str)}")
+        except Exception:
+            pass
+
         # ── SPY News Sentiment (Good / Bad / Neutral) ──────────────────────
         try:
             import news_sentiment

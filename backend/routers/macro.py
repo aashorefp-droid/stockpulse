@@ -71,26 +71,83 @@ ECON_EVENTS = [
     {"date": "2026-09-16", "title": "FOMC", "time": "02:00 PM ET", "impact": "High", "note": "Fed statement / rate decision", "priority": 95},
     {"date": "2026-10-28", "title": "FOMC", "time": "02:00 PM ET", "impact": "High", "note": "Fed statement / rate decision", "priority": 95},
     {"date": "2026-12-09", "title": "FOMC", "time": "02:00 PM ET", "impact": "High", "note": "Fed statement / rate decision", "priority": 95},
+    # Monthly OpEx (Options Expiration)
+    {"date": "2026-10-16", "title": "OpEx", "time": "04:00 PM ET", "impact": "High", "note": "October Monthly Options Expiration", "priority": 85},
+    {"date": "2026-11-20", "title": "OpEx", "time": "04:00 PM ET", "impact": "High", "note": "November Monthly Options Expiration", "priority": 85},
+    {"date": "2026-12-18", "title": "Quad OpEx", "time": "04:00 PM ET", "impact": "High", "note": "December Quadruple Witching OpEx", "priority": 90},
+    # Retail Sales
+    {"date": "2026-10-16", "title": "Retail Sales", "time": "08:30 AM ET", "impact": "High", "note": "Retail Sales for Sep 2026", "priority": 85},
+    {"date": "2026-11-17", "title": "Retail Sales", "time": "08:30 AM ET", "impact": "High", "note": "Retail Sales for Oct 2026", "priority": 85},
+    {"date": "2026-12-16", "title": "Retail Sales", "time": "08:30 AM ET", "impact": "High", "note": "Retail Sales for Nov 2026", "priority": 85},
+    # Core PCE Inflation (Fed preferred inflation gauge)
+    {"date": "2026-10-30", "title": "Core PCE", "time": "08:30 AM ET", "impact": "High", "note": "Core PCE Price Index for Sep 2026", "priority": 100},
+    {"date": "2026-11-25", "title": "Core PCE", "time": "08:30 AM ET", "impact": "High", "note": "Core PCE Price Index for Oct 2026", "priority": 100},
+    {"date": "2026-12-23", "title": "Core PCE", "time": "08:30 AM ET", "impact": "High", "note": "Core PCE Price Index for Nov 2026", "priority": 100},
+    # GDP Releases
+    {"date": "2026-10-29", "title": "GDP (Q3)", "time": "08:30 AM ET", "impact": "High", "note": "Q3 2026 GDP Advance Estimate", "priority": 95},
+    {"date": "2026-11-25", "title": "GDP (Q3)", "time": "08:30 AM ET", "impact": "High", "note": "Q3 2026 GDP Second Estimate", "priority": 90},
+    {"date": "2026-12-22", "title": "GDP (Q3)", "time": "08:30 AM ET", "impact": "High", "note": "Q3 2026 GDP Third / Final", "priority": 85},
+    # Initial Jobless Claims (Weekly Thursdays)
+    {"date": "2026-10-22", "title": "Claims", "time": "08:30 AM ET", "impact": "Medium", "note": "Weekly Initial Jobless Claims", "priority": 70},
+    {"date": "2026-10-29", "title": "Claims", "time": "08:30 AM ET", "impact": "Medium", "note": "Weekly Initial Jobless Claims", "priority": 70},
+    {"date": "2026-11-05", "title": "Claims", "time": "08:30 AM ET", "impact": "Medium", "note": "Weekly Initial Jobless Claims", "priority": 70},
+    {"date": "2026-11-12", "title": "Claims", "time": "08:30 AM ET", "impact": "Medium", "note": "Weekly Initial Jobless Claims", "priority": 70},
+    {"date": "2026-11-19", "title": "Claims", "time": "08:30 AM ET", "impact": "Medium", "note": "Weekly Initial Jobless Claims", "priority": 70},
+    # ISM PMIs
+    {"date": "2026-11-02", "title": "ISM Mfg", "time": "10:00 AM ET", "impact": "High", "note": "ISM Manufacturing PMI for Oct 2026", "priority": 85},
+    {"date": "2026-11-04", "title": "ISM Svc", "time": "10:00 AM ET", "impact": "High", "note": "ISM Services PMI for Oct 2026", "priority": 85},
+    {"date": "2026-12-01", "title": "ISM Mfg", "time": "10:00 AM ET", "impact": "High", "note": "ISM Manufacturing PMI for Nov 2026", "priority": 85},
+    {"date": "2026-12-03", "title": "ISM Svc", "time": "10:00 AM ET", "impact": "High", "note": "ISM Services PMI for Nov 2026", "priority": 85},
 ]
 
 
-def _economic_events():
+def _economic_events(days_ahead: int = 7):
+    """
+    Pulls high-impact economic calendar events for a full week in advance (7 days).
+    Returns events chronologically with clear day labels.
+    """
     today = datetime.now(ZoneInfo("America/New_York")).date()
     out = []
-    for label, d in (("Today", today), ("Tomorrow", today + timedelta(days=1))):
-        matches = [e for e in ECON_EVENTS if e["date"] == d.isoformat()]
-        if matches:
-            event = sorted(matches, key=lambda e: e["priority"], reverse=True)[0]
-            out.append({k: v for k, v in event.items() if k != "priority"} | {"day": label})
+    has_today = False
+
+    for offset in range(days_ahead + 1):
+        d = today + timedelta(days=offset)
+        d_iso = d.isoformat()
+        if offset == 0:
+            label = "Today"
+        elif offset == 1:
+            label = "Tomorrow"
         else:
-            out.append({
-                "day": label,
-                "date": d.isoformat(),
-                "title": "No major scheduled",
-                "time": "",
-                "impact": "Low",
-                "note": "No CPI, PPI, Employment Situation, or FOMC event scheduled.",
-            })
+            label = d.strftime("%a %m/%d")
+
+        matches = [e for e in ECON_EVENTS if e["date"] == d_iso]
+        if matches:
+            sorted_matches = sorted(matches, key=lambda e: e.get("priority", 50), reverse=True)
+            for event in sorted_matches:
+                out.append({k: v for k, v in event.items() if k != "priority"} | {"day": label})
+            if offset == 0:
+                has_today = True
+
+    if not has_today:
+        out.insert(0, {
+            "day": "Today",
+            "date": today.isoformat(),
+            "title": "No major today",
+            "time": "",
+            "impact": "Low",
+            "note": "No high-impact economic releases scheduled for today.",
+        })
+
+    if len(out) == 1 and out[0]["title"] == "No major today":
+        out.append({
+            "day": "7-Day View",
+            "date": (today + timedelta(days=days_ahead)).isoformat(),
+            "title": "Clear Calendar",
+            "time": "",
+            "impact": "Low",
+            "note": "No major CPI, PPI, Jobs, or FOMC releases scheduled for the next 7 days.",
+        })
+
     return out
 
 

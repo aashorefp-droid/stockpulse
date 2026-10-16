@@ -507,12 +507,12 @@ export default function MarketRisk() {
         {/* Risk notes — hidden on mobile */}
         {economic_events && economic_events.length > 0 && (
           <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-[10px]">
-            <span className="font-semibold uppercase tracking-wide text-muted">Econ</span>
-            {economic_events.slice(0, 2).map(event => (
+            <span className="font-semibold uppercase tracking-wide text-muted" title="High-impact economic events scheduled for the next 7 days">Econ (Week)</span>
+            {economic_events.slice(0, 6).map(event => (
               <span
-                key={`${event.day}-${event.date}`}
+                key={`${event.day}-${event.date}-${event.title}`}
                 className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 ${eventTone(event)}`}
-                title={`${event.day} ${event.date}: ${event.note ?? event.title}${event.time ? ` at ${event.time}` : ""}. Daily refresh.`}
+                title={`${event.day} ${event.date}: ${event.note ?? event.title}${event.time ? ` at ${event.time}` : ""}. 7-day economic calendar.`}
               >
                 <span className={`h-1.5 w-1.5 rounded-full ${event.impact === "High" ? "bg-yellow" : "bg-muted"}`} />
                 <span className="font-semibold">{event.day}</span>
