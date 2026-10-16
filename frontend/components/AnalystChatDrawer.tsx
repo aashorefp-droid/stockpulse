@@ -68,9 +68,23 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        let r = await fetch("/api/agent/status", { cache: "no-store" }).catch(() => null);
+        const activeKey = typeof window !== "undefined" ? localStorage.getItem("stockpulse_ai_key") || "" : "";
+        const headers: Record<string, string> = {};
+        if (activeKey) {
+          if (activeKey.startsWith("AIza")) headers["x-gemini-api-key"] = activeKey;
+          else if (activeKey.startsWith("gsk_")) headers["x-groq-api-key"] = activeKey;
+          else if (activeKey.startsWith("sk-or-")) headers["x-openrouter-api-key"] = activeKey;
+          else if (activeKey.startsWith("csk-")) headers["x-cerebras-api-key"] = activeKey;
+          else {
+            headers["x-ai-key"] = activeKey;
+            headers["x-gemini-api-key"] = activeKey;
+            headers["x-groq-api-key"] = activeKey;
+          }
+        }
+
+        let r = await fetch("/api/agent/status", { cache: "no-store", headers }).catch(() => null);
         if (!r || !r.ok) {
-          r = await fetch(`${API_BASE}/api/agent/status`, { cache: "no-store" });
+          r = await fetch(`${API_BASE}/api/agent/status`, { cache: "no-store", headers });
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
@@ -111,12 +125,28 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
         model: selectedModel !== "auto" ? selectedModel : undefined,
       };
 
+      const currentKey = typeof window !== "undefined" ? localStorage.getItem("stockpulse_ai_key") || "" : "";
+      const reqHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (currentKey) {
+        if (currentKey.startsWith("AIza")) reqHeaders["x-gemini-api-key"] = currentKey;
+        else if (currentKey.startsWith("gsk_")) reqHeaders["x-groq-api-key"] = currentKey;
+        else if (currentKey.startsWith("sk-or-")) reqHeaders["x-openrouter-api-key"] = currentKey;
+        else if (currentKey.startsWith("csk-")) reqHeaders["x-cerebras-api-key"] = currentKey;
+        else {
+          reqHeaders["x-ai-key"] = currentKey;
+          reqHeaders["x-gemini-api-key"] = currentKey;
+          reqHeaders["x-groq-api-key"] = currentKey;
+        }
+      }
+
       // Try local/Vercel proxy route first (injects Vercel env keys), fallback to direct backend
       let response: Response;
       try {
         response = await fetch("/api/agent/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: reqHeaders,
           body: JSON.stringify(requestPayload),
         });
         if (!response.ok && response.status === 404) {
@@ -125,7 +155,7 @@ export default function AnalystChatDrawer({ currentTicker, currentPrice }: Analy
       } catch {
         response = await fetch(`${API_BASE}/api/agent/chat`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: reqHeaders,
           body: JSON.stringify(requestPayload),
         });
       }

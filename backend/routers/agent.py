@@ -143,18 +143,41 @@ def load_all_environment_sources(headers: Optional[Dict[str, str]] = None) -> Di
                 continue
             clean_hk = hk.lower().replace("-", "_")
             val_str = str(v).strip().strip('"').strip("'")
-            if "groq" in clean_hk and is_valid_key(val_str):
-                os.environ["GROQ_API_KEY"] = val_str
-                discovered["groq"] = "request_header"
-            elif ("gemini" in clean_hk or "google" in clean_hk) and is_valid_key(val_str):
+            if not is_valid_key(val_str):
+                continue
+
+            # Content-based pattern detection takes precedence
+            if val_str.startswith("AIza") or re.match(r"^AIzaSy[A-Za-z0-9_-]{30,}", val_str):
                 os.environ["GEMINI_API_KEY"] = val_str
-                discovered["gemini"] = "request_header"
-            elif "openrouter" in clean_hk and is_valid_key(val_str):
+                discovered["gemini"] = f"header:{hk} (detected_gemini)"
+                if os.environ.get("GROQ_API_KEY") == val_str:
+                    del os.environ["GROQ_API_KEY"]
+            elif val_str.startswith("gsk_") or re.match(r"^gsk_[A-Za-z0-9_-]{20,}", val_str):
+                os.environ["GROQ_API_KEY"] = val_str
+                discovered["groq"] = f"header:{hk} (detected_groq)"
+            elif val_str.startswith("sk-or-"):
                 os.environ["OPENROUTER_API_KEY"] = val_str
-                discovered["openrouter"] = "request_header"
-            elif "cerebras" in clean_hk and is_valid_key(val_str):
+                discovered["openrouter"] = f"header:{hk} (detected_openrouter)"
+            elif val_str.startswith("csk-"):
                 os.environ["CEREBRAS_API_KEY"] = val_str
-                discovered["cerebras"] = "request_header"
+                discovered["cerebras"] = f"header:{hk} (detected_cerebras)"
+            # Header name fallback
+            elif "gemini" in clean_hk or "google" in clean_hk:
+                os.environ["GEMINI_API_KEY"] = val_str
+                discovered["gemini"] = f"header:{hk}"
+            elif "groq" in clean_hk:
+                if val_str.startswith("AIza"):
+                    os.environ["GEMINI_API_KEY"] = val_str
+                    discovered["gemini"] = f"header:{hk} (rerouted_from_groq)"
+                else:
+                    os.environ["GROQ_API_KEY"] = val_str
+                    discovered["groq"] = f"header:{hk}"
+            elif "openrouter" in clean_hk:
+                os.environ["OPENROUTER_API_KEY"] = val_str
+                discovered["openrouter"] = f"header:{hk}"
+            elif "cerebras" in clean_hk:
+                os.environ["CEREBRAS_API_KEY"] = val_str
+                discovered["cerebras"] = f"header:{hk}"
 
     # 2. Try loading dotenv from standard paths
     try:
@@ -304,6 +327,12 @@ def get_configured_providers(headers: Optional[Dict[str, str]] = None) -> List[D
     openrouter_key = get_env_flexible(["OPENROUTER"])
     ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip()
     ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
+
+    # Sanity check: if groq_key was mistakenly populated with an AIza (Gemini) key, move it
+    if groq_key.startswith("AIza"):
+        if not gemini_key:
+            gemini_key = groq_key
+        groq_key = ""
 
     chain = []
 

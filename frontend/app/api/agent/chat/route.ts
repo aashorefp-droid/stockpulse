@@ -20,16 +20,32 @@ export async function POST(req: NextRequest) {
     "Content-Type": "application/json",
   };
 
-  // 1. Forward any incoming AI key headers from client
-  const incomingGroq = req.headers.get("x-groq-api-key");
-  const incomingGemini = req.headers.get("x-gemini-api-key");
-  const incomingOpenRouter = req.headers.get("x-openrouter-api-key");
-  const incomingCerebras = req.headers.get("x-cerebras-api-key");
+  // 1. Inspect any incoming AI key headers and auto-detect by prefix
+  const rawIncoming = (
+    req.headers.get("x-ai-key") ||
+    req.headers.get("x-gemini-api-key") ||
+    req.headers.get("x-groq-api-key") ||
+    req.headers.get("x-openrouter-api-key") ||
+    req.headers.get("x-cerebras-api-key") ||
+    ""
+  ).trim();
 
-  if (incomingGroq) forwardHeaders["x-groq-api-key"] = incomingGroq.trim();
-  if (incomingGemini) forwardHeaders["x-gemini-api-key"] = incomingGemini.trim();
-  if (incomingOpenRouter) forwardHeaders["x-openrouter-api-key"] = incomingOpenRouter.trim();
-  if (incomingCerebras) forwardHeaders["x-cerebras-api-key"] = incomingCerebras.trim();
+  if (rawIncoming) {
+    if (rawIncoming.startsWith("AIza")) {
+      forwardHeaders["x-gemini-api-key"] = rawIncoming;
+    } else if (rawIncoming.startsWith("gsk_")) {
+      forwardHeaders["x-groq-api-key"] = rawIncoming;
+    } else if (rawIncoming.startsWith("sk-or-")) {
+      forwardHeaders["x-openrouter-api-key"] = rawIncoming;
+    } else if (rawIncoming.startsWith("csk-")) {
+      forwardHeaders["x-cerebras-api-key"] = rawIncoming;
+    } else {
+      // Forward as generic and specific candidates
+      forwardHeaders["x-ai-key"] = rawIncoming;
+      forwardHeaders["x-gemini-api-key"] = rawIncoming;
+      forwardHeaders["x-groq-api-key"] = rawIncoming;
+    }
+  }
 
   // 2. Fallback to Vercel / server environment variables if not passed by client
   const groq = process.env.GROQ_API_KEY || process.env.GROQ_KEY;
@@ -41,8 +57,8 @@ export async function POST(req: NextRequest) {
     process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_KEY;
   const cerebras = process.env.CEREBRAS_API_KEY || process.env.CEREBRAS_KEY;
 
-  if (!forwardHeaders["x-groq-api-key"] && groq) forwardHeaders["x-groq-api-key"] = groq.trim();
   if (!forwardHeaders["x-gemini-api-key"] && gemini) forwardHeaders["x-gemini-api-key"] = gemini.trim();
+  if (!forwardHeaders["x-groq-api-key"] && groq) forwardHeaders["x-groq-api-key"] = groq.trim();
   if (!forwardHeaders["x-openrouter-api-key"] && openrouter) forwardHeaders["x-openrouter-api-key"] = openrouter.trim();
   if (!forwardHeaders["x-cerebras-api-key"] && cerebras) forwardHeaders["x-cerebras-api-key"] = cerebras.trim();
 

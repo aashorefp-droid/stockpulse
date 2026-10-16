@@ -54,7 +54,19 @@ export default function ChatPage() {
 
       const headers: Record<string, string> = {};
       if (activeKey) {
-        headers["x-groq-api-key"] = activeKey;
+        if (activeKey.startsWith("AIza")) {
+          headers["x-gemini-api-key"] = activeKey;
+        } else if (activeKey.startsWith("gsk_")) {
+          headers["x-groq-api-key"] = activeKey;
+        } else if (activeKey.startsWith("sk-or-")) {
+          headers["x-openrouter-api-key"] = activeKey;
+        } else if (activeKey.startsWith("csk-")) {
+          headers["x-cerebras-api-key"] = activeKey;
+        } else {
+          headers["x-ai-key"] = activeKey;
+          headers["x-gemini-api-key"] = activeKey;
+          headers["x-groq-api-key"] = activeKey;
+        }
       }
 
       let r = await fetch("/api/agent/status", { cache: "no-store", headers }).catch(() => null);
@@ -126,7 +138,19 @@ export default function ChatPage() {
         "Content-Type": "application/json",
       };
       if (currentKey) {
-        reqHeaders["x-groq-api-key"] = currentKey;
+        if (currentKey.startsWith("AIza")) {
+          reqHeaders["x-gemini-api-key"] = currentKey;
+        } else if (currentKey.startsWith("gsk_")) {
+          reqHeaders["x-groq-api-key"] = currentKey;
+        } else if (currentKey.startsWith("sk-or-")) {
+          reqHeaders["x-openrouter-api-key"] = currentKey;
+        } else if (currentKey.startsWith("csk-")) {
+          reqHeaders["x-cerebras-api-key"] = currentKey;
+        } else {
+          reqHeaders["x-ai-key"] = currentKey;
+          reqHeaders["x-gemini-api-key"] = currentKey;
+          reqHeaders["x-groq-api-key"] = currentKey;
+        }
       }
 
       // Try local/Vercel proxy route first (injects Vercel env keys), fallback to direct backend
