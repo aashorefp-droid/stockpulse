@@ -43,6 +43,14 @@ Your Response Guidelines:
 - Market Overview & Macro Status: When the user asks about the overall market, today's market, or broad indices (e.g. 'How is market today?'), analyze the provided live macro instruments (SPY, QQQ, DIA, IWM, VIX, TLT, GLD), sector rotations, SPY Volume Profile levels, and macro risk score. Summarize market posture (Risk-On vs Risk-Off), leading/lagging sectors, key support/resistance levels, and institutional takeaways.
 - Universe / Watchlist Questions: If the user asks about the Default 50 universe, screeners, or top swing setups, analyze the provided universe setups and rank them by confluence, risk/reward, and trend alignment.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
+- SPY Day Trading & Post-Open Options Trade Ideas (Calls vs Puts):
+  When analyzing SPY or when the user asks for SPY trade ideas, calls vs puts, or asks 'What is the valid outcome?':
+  Evaluate the live SPY Day Trading V4 engine (PDH, PDL, PWH, PWL, Midpoint, and 4 outcomes).
+  Provide a structured decision:
+  1. Valid Outcome: Explicitly declare which outcome from the 8:00 AM playbook has triggered as valid based on current price action vs PDH/PDL.
+  2. Trade Idea: High-conviction decision between CALLS vs PUTS (or Range Wait / Chop if trading mid-range).
+  3. Actionable Levels: Exact Entry Trigger, Invalidation Stop-Loss, Target 1, Target 2, and R:R ratio.
+  4. Options Contract & Scaling: Recommended strike (Delta 0.40–0.50 ATM/near-OTM), 0DTE/next expiry, scale 50% at T1, trail stop to breakeven.
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -413,7 +421,7 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     ea_stats = ea.get("stats") or {}
     ea_hist = ea.get("history") or []
 
-    return {
+    ret = {
         "ticker": ticker,
         "company_name": f.get("name") or ticker,
         "sector": f.get("sector") or "N/A",
@@ -496,6 +504,15 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
             "suggested_play": (ea.get("post_earnings") or {}).get("suggested_play", "N/A"),
         },
     }
+
+    if ticker == "SPY":
+        try:
+            from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
+            ret["spy_day_trading_v4"] = await asyncio.to_thread(get_spy_valid_outcome_and_trade_idea)
+        except Exception as se:
+            logger.warning(f"Error computing SPY V4 valid outcome: {se}")
+
+    return ret
 
 
 def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:

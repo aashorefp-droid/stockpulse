@@ -604,6 +604,145 @@ def analyze(ticker: str) -> dict:
     return analyze_from_daily(ticker, daily)
 
 
+def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) -> dict:
+    """
+    Evaluates current SPY price action against previous day/week key levels (PDH, PDL, PWH, PWL)
+    to determine which scenario from the 8:00 AM Playbook has triggered as the VALID OUTCOME,
+    and returns a concrete Calls vs Puts trade idea with strikes, entry, stop, and targets.
+    """
+    v4_data = analyze("SPY")
+    if v4_data.get("error"):
+        return {"error": v4_data["error"]}
+
+    price = float(current_price) if current_price and current_price > 0 else float(v4_data.get("price", 0))
+    levels = v4_data.get("levels", {})
+    pdh = float(levels.get("pdh", 0))
+    pdl = float(levels.get("pdl", 0))
+    pwh = float(levels.get("pwh", 0))
+    pwl = float(levels.get("pwl", 0))
+    pd_mid = float(levels.get("pd_mid", 0))
+    atr = float(levels.get("atr", 5.0))
+    buf = round(atr * 0.15, 2)
+
+    # Determine Valid Outcome and Option Idea (Calls vs Puts)
+    if price >= pdh:
+        outcome_label = "Outcome 1: Breakout & Hold above PDH"
+        action = "CALLS"
+        bias = "Bullish Continuation"
+        suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+        entry = round(pdh, 2)
+        stop = round(pdh - buf, 2)
+        t1 = round(max(pwh, pdh + atr * 0.5), 2)
+        t2 = round(pdh + atr, 2)
+        trigger = f"Holds above PDH (${pdh:.2f}) on 5m candle retest"
+        invalidation = f"Break back below PDH stop at ${stop:.2f}"
+        rationale = f"SPY is trading above PDH (${pdh:.2f}). Market structure confirms bullish calls breakout toward PWH (${pwh:.2f})."
+
+    elif price <= pdl:
+        outcome_label = "Outcome 2: Breakdown below PDL"
+        action = "PUTS"
+        bias = "Bearish Continuation"
+        suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+        entry = round(pdl, 2)
+        stop = round(pdl + buf, 2)
+        t1 = round(min(pwl, pdl - atr * 0.5), 2)
+        t2 = round(pdl - atr, 2)
+        trigger = f"Rejects PDL (${pdl:.2f}) from below on 5m candle"
+        invalidation = f"Reclaim back above PDL stop at ${stop:.2f}"
+        rationale = f"SPY is trading below PDL (${pdl:.2f}). Market structure confirms bearish puts continuation toward PWL (${pwl:.2f})."
+
+    else:
+        # Inside PDL-PDH Range
+        dist_to_pdh = pdh - price
+        dist_to_pdl = price - pdl
+
+        if price >= pd_mid:
+            if dist_to_pdh <= atr * 0.25:
+                outcome_label = "Outcome 3: Testing Resistance at PDH"
+                action = "PUTS (on Reject) / CALLS (on Breakout)"
+                bias = "Neutral-to-Bearish unless Breakout Confirms"
+                suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS (or ${round(pdh + 1.0):.0f} CALLS)"
+                entry = round(pdh, 2)
+                stop = round(pdh + buf, 2)
+                t1 = round(pd_mid, 2)
+                t2 = round(pdl, 2)
+                trigger = f"Watch PDH (${pdh:.2f}): Puts if 5m candle rejects; Calls if 5m candle breaks above"
+                invalidation = f"Stop at ${stop:.2f}"
+                rationale = f"SPY is testing PDH resistance (${pdh:.2f}, +${dist_to_pdh:.2f} away). Watch for sweep rejection short."
+            else:
+                outcome_label = "Outcome 5: Upper Range Consolidation"
+                action = "CALLS on Dip to Mid / WAIT"
+                bias = "Mild Bullish"
+                suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+                entry = round(pd_mid, 2)
+                stop = round(pd_mid - buf, 2)
+                t1 = round(pdh, 2)
+                t2 = round(pwh, 2)
+                trigger = f"Pullback to Midpoint (${pd_mid:.2f}) and confirm bounce"
+                invalidation = f"Loss of Midpoint (${stop:.2f})"
+                rationale = f"SPY is trading in upper half of range above Mid (${pd_mid:.2f}) but below PDH (${pdh:.2f})."
+        else:
+            if dist_to_pdl <= atr * 0.25:
+                outcome_label = "Outcome 4: Testing Support at PDL"
+                action = "CALLS (on Reclaim) / PUTS (on Breakdown)"
+                bias = "Neutral-to-Bullish unless Breakdown Confirms"
+                suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS (or ${round(pdl - 1.0):.0f} PUTS)"
+                entry = round(pdl, 2)
+                stop = round(pdl - buf, 2)
+                t1 = round(pd_mid, 2)
+                t2 = round(pdh, 2)
+                trigger = f"Watch PDL (${pdl:.2f}): Calls if 5m candle reclaims; Puts if 5m candle breaks below"
+                invalidation = f"Stop at ${stop:.2f}"
+                rationale = f"SPY is testing PDL support (${pdl:.2f}, -${dist_to_pdl:.2f} away). Watch for bear trap reclaim bounce."
+            else:
+                outcome_label = "Outcome 5: Lower Range Consolidation"
+                action = "PUTS on Push to Mid / WAIT"
+                bias = "Mild Bearish"
+                suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+                entry = round(pd_mid, 2)
+                stop = round(pd_mid + buf, 2)
+                t1 = round(pdl, 2)
+                t2 = round(pwl, 2)
+                trigger = f"Push to Midpoint (${pd_mid:.2f}) and confirm rejection"
+                invalidation = f"Reclaim above Midpoint (${stop:.2f})"
+                rationale = f"SPY is trading in lower half of range below Mid (${pd_mid:.2f}) and approaching PDL (${pdl:.2f})."
+
+    # Calculate Risk / Reward
+    risk = abs(entry - stop) if entry != stop else 1.0
+    reward = abs(t1 - entry)
+    rr = round(reward / risk, 1) if risk > 0 else 2.0
+
+    return {
+        "price": price,
+        "valid_outcome": outcome_label,
+        "trade_idea": {
+            "action": action,
+            "bias": bias,
+            "suggested_contract": suggested_strike,
+            "expiry_type": "0DTE or Next Expiry (Delta 0.40 - 0.50)",
+            "entry_level": entry,
+            "stop_loss": stop,
+            "target_1": t1,
+            "target_2": t2,
+            "reward_risk": f"{rr}x",
+            "trigger_condition": trigger,
+            "invalidation_rule": invalidation,
+            "rationale": rationale,
+            "execution_strategy": "Scale 50% profit at Target 1, immediately move stop to breakeven, and let runner trail for Target 2."
+        },
+        "key_levels": {
+            "pdh": pdh,
+            "pdl": pdl,
+            "pwh": pwh,
+            "pwl": pwl,
+            "pd_mid": pd_mid,
+            "atr": atr,
+        },
+        "morning_signal": v4_data.get("signal", {}),
+        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT")
+    }
+
+
 if __name__ == "__main__":
     import json
     import sys

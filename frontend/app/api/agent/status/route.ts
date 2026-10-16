@@ -10,6 +10,7 @@ export async function GET(req: NextRequest) {
   ).replace(/\/+$/, "");
 
   // 1. Forward any incoming AI key headers from client
+  const forwardHeaders: Record<string, string> = {};
   const incomingGroq = req.headers.get("x-groq-api-key");
   const incomingGemini = req.headers.get("x-gemini-api-key");
   const incomingOpenRouter = req.headers.get("x-openrouter-api-key");

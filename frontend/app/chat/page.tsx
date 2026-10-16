@@ -28,6 +28,7 @@ export default function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string>("");
+  const [modelStatus, setModelStatus] = useState<string>("🟢 AI Engine Active");
   const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
   const [keyInput, setKeyInput] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -246,6 +247,7 @@ export default function ChatPage() {
 
   const isGeneral = ticker === "GENERAL";
   const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
+  const isSpy = currentActiveTicker === "SPY";
 
   const quickPrompts = isGeneral
     ? [
@@ -264,6 +266,25 @@ export default function ChatPage() {
         {
           title: "High Beta Risk Management",
           prompt: "How should a swing trader size positions and manage stop-losses on High Beta stocks (>1.5x SPY)?",
+        },
+      ]
+    : isSpy
+    ? [
+        {
+          title: "🎯 SPY Calls or Puts Today",
+          prompt: "What is the valid outcome for SPY based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for SPY Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.",
+        },
+        {
+          title: "⏱️ 5-Min Post-Open Outcome",
+          prompt: "Evaluate SPY 5 minutes after open: Which scenario from the 8:00 AM playbook is valid (PDH hold/breakout, PDL reclaim/breakdown, or sweep)? What are the exact trade levels?",
+        },
+        {
+          title: "📊 SPY V4 Levels (PDH/PDL)",
+          prompt: "Break down SPY Day Trading V4 key levels today: PDH, PDL, PWH, PWL, Midpoint, ATR, and the 4 possible execution scenarios.",
+        },
+        {
+          title: "🏛️ Macro & Gamma Alignment",
+          prompt: "How does SPY align with today's Dealer Gamma (GEX), Market Regime, and economic calendar? Is this a day for calls or puts?",
         },
       ]
     : [

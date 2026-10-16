@@ -1681,6 +1681,89 @@ def spy_v4_summary_job():
         logger.error(f"[scheduler] SPY V4 summary failed: {e}")
 
 
+def spy_v4_post_open_outcome_job():
+    """
+    8:35 AM CST (Mon-Fri) — 5 Minutes Post-Market Open SPY Outcome Validation Alert.
+    Evaluates the 5-min post-open candle against the 8:00 AM V4 Playbook to declare
+    which outcome has triggered as VALID, and provides actionable CALLS vs PUTS trade levels.
+    """
+    if not _SPY_V4_SUMMARY_ENABLED:
+        logger.info("[scheduler] SPY 8:35 AM validation skipped: SPY_V4_SUMMARY_ENABLED=0")
+        return
+
+    import html
+    from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
+
+    try:
+        data = get_spy_valid_outcome_and_trade_idea()
+        if data.get("error"):
+            logger.warning(f"[scheduler] SPY 8:35 AM outcome validation failed: {data['error']}")
+            return
+
+        price = data.get("price", 0)
+        valid_outcome = data.get("valid_outcome", "Unknown")
+        idea = data.get("trade_idea", {})
+        levels = data.get("key_levels", {})
+
+        action = idea.get("action", "WAIT")
+        action_emoji = "🟢" if "CALLS" in action else "🔴" if "PUTS" in action else "⏸"
+        contract = idea.get("suggested_contract", "SPY ATM")
+        entry = idea.get("entry_level", price)
+        stop = idea.get("stop_loss", price)
+        t1 = idea.get("target_1", price)
+        t2 = idea.get("target_2", price)
+        rr = idea.get("reward_risk", "—")
+        trigger = idea.get("trigger_condition", "")
+        invalidation = idea.get("invalidation_rule", "")
+        rationale = idea.get("rationale", "")
+        strategy = idea.get("execution_strategy", "")
+
+        pdh = levels.get("pdh", 0)
+        pdl = levels.get("pdl", 0)
+        pd_mid = levels.get("pd_mid", 0)
+        atr = levels.get("atr", 0)
+
+        now_dt = datetime.now(CST)
+        now_str = now_dt.strftime("%I:%M %p CT")
+
+        chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
+
+        lines = [
+            f"🎯 <b>SPY Open Validation — 5-Min Post-Open ({now_str})</b>",
+            f"<b>Valid Outcome:</b> {action_emoji} <b>{html.escape(valid_outcome)}</b>",
+            f"<i>{html.escape(rationale)}</i>",
+            "",
+            "📊 <b>Market Structure & Levels:</b>",
+            f"• SPY Price: <b>${price:.2f}</b>",
+            f"• PDH: ${pdh:.2f} | PDL: ${pdl:.2f} | Mid: ${pd_mid:.2f} | ATR: ${atr:.2f}",
+            "",
+            "⚡ <b>Actionable Trade Idea:</b>",
+            f"• <b>Recommendation:</b> {action_emoji} <b>{html.escape(action)}</b>",
+            f"• <b>Contract:</b> <code>{html.escape(contract)}</code> ({idea.get('expiry_type', '0DTE')})",
+            f"• <b>Entry Trigger:</b> <b>${entry:.2f}</b> ({html.escape(trigger)})",
+            f"• <b>Stop Loss:</b> <b>${stop:.2f}</b> ({html.escape(invalidation)})",
+            f"• <b>Target 1:</b> <b>${t1:.2f}</b> · <b>Target 2:</b> <b>${t2:.2f}</b>",
+            f"• <b>Risk/Reward:</b> <b>{rr}</b>",
+            "",
+            f"📋 <b>Execution Rule:</b> <i>{html.escape(strategy)}</i>",
+            "💡 <i>Triggered from 8:00 AM Playbook scenario validation.</i>",
+        ]
+
+        msg = "\n".join(lines)
+        sent = send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info(f"[scheduler] SPY 8:35 AM outcome validation sent={sent}: {valid_outcome}")
+        return {"sent": sent, "valid_outcome": valid_outcome, "trade_idea": idea}
+
+    except Exception as e:
+        logger.error(f"[scheduler] SPY 8:35 AM outcome validation failed: {e}")
+        return {"error": str(e)}
+
+
 def sweep_digest_job():
     """Post-market: send V4/V3 sweep reclaim/reject setups from saved scans."""
     if not _SWEEP_DIGEST_ENABLED:
@@ -1960,6 +2043,15 @@ def setup_scheduler():
         default50_near_entry_alert_job,
         CronTrigger(hour=8, minute=30, second=15, day_of_week="mon-fri", timezone=CST),
         id="default50_near_entry_alert",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    # 8:35 AM CST (Mon-Fri) — SPY 5-Min Post-Open Outcome Validation Alert
+    scheduler.add_job(
+        spy_v4_post_open_outcome_job,
+        CronTrigger(hour=8, minute=35, day_of_week="mon-fri", timezone=CST),
+        id="spy_v4_post_open_outcome",
         replace_existing=True,
         misfire_grace_time=300,
     )

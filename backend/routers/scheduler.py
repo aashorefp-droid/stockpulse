@@ -219,6 +219,14 @@ def trigger_spy_v4_summary():
     return {"status": "spy_v4_summary completed"}
 
 
+@router.post("/run-spy-post-open")
+def trigger_spy_post_open_outcome():
+    """Manually trigger the 8:35 AM SPY 5-min post-open outcome validation alert."""
+    from backend.services.scheduler import spy_v4_post_open_outcome_job
+    res = spy_v4_post_open_outcome_job()
+    return {"status": "spy_v4_post_open_outcome completed", "result": res}
+
+
 @router.post("/run-sweeps")
 def trigger_sweep_digest():
     """Manually trigger the post-market sweep setup digest."""
