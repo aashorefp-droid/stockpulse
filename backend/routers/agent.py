@@ -86,6 +86,17 @@ Your Response Guidelines:
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
   5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
      - When the user asks specifically for the **Intraday Plan** (`'TSLA intraday'`), present the live multi-timeframe `10m/30m/4H` bias, Central Pivot Range (`CPR TC/P/BC`), and ATR intraday stops/targets.
+- Weekly Earnings Calendar & Comprehensive Analysis (`earningshub.com/earnings-calendar/this-week`):
+  When the user asks for `'Next week earnings analysis'`, `'This week earnings analysis'`, `'weekly earnings analysis'`, or `'earnings calendar'`, you receive the `EARNINGSHUB WEEKLY EARNINGS CALENDAR & INSTITUTIONAL ANALYSIS` block fetched live from `https://earningshub.com/earnings-calendar/this-week`. Present a comprehensive, institutional-grade analysis structured into 5 sections:
+  1. **Executive Summary & Macro/Economic Catalysts**: Total companies reporting, confirmed count, `$10B+` mega/large-cap count, busiest day of the week, and the week's scheduled Economic/Fed events (`economic_events`).
+  2. **Marquee Market-Moving Headliners Table**: Clean markdown table of the top 12–15 largest/most important reporters:
+     `| Date & Session | Ticker | Company | Market Cap | EPS Est vs Prior (YoY %) | Revenue Est vs Prior (YoY %) |`
+  3. **Day-by-Day Schedule (Monday – Friday, BMO vs. AMC)**: For each day (`Monday` through `Friday`), highlight key **🌅 Before Open (BMO)** and **🌙 After Close (AMC)** reporters plus that day's macro events.
+  4. **Sector Themes, High-Growth Leaders & Contraction Watchlist**:
+     - Highlight the fastest expected YoY EPS & Revenue growers (`fastest_eps_growth_leaders`, `fastest_revenue_growth_leaders`) and key sector clusters (AI/Semis/Tech, Aerospace & Defense, Financials, Healthcare, Consumer, Energy/Industrials).
+     - Flag mega-caps facing expected YoY EPS compression (`earnings_contraction_watch`) where forward guidance will dictate the post-earnings move.
+  5. **⚡ Earning Pulse (`PQH`/`PQL` & `PMH`/`PML`) Battle Plans for Marquee Reporters**:
+     - Using the attached `earning_pulse_setups`, present the pre-earnings technical posture (`Current Price`, `Quarterly Range PQL–PQH`, `Monthly Range PML–PMH`, `Validated Outcome`, `Action`, `Option Contract`, `Entry`, `Stop`, `T1`, `T2`, `R:R`) for the week's top headliners (e.g., `META`, `TSLA`, `NFLX`, `LRCX`, `GE`, `PG`).
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -760,6 +771,295 @@ async def fetch_stockverdicts_data(ticker: str) -> Dict[str, Any]:
     return result
 
 
+async def fetch_earningshub_week_analysis(
+    query_text: str = "",
+    target_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Reads live weekly earnings calendar & macro events from EarningsHub
+    (https://earningshub.com/earnings-calendar/this-week via api.savvytrader.com)
+    and enriches the top marquee earnings reporters with StockPulse's live
+    Earning Pulse (Quarterly PQH/PQL & Monthly PMH/PML) setups.
+    """
+    from datetime import datetime, timedelta, date as date_cls
+    from zoneinfo import ZoneInfo
+
+    now_ct = datetime.now(ZoneInfo("America/Chicago"))
+    ref_date: date_cls = now_ct.date()
+
+    if target_date:
+        try:
+            from day_trading.v4 import parse_pulse_date
+            parsed = parse_pulse_date(target_date)
+            if parsed:
+                ref_date = parsed
+        except Exception:
+            pass
+    else:
+        # Match EarningsHub's exact `/earnings-calendar/this-week` date-window logic (`XV`):
+        # On Saturday (5) or Sunday (6) — or Friday after 3:30 PM CT — advance into the upcoming week.
+        if ref_date.weekday() in (5, 6):
+            ref_date = ref_date + timedelta(days=2)
+        elif ref_date.weekday() == 4 and now_ct.hour >= 16 and "next week" in (query_text or "").lower():
+            ref_date = ref_date + timedelta(days=3)
+
+    monday = ref_date - timedelta(days=ref_date.weekday())
+    friday = monday + timedelta(days=4)
+    start_str = monday.isoformat()
+    end_str = friday.isoformat()
+
+    # If user explicitly asked for "next week" on Monday-Thursday, also compute next week's Mon-Fri
+    q_low = (query_text or "").lower()
+    next_monday = monday + timedelta(days=7)
+    next_friday = friday + timedelta(days=7)
+    also_fetch_following_week = (
+        not target_date
+        and now_ct.date().weekday() in (0, 1, 2, 3, 4)
+        and monday == (now_ct.date() - timedelta(days=now_ct.date().weekday()))
+        and "next week" in q_low
+    )
+
+    def _fmt_mcap(val: Any) -> str:
+        try:
+            v = float(val or 0)
+            if v >= 1e12:
+                return f"${v / 1e12:.2f}T"
+            if v >= 1e9:
+                return f"${v / 1e9:.1f}B"
+            if v >= 1e6:
+                return f"${v / 1e6:.0f}M"
+            return "N/A"
+        except Exception:
+            return "N/A"
+
+    def _fmt_rev(val: Any) -> str:
+        try:
+            v = float(val or 0)
+            if v <= 0:
+                return "N/A"
+            if v >= 1e9:
+                return f"${v / 1e9:.2f}B"
+            if v >= 1e6:
+                return f"${v / 1e6:.1f}M"
+            return f"${v:,.0f}"
+        except Exception:
+            return "N/A"
+
+    def _fmt_session(t_str: Optional[str]) -> str:
+        if not t_str:
+            return "TBD"
+        if t_str < "09:30:00":
+            return f"BMO ({t_str[:5]} ET)"
+        if t_str >= "16:00:00":
+            return f"AMC ({t_str[:5]} ET)"
+        return f"Intraday ({t_str[:5]} ET)"
+
+    def _format_item(x: Dict[str, Any]) -> Dict[str, Any]:
+        eps_est = x.get("epsEstimate")
+        eps_pri = x.get("epsPrior")
+        eps_act = x.get("epsActual")
+        eps_yoy = None
+        if eps_est is not None and eps_pri is not None and abs(float(eps_pri)) >= 0.05:
+            eps_yoy = round(((float(eps_est) - float(eps_pri)) / abs(float(eps_pri))) * 100.0, 1)
+
+        rev_est = x.get("revenueEstimate")
+        rev_pri = x.get("revenuePrior")
+        rev_yoy = None
+        if rev_est and rev_pri and float(rev_pri) > 0:
+            rev_yoy = round(((float(rev_est) - float(rev_pri)) / float(rev_pri)) * 100.0, 1)
+
+        edate = x.get("earningsDate") or ""
+        day_name = ""
+        try:
+            day_name = date_cls.fromisoformat(edate).strftime("%A")
+        except Exception:
+            pass
+
+        etime = x.get("earningsTime") or ""
+        return {
+            "symbol": x.get("symbol"),
+            "company": x.get("assetName") or x.get("symbol"),
+            "date": edate,
+            "day": day_name,
+            "session": _fmt_session(etime),
+            "is_bmo": bool(etime and etime < "09:30:00"),
+            "is_amc": bool(etime and etime >= "16:00:00"),
+            "period": f"{x.get('period', '')} {x.get('periodYear', '')}".strip(),
+            "importance": x.get("importance", 0),
+            "confirmed": bool(x.get("isDateConfirmed", False)),
+            "market_cap_raw": float(x.get("marketCap") or 0),
+            "market_cap": _fmt_mcap(x.get("marketCap")),
+            "eps_estimate": eps_est,
+            "eps_prior": eps_pri,
+            "eps_actual": eps_act,
+            "eps_yoy_pct": f"{eps_yoy:+.1f}%" if eps_yoy is not None else "N/A",
+            "eps_yoy_raw": eps_yoy,
+            "revenue_estimate": _fmt_rev(rev_est),
+            "revenue_prior": _fmt_rev(rev_pri),
+            "revenue_yoy_pct": f"{rev_yoy:+.1f}%" if rev_yoy is not None else "N/A",
+            "revenue_yoy_raw": rev_yoy,
+        }
+
+    cal_url = f"https://api.savvytrader.com/pricing/assets/earnings/calendar?start={start_str}&end={end_str}"
+    evt_url = f"https://api.savvytrader.com/events/?start={start_str}&end={end_str}"
+    headers = {
+        "User-Agent": "StockPulseAI/2.0 (+https://earningshub.com/earnings-calendar/this-week)",
+        "Accept": "application/json",
+    }
+
+    raw_cal: List[Dict[str, Any]] = []
+    raw_evts: List[Dict[str, Any]] = []
+    next_week_preview: List[Dict[str, Any]] = []
+
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, headers=headers) as client:
+        tasks = [client.get(cal_url), client.get(evt_url)]
+        if also_fetch_following_week:
+            nw_url = f"https://api.savvytrader.com/pricing/assets/earnings/calendar?start={next_monday.isoformat()}&end={next_friday.isoformat()}"
+            tasks.append(client.get(nw_url))
+
+        resps = await asyncio.gather(*tasks, return_exceptions=True)
+        if not isinstance(resps[0], Exception) and resps[0].status_code == 200:
+            data0 = resps[0].json()
+            if isinstance(data0, list):
+                raw_cal = data0
+        if not isinstance(resps[1], Exception) and resps[1].status_code == 200:
+            data1 = resps[1].json()
+            if isinstance(data1, list):
+                raw_evts = data1
+        if len(resps) > 2 and not isinstance(resps[2], Exception) and resps[2].status_code == 200:
+            data2 = resps[2].json()
+            if isinstance(data2, list):
+                nw_items = [_format_item(item) for item in data2 if item.get("symbol")]
+                nw_items.sort(key=lambda r: (r["importance"] >= 4, r["market_cap_raw"]), reverse=True)
+                next_week_preview = [
+                    {k: v for k, v in it.items() if not k.endswith("_raw") and k not in ("is_bmo", "is_amc")}
+                    for it in nw_items[:15]
+                ]
+
+    formatted = [_format_item(x) for x in raw_cal if x.get("symbol")]
+    # Sort primarily by market cap descending (with importance tie-boost)
+    formatted.sort(key=lambda r: (r["importance"] >= 4, r["market_cap_raw"]), reverse=True)
+
+    # Top 18 marquee headliners across the week
+    def _clean_item(it: Dict[str, Any]) -> Dict[str, Any]:
+        return {k: v for k, v in it.items() if not k.endswith("_raw") and k not in ("is_bmo", "is_amc")}
+
+    top_headliners = [_clean_item(it) for it in formatted[:18]]
+
+    # Group day-by-day (Monday..Friday)
+    daily_schedule: Dict[str, Any] = {}
+    busiest_day = ""
+    busiest_day_count = -1
+
+    for offset in range(5):
+        d_obj = monday + timedelta(days=offset)
+        d_iso = d_obj.isoformat()
+        d_label = f"{d_obj.strftime('%A')} ({d_iso})"
+        day_items = [it for it in formatted if it["date"] == d_iso]
+        day_items.sort(key=lambda r: r["market_cap_raw"], reverse=True)
+
+        if len(day_items) > busiest_day_count:
+            busiest_day_count = len(day_items)
+            busiest_day = f"{d_obj.strftime('%A')} ({d_iso}) — {len(day_items)} companies"
+
+        bmo_items = [_clean_item(it) for it in day_items if it["is_bmo"]][:10]
+        amc_items = [_clean_item(it) for it in day_items if it["is_amc"]][:10]
+
+        day_evts = [
+            f"{(ev.get('eventTime') or '')[:5]} ET: {ev.get('eventName')}"
+            for ev in raw_evts
+            if ev.get("eventDate") == d_iso and ev.get("eventName")
+        ]
+
+        daily_schedule[d_label] = {
+            "total_companies_reporting": len(day_items),
+            "economic_and_macro_events": day_evts,
+            "before_open_bmo_leaders": bmo_items,
+            "after_close_amc_leaders": amc_items,
+        }
+
+    # Filter to >= $5B market cap for fundamental outlier rankings
+    large_caps = [it for it in formatted if it["market_cap_raw"] >= 5e9]
+
+    eps_growers = sorted(
+        [it for it in large_caps if it["eps_yoy_raw"] is not None and it["eps_yoy_raw"] > 10.0],
+        key=lambda r: r["eps_yoy_raw"],
+        reverse=True,
+    )[:8]
+
+    rev_growers = sorted(
+        [it for it in large_caps if it["revenue_yoy_raw"] is not None and it["revenue_yoy_raw"] > 8.0],
+        key=lambda r: r["revenue_yoy_raw"],
+        reverse=True,
+    )[:8]
+
+    eps_contraction = sorted(
+        [it for it in large_caps if it["eps_yoy_raw"] is not None and it["eps_yoy_raw"] < -3.0],
+        key=lambda r: r["market_cap_raw"],
+        reverse=True,
+    )[:8]
+
+    # Enrich top 8 marquee headliners with live StockPulse Earning Pulse (PQH/PQL & PMH/PML)
+    earning_pulse_setups: List[Dict[str, Any]] = []
+    try:
+        from day_trading.v4 import get_earning_pulse
+        top8_syms = [it["symbol"] for it in formatted[:8] if it.get("symbol")]
+        ep_results = await asyncio.gather(
+            *[asyncio.to_thread(get_earning_pulse, sym) for sym in top8_syms],
+            return_exceptions=True,
+        )
+        for sym, ep in zip(top8_syms, ep_results):
+            if isinstance(ep, dict) and not ep.get("error"):
+                ti = ep.get("trade_idea") or {}
+                lv = ep.get("key_levels") or ep.get("levels") or {}
+                earning_pulse_setups.append({
+                    "symbol": sym,
+                    "current_price": ep.get("price") or ep.get("current_price"),
+                    "quarterly_range": f"${lv.get('pql')} – ${lv.get('pqh')} (Mid ${lv.get('pq_mid')})",
+                    "monthly_range": f"${lv.get('pml')} – ${lv.get('pmh')} (Mid ${lv.get('pm_mid')})",
+                    "valid_outcome": ep.get("valid_outcome"),
+                    "bias": ti.get("bias"),
+                    "action": ti.get("action"),
+                    "suggested_contract": ti.get("suggested_contract"),
+                    "entry": ti.get("entry_level") or ti.get("entry"),
+                    "stop": ti.get("stop_loss") or ti.get("stop"),
+                    "target_1": ti.get("target_1"),
+                    "target_2": ti.get("target_2"),
+                    "reward_risk": ti.get("reward_risk"),
+                    "rationale": ti.get("rationale"),
+                })
+    except Exception as epe:
+        logger.warning(f"Error enriching top headliners with Earning Pulse: {epe}")
+
+    result_payload: Dict[str, Any] = {
+        "source": "https://earningshub.com/earnings-calendar/this-week",
+        "week_window": f"{start_str} to {end_str}",
+        "summary_stats": {
+            "total_companies_reporting": len(formatted),
+            "confirmed_dates_count": sum(1 for it in formatted if it["confirmed"]),
+            "mega_and_large_cap_10b_plus": sum(1 for it in formatted if it["market_cap_raw"] >= 10e9),
+            "billion_dollar_plus_count": sum(1 for it in formatted if it["market_cap_raw"] >= 1e9),
+            "busiest_day": busiest_day,
+        },
+        "top_headliners": top_headliners,
+        "daily_schedule": daily_schedule,
+        "growth_and_fundamental_outliers": {
+            "fastest_eps_growth_leaders_5b_plus": [_clean_item(it) for it in eps_growers],
+            "fastest_revenue_growth_leaders_5b_plus": [_clean_item(it) for it in rev_growers],
+            "earnings_contraction_watchlist": [_clean_item(it) for it in eps_contraction],
+        },
+        "earning_pulse_setups": earning_pulse_setups,
+    }
+
+    if next_week_preview:
+        result_payload["following_week_headliners_preview"] = {
+            "week_window": f"{next_monday.isoformat()} to {next_friday.isoformat()}",
+            "top_headliners": next_week_preview,
+        }
+
+    return result_payload
+
+
 def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:
     name = (watchlist_name or "default").lower().strip()
     tickers = WATCHLISTS.get(name, WATCHLISTS.get("default", []))
@@ -1028,6 +1328,22 @@ async def update_v4_tickers_agent(payload: Dict[str, Any]):
     }
 
 
+@router.get("/earnings-calendar")
+async def get_earnings_calendar_endpoint(
+    date: Optional[str] = None,
+    q: str = "next week earnings analysis",
+):
+    """
+    Fetches live weekly earnings calendar & macro events from EarningsHub
+    (https://earningshub.com/earnings-calendar/this-week) plus StockPulse Earning Pulse setups.
+    """
+    try:
+        return await fetch_earningshub_week_analysis(query_text=q, target_date=date)
+    except Exception as e:
+        logger.error(f"Error fetching EarningsHub calendar: {e}")
+        return {"error": str(e)}
+
+
 @router.post("/chat")
 async def chat_with_agent(req: ChatRequest, request: Request):
     """
@@ -1039,21 +1355,31 @@ async def chat_with_agent(req: ChatRequest, request: Request):
     headers_dict = dict(request.headers)
     chain = get_configured_providers(headers_dict)
 
-    # Determine intent: Market Overview, Universe query, General/Meta query, or Ticker-specific query
+    # Determine intent: Market Overview, Earnings Calendar, Universe query, General/Meta query, or Ticker-specific query
     last_user_text = req.messages[-1].content if req.messages else ""
     user_lower = last_user_text.lower().strip()
 
     requested_date_obj = parse_pulse_date(last_user_text)
     target_date_str = requested_date_obj.isoformat() if requested_date_obj else None
 
-    is_market_query = any(k in user_lower for k in [
+    is_earnings_calendar_query = any(k in user_lower for k in [
+        "next week earnings", "next week earning", "earnings next week", "earning next week",
+        "this week earnings", "this week earning", "earnings this week", "earning this week",
+        "weekly earnings", "week earnings", "earnings calendar", "earning calendar",
+        "earnings schedule", "upcoming earnings", "who reports earnings", "who is reporting earnings",
+        "earningshub", "earnings hub", "next week's earnings", "this week's earnings"
+    ]) or user_lower in [
+        "earnings", "earnings analysis", "earning analysis", "earnings this week?", "earnings next week?"
+    ]
+
+    is_market_query = not is_earnings_calendar_query and (any(k in user_lower for k in [
         "how is market", "how is the market", "how's market", "how's the market",
         "how are markets", "how are the markets", "market today", "markets today",
         "market overview", "market snapshot", "market status", "market update",
         "macro snapshot", "overall market", "indices today", "index moves",
         "what is market doing", "what's market doing", "what is the market doing",
         "state of the market", "broad market", "market breadth"
-    ]) or user_lower in ["market", "markets", "macro", "indices", "how is market today", "how is market today?"]
+    ]) or user_lower in ["market", "markets", "macro", "indices", "how is market today", "how is market today?"])
 
     has_stock_feature_keyword = bool(target_date_str) or any(k in user_lower for k in [
         "pulse", "v4", "backtest", "intraday", "fundamental", "fundamentals",
@@ -1061,7 +1387,7 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "calls", "puts", "pdh", "pdl", "pmh", "pml", "pqh", "pql"
     ])
 
-    is_general_query = not is_market_query and not has_stock_feature_keyword and (any(user_lower.startswith(w) for w in [
+    is_general_query = not is_market_query and not is_earnings_calendar_query and not has_stock_feature_keyword and (any(user_lower.startswith(w) for w in [
         "hello", "hi", "hey", "who are you", "what is", "how do", "explain",
         "help", "why is chat", "what can you do", "tell me about", "what are"
     ]) or "only aaoi" in user_lower or "general chat" in user_lower)
@@ -1080,12 +1406,12 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "ideas for today", "trades today", "setup today", "swing", "swings", "picks today",
         "trade for today", "good swings"
     ]
-    is_universe_query = not is_market_query and any(k in user_lower for k in universe_keywords)
+    is_universe_query = not is_market_query and not is_earnings_calendar_query and any(k in user_lower for k in universe_keywords)
 
     # Dynamic Ticker Detection for any US stock (AAOI, SPCX, NVDA, TSLA, PLTR, etc.)
     ticker_stop_words = {
         "WHAT", "WHEN", "WHERE", "WHICH", "HOW", "WHY", "WHO", "WHOSE",
-        "TODAY", "YESTERDAY", "TOMORROW", "NOW", "LATER", "SOON",
+        "TODAY", "YESTERDAY", "TOMORROW", "NOW", "LATER", "SOON", "NEXT", "UPCOMING",
         "BUY", "SELL", "HOLD", "TRADE", "SWING", "LONG", "SHORT",
         "CALL", "CALLS", "PUT", "PUTS", "OPTION", "OPTIONS",
         "STOCK", "STOCKS", "SHARE", "SHARES", "TICKER", "TICKERS",
@@ -1117,7 +1443,9 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "TRUST", "SCORE", "SCORES", "PEER", "PEERS", "RED", "FLAG", "FLAGS",
         "CASH", "FLOW", "DEBT", "PEG", "ROE", "EPS", "PE", "YOY", "TTM", "COM",
         "PULSE", "PULSES", "BACKTEST", "BACK", "TERM", "EARNING", "EARNINGS",
+        "CALENDAR", "SCHEDULE", "HUB", "EARNINGSHUB", "REPORT", "REPORTS", "REPORTING",
         "MONTH", "MONTHLY", "QUARTER", "QUARTERLY", "DAY", "DAILY", "WEEK", "WEEKLY",
+        "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY",
         "HIGHS", "LOWS", "DATE", "INTRADAY", "COMPARE",
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "SEPT", "OCT", "NOV", "DEC",
         "JANUARY", "FEBRUARY", "MARCH", "APRIL", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
@@ -1125,7 +1453,7 @@ async def chat_with_agent(req: ChatRequest, request: Request):
 
     explicit_ticker = None
 
-    if not is_market_query:
+    if not is_market_query and not is_earnings_calendar_query:
         # Stage 1: Explicit dollar sign (e.g. $AAOI, $SPCX)
         dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
         if dollar_tickers:
@@ -1181,12 +1509,12 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         is_universe_query = False
 
     # If no explicit ticker was found and user is asking about trades/setups/picks/entries/targets, treat as universe query
-    if not is_market_query and not is_universe_query and not explicit_ticker and not is_general_query:
+    if not is_market_query and not is_earnings_calendar_query and not is_universe_query and not explicit_ticker and not is_general_query:
         if any(w in user_lower for w in ["trade", "setup", "buy", "stock", "entry", "target", "stop", "pick"]):
             is_universe_query = True
 
     active_ticker = explicit_ticker
-    if is_market_query or is_universe_query:
+    if is_market_query or is_earnings_calendar_query or is_universe_query:
         active_ticker = None
     elif is_general_query and not explicit_ticker:
         active_ticker = None
@@ -1202,8 +1530,22 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         tool_data = None
         universe_data = None
         macro_data = None
+        earnings_calendar_data = None
 
-        if is_market_query:
+        if is_earnings_calendar_query:
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_earnings_calendar', 'ticker': 'EarningsHub Weekly Calendar'})}\n\n"
+            try:
+                earnings_calendar_data = await fetch_earningshub_week_analysis(last_user_text, target_date_str)
+                stats = earnings_calendar_data.get("summary_stats") or {}
+                tot = stats.get("total_companies_reporting", 0)
+                win = earnings_calendar_data.get("week_window", "")
+                top_syms = ", ".join(h.get("symbol", "") for h in (earnings_calendar_data.get("top_headliners") or [])[:5])
+                yield f"data: {json.dumps({'type': 'tool_done', 'ticker': f'EarningsHub ({win})', 'summary': f'{tot} companies reporting | Top: {top_syms}'})}\n\n"
+            except Exception as ece:
+                logger.error(f"Error fetching EarningsHub weekly analysis: {ece}")
+                earnings_calendar_data = {"error": f"Failed to retrieve EarningsHub calendar: {str(ece)}"}
+
+        elif is_market_query:
             yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_macro_snapshot', 'ticker': 'Major Indices & Sectors'})}\n\n"
             try:
                 macro_data = await asyncio.to_thread(macro_snapshot)
@@ -1247,7 +1589,12 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         for m in req.messages:
             base_messages.append({"role": m.role, "content": m.content})
 
-        if macro_data:
+        if earnings_calendar_data:
+            base_messages.append({
+                "role": "system",
+                "content": f"EARNINGSHUB WEEKLY EARNINGS CALENDAR & INSTITUTIONAL ANALYSIS (https://earningshub.com/earnings-calendar/this-week):\n{json.dumps(earnings_calendar_data, indent=2)}"
+            })
+        elif macro_data:
             base_messages.append({
                 "role": "system",
                 "content": f"INSTITUTIONAL BROAD MARKET & MACRO DATA:\n{json.dumps(macro_data, indent=2)}"

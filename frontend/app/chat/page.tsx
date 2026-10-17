@@ -408,6 +408,10 @@ export default function ChatPage() {
           title: "⏪ Backtest TSLA Pulse (10/12/2026)",
           prompt: "Backtest Tesla pulse for 10/12/2026: show the exact key levels as of 10/12/2026, the validated trade idea, and how it performed in the backtest.",
         },
+        {
+          title: "📊 Next Week Earnings Analysis",
+          prompt: "Next week earnings analysis",
+        },
       ]
     : isV4Ticker
     ? [
@@ -430,6 +434,10 @@ export default function ChatPage() {
         {
           title: `📈 ${currentActiveTicker} Fundamentals (StockVerdicts)`,
           prompt: `Analyze ${currentActiveTicker} fundamentals and fair value from StockVerdicts.com: Verdict (Growth/Value/Avoid), Fair-Value Price Ladder (Heavy Buy / Buy / Fair / Exit), Factor Scores, Earnings Quality checks, Insider/Institutional activity, and Pros & Cons.`,
+        },
+        {
+          title: "📊 Next Week Earnings Analysis",
+          prompt: "Next week earnings analysis",
         },
       ]
     : [
