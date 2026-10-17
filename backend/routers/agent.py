@@ -50,14 +50,14 @@ Your Response Guidelines:
   Followed by high-conviction institutional battle plans for the top 3 setups explaining the technical catalyst, Volume Profile support/resistance (POC/VAL/VAH), and risk management.
   CRITICAL: NEVER claim live prices were not attached or provide abstract algebraic formulas when actual institutional setup prices are provided in your context block. Use the exact numbers provided in the INSTITUTIONAL UNIVERSE DATA block!
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
-- SPY Day Trading & Post-Open Options Trade Ideas (Calls vs Puts):
-  When analyzing SPY or when the user asks for SPY trade ideas, calls vs puts, or asks 'What is the valid outcome?':
-  Evaluate the live SPY Day Trading V4 engine (PDH, PDL, PWH, PWL, Midpoint, and 4 outcomes).
+- Day Trading V4 & Post-Open Options Trade Ideas (Calls vs Puts — SPY, SPXW, QQQ, IWM, NVDA, TSLA, etc.):
+  When analyzing SPY, SPXW, QQQ, or any ticker with Day Trading V4 data (`day_trading_v4`), or when the user asks for 0DTE/day-trade ideas, calls vs puts, or asks 'What is the valid outcome?':
+  Evaluate the live Day Trading V4 engine (PDH, PDL, PWH, PWL, Midpoint, and single validated post-open outcome).
   Provide a structured decision:
-  1. Valid Outcome: Explicitly declare which outcome from the 8:00 AM playbook has triggered as valid based on current price action vs PDH/PDL.
-  2. Trade Idea: High-conviction decision between CALLS vs PUTS (or Range Wait / Chop if trading mid-range).
+  1. Valid Outcome: Explicitly declare the single validated outcome from the 8:00 AM playbook based on current price action and 5-minute opening candle vs PDH/PDL.
+  2. Trade Idea: High-conviction decision between CALLS vs PUTS.
   3. Actionable Levels: Exact Entry Trigger, Invalidation Stop-Loss, Target 1, Target 2, and R:R ratio.
-  4. Options Contract & Scaling: Recommended strike (Delta 0.40–0.50 ATM/near-OTM), 0DTE/next expiry, scale 50% at T1, trail stop to breakeven.
+  4. Options Contract & Scaling: Recommended strike (Delta 0.40–0.50 ATM/near-OTM; $5 increments for SPXW/SPX, $1 increments for SPY/QQQ), 0DTE/next expiry, scale 50% at T1, trail stop to breakeven.
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -106,7 +106,7 @@ TICKER_ALIASES = {
     "TWITTER": "X",
     "BERKSHIRE": "BRK-B",
     "BRKB": "BRK-B",
-    "SPX": "SPY",
+    "SPX": "SPXW",
     "NDX": "QQQ",
     "DOW": "DIA",
     "DJIA": "DIA",
@@ -587,12 +587,14 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
         },
     }
 
-    if ticker == "SPY":
-        try:
-            from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
-            ret["spy_day_trading_v4"] = await asyncio.to_thread(get_spy_valid_outcome_and_trade_idea)
-        except Exception as se:
-            logger.warning(f"Error computing SPY V4 valid outcome: {se}")
+    try:
+        from day_trading.v4 import get_valid_outcome_and_trade_idea
+        v4_res = await asyncio.to_thread(get_valid_outcome_and_trade_idea, ticker)
+        ret["day_trading_v4"] = v4_res
+        if ticker in {"SPY", "SPXW", "SPX"}:
+            ret["spy_day_trading_v4"] = v4_res
+    except Exception as se:
+        logger.warning(f"Error computing V4 valid outcome for {ticker}: {se}")
 
     return ret
 
@@ -787,18 +789,63 @@ async def get_agent_status(request: Request):
 
 
 @router.get("/spy-outcome")
-async def get_spy_outcome_endpoint():
+@router.get("/v4-outcome")
+async def get_spy_outcome_endpoint(ticker: str = "SPY"):
     """
-    Returns the live SPY 5-minute post-open valid outcome, key levels,
-    and actionable CALLS vs PUTS trade plan directly from the V4 engine.
+    Returns the live 5-minute post-open valid outcome, key levels,
+    and actionable CALLS vs PUTS trade plan directly from the V4 engine for any ticker (SPY, SPXW, QQQ, etc.).
     """
     try:
-        from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
-        res = await asyncio.to_thread(get_spy_valid_outcome_and_trade_idea)
+        from day_trading.v4 import get_valid_outcome_and_trade_idea
+        sym = (ticker or "SPY").strip().upper()
+        res = await asyncio.to_thread(get_valid_outcome_and_trade_idea, sym)
         return res
     except Exception as e:
-        logger.error(f"Error fetching SPY outcome: {e}")
+        logger.error(f"Error fetching V4 outcome for {ticker}: {e}")
         return {"error": str(e)}
+
+
+@router.get("/v4-tickers")
+async def get_v4_tickers_agent():
+    """Return active tickers configured for 8:00 AM & 8:35 AM V4 Telegram alerts."""
+    from backend.services.scheduler import get_v4_alert_tickers, V4_POPULAR_OPTIONS
+    return {
+        "tickers": get_v4_alert_tickers(),
+        "popular_options": V4_POPULAR_OPTIONS,
+    }
+
+
+@router.post("/v4-tickers")
+async def update_v4_tickers_agent(payload: Dict[str, Any]):
+    """Update active tickers configured for 8:00 AM & 8:35 AM V4 Telegram alerts and optionally send an instant alert."""
+    from backend.services.scheduler import (
+        set_v4_alert_tickers,
+        V4_POPULAR_OPTIONS,
+        spy_v4_summary_job,
+        spy_v4_post_open_outcome_job,
+    )
+    raw_tickers = payload.get("tickers") or []
+    if isinstance(raw_tickers, str):
+        raw_tickers = [t.strip() for t in raw_tickers.split(",") if t.strip()]
+    saved = set_v4_alert_tickers(raw_tickers)
+
+    alert_res = None
+    target_for_alert = payload.get("alert_tickers") or saved
+    if isinstance(target_for_alert, str):
+        target_for_alert = [t.strip().upper() for t in target_for_alert.split(",") if t.strip()]
+
+    if payload.get("send_playbook"):
+        alert_res = await asyncio.to_thread(spy_v4_summary_job, target_for_alert)
+    elif payload.get("send_post_open"):
+        alert_res = await asyncio.to_thread(spy_v4_post_open_outcome_job, target_for_alert)
+
+    return {
+        "status": "updated",
+        "tickers": saved,
+        "popular_options": V4_POPULAR_OPTIONS,
+        "alert_result": alert_res,
+    }
+
 
 
 @router.post("/chat")

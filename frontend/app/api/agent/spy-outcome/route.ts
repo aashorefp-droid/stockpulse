@@ -9,11 +9,16 @@ export async function GET(req: NextRequest) {
     "https://stockpulse-pkpj.onrender.com"
   ).replace(/\/+$/, "");
 
+  const ticker = req.nextUrl.searchParams.get("ticker") || "SPY";
+
   try {
-    const upstreamResp = await fetch(`${backendBase}/api/agent/spy-outcome`, {
-      method: "GET",
-      cache: "no-store",
-    });
+    const upstreamResp = await fetch(
+      `${backendBase}/api/agent/spy-outcome?ticker=${encodeURIComponent(ticker)}`,
+      {
+        method: "GET",
+        cache: "no-store",
+      }
+    );
 
     if (!upstreamResp.ok) {
       return NextResponse.json(
@@ -26,7 +31,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data);
   } catch (err: any) {
     return NextResponse.json(
-      { error: err?.message || "Failed to fetch SPY post-open outcome" },
+      { error: err?.message || `Failed to fetch ${ticker} post-open outcome` },
       { status: 502 }
     );
   }

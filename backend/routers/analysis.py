@@ -216,7 +216,8 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
         daily_df = _safe(get_daily_bars_alpaca, None, ticker, str(start), str(end), ALPACA_API_KEY, ALPACA_API_SECRET)
         if daily_df is None or daily_df.empty:
             try:
-                daily_df = yf.Ticker(ticker).history(period="1y", interval="1d")
+                from backend.services.market_data import _yf_sym
+                daily_df = yf.Ticker(_yf_sym(ticker)).history(period="1y", interval="1d")
                 daily_df.columns = [c.lower() for c in daily_df.columns]
             except Exception:
                 daily_df = None

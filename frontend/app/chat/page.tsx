@@ -10,7 +10,7 @@ interface Message {
   toolStatus?: string;
 }
 
-const POPULAR_TICKERS = ["GENERAL", "AAOI", "SPY", "QQQ", "NVDA", "TSLA", "MDT", "XLF"];
+const POPULAR_TICKERS = ["GENERAL", "SPY", "SPXW", "QQQ", "AAOI", "NVDA", "TSLA", "MDT"];
 
 export default function ChatPage() {
   const [ticker, setTicker] = useState("GENERAL");
@@ -20,7 +20,7 @@ export default function ChatPage() {
     {
       role: "assistant",
       content:
-        "Hello! I am **StockPulse AI**, your institutional trading and market mentor powered by multi-provider AI.\n\nAsk me any general market or technical question, scan the **Default 50** core universe, or select any stock ticker (e.g. AAOI, NVDA, SPY) to evaluate live Volume Profile, 52W Fib levels, fundamentals, and systematic trade plans!",
+        "Hello! I am **StockPulse AI**, your institutional trading and market mentor powered by multi-provider AI.\n\nAsk me any general market or technical question, scan the **Default 50** core universe, or select any stock/index ticker (e.g. SPY, SPXW, QQQ, NVDA, AAOI) to evaluate live Day Trading V4 outcomes, Volume Profile, 52W Fib levels, fundamentals, and systematic trade plans!",
     },
   ]);
   const [input, setInput] = useState("");
@@ -33,6 +33,23 @@ export default function ChatPage() {
   const [keyInput, setKeyInput] = useState<string>("");
   const [spyOutcome, setSpyOutcome] = useState<any>(null);
   const [spyLoading, setSpyLoading] = useState<boolean>(false);
+  const [v4AlertTickers, setV4AlertTickers] = useState<string[]>(["SPY", "SPXW"]);
+  const [v4PopularOptions, setV4PopularOptions] = useState<string[]>([
+    "SPY",
+    "SPXW",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "NVDA",
+    "TSLA",
+    "AAPL",
+    "META",
+    "AMD",
+  ]);
+  const [showV4Modal, setShowV4Modal] = useState<boolean>(false);
+  const [v4CustomInput, setV4CustomInput] = useState<string>("");
+  const [v4Saving, setV4Saving] = useState<boolean>(false);
+  const [v4SaveStatus, setV4SaveStatus] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const isGemPrefix = (k: string) => k.startsWith("AIza") || k.startsWith("AQ.");
@@ -103,6 +120,70 @@ export default function ChatPage() {
     }
   };
 
+  const fetchV4Tickers = async () => {
+    try {
+      let r = await fetch("/api/agent/v4-tickers", { cache: "no-store" }).catch(() => null);
+      if (!r || !r.ok) {
+        r = await fetch(`${API_BASE}/api/agent/v4-tickers`, { cache: "no-store" });
+      }
+      if (r && r.ok) {
+        const data = await r.json();
+        if (Array.isArray(data?.tickers) && data.tickers.length > 0) {
+          setV4AlertTickers(data.tickers);
+        }
+        if (Array.isArray(data?.popular_options) && data.popular_options.length > 0) {
+          setV4PopularOptions(data.popular_options);
+        }
+      }
+    } catch {}
+  };
+
+  const saveV4Tickers = async (
+    nextTickers: string[],
+    opts?: { sendPlaybook?: boolean; sendPostOpen?: boolean }
+  ) => {
+    setV4Saving(true);
+    setV4SaveStatus("");
+    try {
+      const payload = {
+        tickers: nextTickers,
+        send_playbook: Boolean(opts?.sendPlaybook),
+        send_post_open: Boolean(opts?.sendPostOpen),
+      };
+      let r = await fetch("/api/agent/v4-tickers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+      if (!r || !r.ok) {
+        r = await fetch(`${API_BASE}/api/agent/v4-tickers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      }
+      if (r && r.ok) {
+        const data = await r.json();
+        if (Array.isArray(data?.tickers)) {
+          setV4AlertTickers(data.tickers);
+        }
+        if (opts?.sendPlaybook) {
+          setV4SaveStatus(`✓ Saved & sent 8:00 AM Playbook to Telegram for ${nextTickers.join(", ")}!`);
+        } else if (opts?.sendPostOpen) {
+          setV4SaveStatus(`✓ Saved & sent 8:35 AM Validation Alert to Telegram for ${nextTickers.join(", ")}!`);
+        } else {
+          setV4SaveStatus(`✓ Saved V4 alert tickers: ${nextTickers.join(", ")}`);
+        }
+      } else {
+        setV4SaveStatus("⚠️ Could not reach backend to save tickers.");
+      }
+    } catch {
+      setV4SaveStatus("⚠️ Network error saving V4 alert tickers.");
+    } finally {
+      setV4Saving(false);
+    }
+  };
+
   useEffect(() => {
     let keyToUse = "";
     if (typeof window !== "undefined") {
@@ -121,6 +202,7 @@ export default function ChatPage() {
       if (savedModel) setSelectedModel(savedModel);
     }
     fetchStatus(keyToUse);
+    fetchV4Tickers();
   }, []);
 
   const handleSend = async (customPrompt?: string) => {
@@ -277,17 +359,22 @@ export default function ChatPage() {
 
   const isGeneral = ticker === "GENERAL";
   const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
-  const isSpy = currentActiveTicker === "SPY";
+  const isV4Ticker =
+    !isGeneral &&
+    (["SPY", "SPXW", "SPX", "QQQ", "IWM", "DIA"].includes(currentActiveTicker) ||
+      v4AlertTickers.includes(currentActiveTicker));
 
   useEffect(() => {
-    if (isSpy) {
+    if (isV4Ticker) {
       setSpyLoading(true);
-      fetch("/api/agent/spy-outcome")
+      setSpyOutcome(null);
+      const q = `?ticker=${encodeURIComponent(currentActiveTicker)}`;
+      fetch(`/api/agent/spy-outcome${q}`)
         .then((res) => {
           if (!res.ok) throw new Error("Proxy error");
           return res.json();
         })
-        .catch(() => fetch(`${API_BASE}/api/agent/spy-outcome`).then((r) => r.json()))
+        .catch(() => fetch(`${API_BASE}/api/agent/spy-outcome${q}`).then((r) => r.json()))
         .then((data) => {
           if (data && !data.error) {
             setSpyOutcome(data);
@@ -298,7 +385,7 @@ export default function ChatPage() {
     } else {
       setSpyOutcome(null);
     }
-  }, [isSpy]);
+  }, [isV4Ticker, currentActiveTicker]);
 
   const quickPrompts = isGeneral
     ? [
@@ -319,23 +406,23 @@ export default function ChatPage() {
           prompt: "How should a swing trader size positions and manage stop-losses on High Beta stocks (>1.5x SPY)?",
         },
       ]
-    : isSpy
+    : isV4Ticker
     ? [
         {
-          title: "🎯 SPY Calls or Puts Today",
-          prompt: "What is the valid outcome for SPY based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for SPY Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.",
+          title: `🎯 ${currentActiveTicker} Calls or Puts Today`,
+          prompt: `What is the valid outcome for ${currentActiveTicker} based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for ${currentActiveTicker} Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.`,
         },
         {
           title: "⏱️ 5-Min Post-Open Outcome",
-          prompt: "Evaluate SPY 5 minutes after open: Which scenario from the 8:00 AM playbook is valid (PDH hold/breakout, PDL reclaim/breakdown, or sweep)? What are the exact trade levels?",
+          prompt: `Evaluate ${currentActiveTicker} 5 minutes after open: Which scenario from the 8:00 AM playbook is valid (PDH hold/breakout, PDL reclaim/breakdown, or sweep)? What are the exact trade levels?`,
         },
         {
-          title: "📊 SPY V4 Levels (PDH/PDL)",
-          prompt: "Break down SPY Day Trading V4 key levels today: PDH, PDL, PWH, PWL, Midpoint, ATR, and the 4 possible execution scenarios.",
+          title: `📊 ${currentActiveTicker} V4 Levels (PDH/PDL)`,
+          prompt: `Break down ${currentActiveTicker} Day Trading V4 key levels today: PDH, PDL, PWH, PWL, Midpoint, ATR, and the 4 possible execution scenarios.`,
         },
         {
           title: "🏛️ Macro & Gamma Alignment",
-          prompt: "How does SPY align with today's Dealer Gamma (GEX), Market Regime, and economic calendar? Is this a day for calls or puts?",
+          prompt: `How does ${currentActiveTicker} align with today's Dealer Gamma (GEX), Market Regime, and economic calendar? Is this a day for calls or puts?`,
         },
       ]
     : [
@@ -447,6 +534,19 @@ export default function ChatPage() {
             />
           )}
 
+          {/* V4 Alert Tickers Selector Button */}
+          <button
+            onClick={() => {
+              setV4SaveStatus("");
+              setShowV4Modal(true);
+            }}
+            className="text-xs border px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1.5 font-mono bg-cyan-500/10 border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20"
+            title="Choose tickers for 8:00 AM Playbook & 8:35 AM Post-Open Telegram Alerts (SPY, SPXW, QQQ, etc.)"
+          >
+            <span>🔔</span>
+            <span>V4 Alerts: {v4AlertTickers.join(", ")}</span>
+          </button>
+
           {/* Model Selector Dropdown */}
           <div className="flex items-center">
             <select
@@ -505,13 +605,13 @@ export default function ChatPage() {
 
       {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
       <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
-        {/* SPY Automatic Post-Open Outcome & Trade Plan Banner */}
-        {isSpy && (
+        {/* V4 Automatic Post-Open Outcome & Trade Plan Banner */}
+        {isV4Ticker && (
           <div className="bg-[#0d111d] border-b border-[#1f273d] p-3 sm:p-4 px-4 sm:px-6 transition-all">
             {spyLoading && !spyOutcome ? (
               <div className="flex items-center gap-2 text-xs font-mono text-slate-400 py-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>Calculating live SPY post-open outcome & trade levels from 8:00 AM Playbook...</span>
+                <span>Calculating live {currentActiveTicker} post-open outcome & trade levels from 8:00 AM Playbook...</span>
               </div>
             ) : spyOutcome ? (
               <div className="space-y-2.5">
@@ -519,7 +619,7 @@ export default function ChatPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm">🎯</span>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                      8:35 AM Post-Open Valid Outcome
+                      {currentActiveTicker} 8:35 AM Post-Open Valid Outcome
                     </span>
                     <span
                       className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-semibold border ${
@@ -535,7 +635,7 @@ export default function ChatPage() {
                   </div>
                   <div className="text-[11px] font-mono text-slate-400 flex items-center gap-2">
                     <span>
-                      SPY: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b>
+                      {currentActiveTicker}: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b>
                     </span>
                     <span>·</span>
                     <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
@@ -549,7 +649,9 @@ export default function ChatPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#121626] border border-[#1d243b] rounded-lg p-2.5 text-xs">
                   <div>
                     <span className="text-[10px] text-slate-400 block font-mono">RECOMMENDED CONTRACT</span>
-                    <span className="font-bold text-white font-mono">{spyOutcome.trade_idea?.suggested_contract || "SPY ATM"}</span>
+                    <span className="font-bold text-white font-mono">
+                      {spyOutcome.trade_idea?.suggested_contract || `${currentActiveTicker} ATM`}
+                    </span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 block font-mono">ENTRY TRIGGER</span>
@@ -571,17 +673,28 @@ export default function ChatPage() {
                   <p className="text-[11px] text-slate-400 line-clamp-1 italic">
                     💡 {spyOutcome.trade_idea?.rationale}
                   </p>
-                  <button
-                    onClick={() =>
-                      handleSend(
-                        "What is the valid outcome for SPY based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for SPY Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation."
-                      )
-                    }
-                    disabled={isStreaming}
-                    className="text-[11px] font-semibold text-[#4d9fff] hover:text-[#7bb7ff] flex items-center gap-1 hover:underline ml-auto"
-                  >
-                    <span>💬 Deep Dive in Chat →</span>
-                  </button>
+                  <div className="flex items-center gap-3 ml-auto">
+                    <button
+                      onClick={() => {
+                        setV4SaveStatus("");
+                        setShowV4Modal(true);
+                      }}
+                      className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 hover:underline"
+                    >
+                      ⚙️ Configure 8:00/8:35 Alerts
+                    </button>
+                    <button
+                      onClick={() =>
+                        handleSend(
+                          `What is the valid outcome for ${currentActiveTicker} based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for ${currentActiveTicker} Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.`
+                        )
+                      }
+                      disabled={isStreaming}
+                      className="text-[11px] font-semibold text-[#4d9fff] hover:text-[#7bb7ff] flex items-center gap-1 hover:underline"
+                    >
+                      <span>💬 Deep Dive in Chat →</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -791,6 +904,140 @@ export default function ChatPage() {
                   className="text-xs font-semibold bg-[#4d9fff] text-black px-4 py-1.5 rounded-lg hover:bg-[#3b82f6] transition-colors"
                 >
                   Save & Connect
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── V4 ALERT TICKERS CONFIG MODAL ───────────────────────────────── */}
+      {showV4Modal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121520] border border-[#1e2337] rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🔔</span>
+                <div>
+                  <h3 className="text-base font-bold text-white">Day Trading V4 Telegram Alert Tickers</h3>
+                  <p className="text-[11px] text-slate-400">
+                    8:00 AM CT Playbook · 8:35 AM CT 5-Min Post-Open Validation · 3:40 PM CT Review
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowV4Modal(false)}
+                className="text-slate-400 hover:text-white text-sm p-1 rounded-md hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Choose which tickers receive automated Day Trading V4 Telegram alerts (PDH/PDL/PWH/PWL levels, 8:00 AM Playbook, and 8:35 AM single-outcome Calls vs Puts validation).{" "}
+              <code className="bg-slate-800 text-cyan-300 px-1 py-0.5 rounded font-mono text-[11px]">SPXW</code>{" "}
+              uses live S&amp;P 500 Index (<code className="bg-slate-800 text-cyan-300 px-1 py-0.5 rounded font-mono text-[11px]">^GSPC</code>) bars with $5 strike increments.
+            </p>
+
+            <div className="space-y-2">
+              <label className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">
+                Toggle Tickers (Click to Enable / Disable)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {Array.from(new Set([...v4PopularOptions, ...v4AlertTickers])).map((sym) => {
+                  const active = v4AlertTickers.includes(sym);
+                  return (
+                    <button
+                      key={sym}
+                      type="button"
+                      onClick={() => {
+                        if (active) {
+                          if (v4AlertTickers.length > 1) {
+                            setV4AlertTickers(v4AlertTickers.filter((t) => t !== sym));
+                          }
+                        } else {
+                          setV4AlertTickers([...v4AlertTickers, sym]);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-mono font-semibold border transition-all flex items-center gap-1.5 ${
+                        active
+                          ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm"
+                          : "bg-[#0a0c13] border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
+                      }`}
+                    >
+                      <span>{active ? "✓" : "+"}</span>
+                      <span>{sym}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Add Custom Ticker */}
+            <div className="flex items-center gap-2 pt-1">
+              <input
+                type="text"
+                value={v4CustomInput}
+                onChange={(e) => setV4CustomInput(e.target.value.toUpperCase().replace(/[^A-Z0-9.^$-]/g, ""))}
+                placeholder="Add custom ticker (e.g. QQQ, NDX, COIN)..."
+                className="flex-1 bg-[#0a0c13] border border-slate-700 rounded-lg px-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-[#4d9fff]"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const clean = v4CustomInput.trim().toUpperCase();
+                  if (clean && !v4AlertTickers.includes(clean)) {
+                    setV4AlertTickers([...v4AlertTickers, clean]);
+                  }
+                  setV4CustomInput("");
+                }}
+                className="text-xs font-mono bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg border border-slate-700"
+              >
+                + Add Ticker
+              </button>
+            </div>
+
+            {v4SaveStatus && (
+              <div className="text-xs font-mono px-3 py-2 rounded-lg bg-emerald-950/40 border border-emerald-700/40 text-emerald-300">
+                {v4SaveStatus}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#1e2337]">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={v4Saving}
+                  onClick={() => saveV4Tickers(v4AlertTickers, { sendPlaybook: true })}
+                  className="text-[11px] font-mono bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  📨 Send 8:00 AM Playbook Now
+                </button>
+                <button
+                  type="button"
+                  disabled={v4Saving}
+                  onClick={() => saveV4Tickers(v4AlertTickers, { sendPostOpen: true })}
+                  className="text-[11px] font-mono bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 px-2.5 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  ⚡ Send 8:35 AM Validation Now
+                </button>
+              </div>
+
+              <div className="flex gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => setShowV4Modal(false)}
+                  className="text-xs text-slate-400 hover:text-white px-3 py-1.5 rounded-lg border border-slate-800 hover:bg-slate-800"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  disabled={v4Saving}
+                  onClick={() => saveV4Tickers(v4AlertTickers)}
+                  className="text-xs font-semibold bg-[#4d9fff] text-black px-4 py-1.5 rounded-lg hover:bg-[#3b82f6] transition-colors disabled:opacity-50"
+                >
+                  {v4Saving ? "Saving..." : "Save Alert Tickers"}
                 </button>
               </div>
             </div>

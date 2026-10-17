@@ -210,37 +210,71 @@ def trigger_gamma_jobs():
     return {"status": "gamma jobs completed"}
 
 
+@router.get("/v4-tickers")
+def get_v4_tickers_endpoint():
+    """Return active tickers configured for 8:00 AM & 8:35 AM V4 Telegram alerts."""
+    from backend.services.scheduler import get_v4_alert_tickers, V4_POPULAR_OPTIONS
+    return {
+        "tickers": get_v4_alert_tickers(),
+        "popular_options": V4_POPULAR_OPTIONS,
+    }
+
+
+@router.post("/v4-tickers")
+def update_v4_tickers_endpoint(payload: dict):
+    """Update active tickers configured for 8:00 AM & 8:35 AM V4 Telegram alerts."""
+    from backend.services.scheduler import (
+        set_v4_alert_tickers,
+        V4_POPULAR_OPTIONS,
+        spy_v4_summary_job,
+        spy_v4_post_open_outcome_job,
+    )
+    raw_tickers = payload.get("tickers") or []
+    if isinstance(raw_tickers, str):
+        raw_tickers = [t.strip() for t in raw_tickers.split(",") if t.strip()]
+    saved = set_v4_alert_tickers(raw_tickers)
+
+    alert_res = None
+    if payload.get("send_playbook"):
+        alert_res = spy_v4_summary_job(tickers=saved)
+    elif payload.get("send_post_open"):
+        alert_res = spy_v4_post_open_outcome_job(tickers=saved)
+
+    return {
+        "status": "updated",
+        "tickers": saved,
+        "popular_options": V4_POPULAR_OPTIONS,
+        "alert_result": alert_res,
+    }
+
+
 @router.post("/run-spy-v4")
 @router.post("/run-v4-spy")
-def trigger_spy_v4_summary():
-    """Manually trigger the SPY Day Trading V4 plan Telegram alert."""
+@router.post("/run-v4")
+def trigger_spy_v4_summary(ticker: str = None, tickers: str = None):
+    """Manually trigger the Day Trading V4 plan Telegram alert (for configured tickers or specific ticker)."""
     from backend.services.scheduler import spy_v4_summary_job
-    spy_v4_summary_job()
-    return {"status": "spy_v4_summary completed"}
+    target = None
+    if ticker:
+        target = [t.strip().upper() for t in ticker.split(",") if t.strip()]
+    elif tickers:
+        target = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    res = spy_v4_summary_job(tickers=target)
+    return {"status": "v4_summary completed", "result": res}
 
 
 @router.post("/run-spy-post-open")
-def trigger_spy_post_open_outcome():
-    """Manually trigger the 8:35 AM SPY 5-min post-open outcome validation alert."""
+@router.post("/run-v4-post-open")
+def trigger_spy_post_open_outcome(ticker: str = None, tickers: str = None):
+    """Manually trigger the 8:35 AM 5-min post-open outcome validation alert."""
     from backend.services.scheduler import spy_v4_post_open_outcome_job
-    res = spy_v4_post_open_outcome_job()
-    return {"status": "spy_v4_post_open_outcome completed", "result": res}
-
-
-@router.post("/run-sweeps")
-def trigger_sweep_digest():
-    """Manually trigger the post-market sweep setup digest."""
-    from backend.services.scheduler import sweep_digest_job
-    sweep_digest_job()
-    return {"status": "sweep digest completed"}
-
-
-@router.post("/run-v3-refresh")
-def trigger_backend_v3_refresh():
-    """Manually trigger the backend V3 refresh, outside the market-window gate."""
-    from backend.services.scheduler import backend_v3_refresh_job
-    backend_v3_refresh_job(force=True)
-    return {"status": "backend V3 refresh completed"}
+    target = None
+    if ticker:
+        target = [t.strip().upper() for t in ticker.split(",") if t.strip()]
+    elif tickers:
+        target = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    res = spy_v4_post_open_outcome_job(tickers=target)
+    return {"status": "v4_post_open_outcome completed", "result": res}
 
 
 

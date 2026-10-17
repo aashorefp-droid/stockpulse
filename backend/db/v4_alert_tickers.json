@@ -1,0 +1,19 @@
+{
+  "tickers": [
+    "SPY",
+    "SPXW"
+  ],
+  "popular_options": [
+    "SPY",
+    "SPXW",
+    "QQQ",
+    "IWM",
+    "DIA",
+    "NVDA",
+    "TSLA",
+    "AAPL",
+    "META",
+    "AMD"
+  ],
+  "updated_at": "2026-10-16T22:59:00-05:00"
+}

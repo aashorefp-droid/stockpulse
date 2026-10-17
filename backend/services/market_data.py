@@ -83,10 +83,25 @@ def get_five_min_bars_alpaca(ticker: str, start_date: str, end_date: str, api_ke
     return df.set_index("dt_et")[["open", "high", "low", "close", "volume"]]
 
 
+_YF_SYMBOL_MAP = {
+    "SPXW": "^GSPC",
+    "SPX": "^GSPC",
+    "$SPX": "^GSPC",
+    "^SPX": "^GSPC",
+    "NDX": "^NDX",
+    "RUT": "^RUT",
+}
+
+
+def _yf_sym(ticker: str) -> str:
+    t = (ticker or "").strip().upper()
+    return _YF_SYMBOL_MAP.get(t, t)
+
+
 def get_hourly_bars_yfinance(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
     try:
         import yfinance as yf
-        tk = yf.Ticker(ticker)
+        tk = yf.Ticker(_yf_sym(ticker))
         s = pd.to_datetime(start_date)
         e = pd.to_datetime(end_date) + timedelta(days=1)
         df = tk.history(start=s, end=e, interval="1h")
@@ -108,7 +123,7 @@ def get_ohlcv_for_chart(ticker: str, period: str = "6mo") -> list[dict]:
     try:
         import yfinance as yf
         import math
-        df = yf.Ticker(ticker).history(period=period, interval="1d")
+        df = yf.Ticker(_yf_sym(ticker)).history(period=period, interval="1d")
         if df.empty:
             return []
         df = df.dropna(subset=["Open", "High", "Low", "Close"])

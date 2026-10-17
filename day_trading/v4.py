@@ -597,24 +597,60 @@ def analyze_from_daily(
     }
 
 
+YF_SYMBOL_MAP = {
+    "SPXW": "^GSPC",
+    "SPX": "^GSPC",
+    "$SPX": "^GSPC",
+    "^SPX": "^GSPC",
+    "NDX": "^NDX",
+    "$NDX": "^NDX",
+    "RUT": "^RUT",
+    "$RUT": "^RUT",
+    "VIX": "^VIX",
+    "$VIX": "^VIX",
+}
+
+
+def _yf_symbol(ticker: str) -> str:
+    t = (ticker or "SPY").strip().upper()
+    return YF_SYMBOL_MAP.get(t, t)
+
+
+def _suggest_option_strike(ticker: str, price: float, side: Literal["CALLS", "PUTS"]) -> str:
+    sym = (ticker or "SPY").strip().upper()
+    is_index_5pt = sym in {"SPXW", "SPX", "$SPX", "^GSPC", "NDX", "$NDX", "^NDX"} or price >= 1500.0
+    if is_index_5pt:
+        offset = 5.0 if side == "CALLS" else -5.0
+        strike = int(round((price + offset) / 5.0) * 5)
+    else:
+        offset = 1.0 if side == "CALLS" else -1.0
+        strike = int(round(price + offset))
+    return f"{sym} ${strike} {side}"
+
+
 def analyze(ticker: str) -> dict:
     import yfinance as yf
 
-    daily = yf.Ticker(ticker).history(period="30d", interval="1d", auto_adjust=True)
-    return analyze_from_daily(ticker, daily)
+    clean_ticker = (ticker or "SPY").strip().upper()
+    yf_sym = _yf_symbol(clean_ticker)
+    daily = yf.Ticker(yf_sym).history(period="30d", interval="1d", auto_adjust=True)
+    return analyze_from_daily(clean_ticker, daily)
 
 
-def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) -> dict:
+def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optional[float] = None) -> dict:
     """
-    Evaluates current SPY price action + first 5-minute opening candle against previous day/week
-    key levels (PDH, PDL, PWH, PWL, Mid) to determine the SINGLE VALID OUTCOME from the 8:00 AM
-    Playbook and returns ONE decisive Calls OR Puts trade idea with strike, entry, stop, and targets.
+    Evaluates current price action + first 5-minute opening candle for any ticker (SPY, SPXW, QQQ, etc.)
+    against previous day/week key levels (PDH, PDL, PWH, PWL, Mid) to determine the SINGLE VALID OUTCOME
+    from the 8:00 AM Playbook and returns ONE decisive Calls OR Puts trade idea with strike, entry, stop, and targets.
     """
     import yfinance as yf
 
-    v4_data = analyze("SPY")
+    sym = (ticker or "SPY").strip().upper()
+    yf_sym = _yf_symbol(sym)
+
+    v4_data = analyze(sym)
     if v4_data.get("error"):
-        return {"error": v4_data["error"]}
+        return {"ticker": sym, "error": v4_data["error"]}
 
     price = float(current_price) if current_price and current_price > 0 else float(v4_data.get("price", 0))
     session_high = float(v4_data.get("session_high") or price)
@@ -624,7 +660,7 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
     open_5m = price
     close_5m = price
     try:
-        intraday = yf.Ticker("SPY").history(period="2d", interval="5m", auto_adjust=True)
+        intraday = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
         if not intraday.empty:
             last_date = intraday.index[-1].date()
             today_bars = intraday[intraday.index.date == last_date]
@@ -652,20 +688,20 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
     candle_bullish = close_5m >= open_5m
 
     # 1. Sweep & Reject PDH -> Single Decisive Outcome: BUY PUTS
-    if session_high > pdh and price < pdh:
+    if session_high > pdh and pdl < price < pdh:
         outcome_label = "Sweep & Reject PDH (Bearish Rejection Confirmed)"
         action = "BUY PUTS"
         bias = "Bearish — Failed Breakout Above PDH"
-        suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+        suggested_strike = _suggest_option_strike(sym, price, "PUTS")
         entry = round(price, 2)
         stop = round(max(session_high, pdh) + buf * 0.5, 2)
-        t1 = round(pd_mid, 2)
-        t2 = round(pdl, 2)
+        t1 = round(pd_mid if pd_mid < entry - atr * 0.15 else pdl, 2)
+        t2 = round(pdl if pdl < t1 - atr * 0.15 else entry - atr, 2)
         trigger = f"Confirmed: Swept PDH (${pdh:.2f} -> high ${session_high:.2f}) and rejected below PDH at ${price:.2f}"
         invalidation = f"5m candle close above sweep high (${stop:.2f})"
         rationale = (
-            f"SPY swept above PDH (${pdh:.2f}) to ${session_high:.2f} on the open and rejected back below to ${price:.2f}, "
-            f"confirming the 8:00 AM Sweep & Reject PDH bearish setup targeting Mid (${pd_mid:.2f}) and PDL (${pdl:.2f})."
+            f"{sym} swept above PDH (${pdh:.2f}) to ${session_high:.2f} on the open and rejected back below to ${price:.2f}, "
+            f"confirming the 8:00 AM Sweep & Reject PDH bearish setup targeting ${t1:.2f} and ${t2:.2f}."
         )
 
     # 2. Breakout & Hold Above PDH -> Single Decisive Outcome: BUY CALLS
@@ -673,33 +709,33 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
         outcome_label = "Breakout & Hold Above PDH (Bullish Breakout Confirmed)"
         action = "BUY CALLS"
         bias = "Bullish Continuation Above PDH"
-        suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+        suggested_strike = _suggest_option_strike(sym, price, "CALLS")
         entry = round(price, 2)
         stop = round(pdh - buf, 2)
-        t1 = round(max(pwh, pdh + atr * 0.5), 2)
-        t2 = round(pdh + atr, 2)
+        t1 = round(max(pwh, entry + atr * 0.5), 2)
+        t2 = round(max(t1 + atr * 0.5, entry + atr), 2)
         trigger = f"Confirmed: Holding above PDH (${pdh:.2f}) at ${price:.2f}"
         invalidation = f"Break back below PDH stop at ${stop:.2f}"
         rationale = (
-            f"SPY broke and held above PDH (${pdh:.2f}) after the opening 5m candle, "
+            f"{sym} broke and held above PDH (${pdh:.2f}) after the opening 5m candle, "
             f"confirming the 8:00 AM Bullish Breakout outcome toward ${t1:.2f}."
         )
 
     # 3. Sweep & Reclaim PDL -> Single Decisive Outcome: BUY CALLS
-    elif session_low < pdl and price > pdl:
+    elif session_low < pdl and pdl < price < pdh:
         outcome_label = "Sweep & Reclaim PDL (Bullish Reclaim Confirmed)"
         action = "BUY CALLS"
         bias = "Bullish — Bear Trap Reclaim Above PDL"
-        suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+        suggested_strike = _suggest_option_strike(sym, price, "CALLS")
         entry = round(price, 2)
         stop = round(min(session_low, pdl) - buf * 0.5, 2)
-        t1 = round(pd_mid, 2)
-        t2 = round(pdh, 2)
+        t1 = round(pd_mid if pd_mid > entry + atr * 0.15 else pdh, 2)
+        t2 = round(pdh if pdh > t1 + atr * 0.15 else entry + atr, 2)
         trigger = f"Confirmed: Swept PDL (${pdl:.2f} -> low ${session_low:.2f}) and reclaimed above PDL at ${price:.2f}"
         invalidation = f"5m candle close below sweep low (${stop:.2f})"
         rationale = (
-            f"SPY dipped below PDL (${pdl:.2f}) to ${session_low:.2f} and reclaimed back above to ${price:.2f}, "
-            f"confirming the 8:00 AM Sweep & Reclaim PDL bullish setup targeting Mid (${pd_mid:.2f}) and PDH (${pdh:.2f})."
+            f"{sym} dipped below PDL (${pdl:.2f}) to ${session_low:.2f} and reclaimed back above to ${price:.2f}, "
+            f"confirming the 8:00 AM Sweep & Reclaim PDL bullish setup targeting ${t1:.2f} and ${t2:.2f}."
         )
 
     # 4. Breakdown & Hold Below PDL -> Single Decisive Outcome: BUY PUTS
@@ -707,29 +743,26 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
         outcome_label = "Breakdown & Hold Below PDL (Bearish Breakdown Confirmed)"
         action = "BUY PUTS"
         bias = "Bearish Continuation Below PDL"
-        suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+        suggested_strike = _suggest_option_strike(sym, price, "PUTS")
         entry = round(price, 2)
         stop = round(pdl + buf, 2)
-        t1 = round(min(pwl, pdl - atr * 0.5), 2)
-        t2 = round(pdl - atr, 2)
+        t1 = round(min(pwl if pwl < entry - atr * 0.15 else entry - atr * 0.5, entry - atr * 0.5), 2)
+        t2 = round(min(t1 - atr * 0.5, entry - atr), 2)
         trigger = f"Confirmed: Trading below PDL (${pdl:.2f}) at ${price:.2f}"
         invalidation = f"Reclaim back above PDL stop at ${stop:.2f}"
         rationale = (
-            f"SPY broke and held below PDL (${pdl:.2f}) after the opening 5m candle, "
-            f"confirming the 8:00 AM Bearish Breakdown outcome toward ${t1:.2f}."
+            f"{sym} broke and held below PDL (${pdl:.2f}) after the opening 5m candle, "
+            f"confirming the 8:00 AM Bearish Breakdown outcome toward ${t1:.2f} and ${t2:.2f}."
         )
 
     # 5. Inside PDL–PDH Range -> Resolve to ONE decisive outcome using 5m candle direction & range location
     else:
-        dist_to_pdh = pdh - price
-        dist_to_pdl = price - pdl
-
         if price >= pd_mid:
             if not candle_bullish or (session_high >= pdh - atr * 0.25 and price < session_high - atr * 0.08):
                 outcome_label = "Upper-Range Rejection Below PDH (Bearish Fade to Mid)"
                 action = "BUY PUTS"
                 bias = "Bearish Rejection off Upper Range / PDH Zone"
-                suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+                suggested_strike = _suggest_option_strike(sym, price, "PUTS")
                 entry = round(price, 2)
                 stop = round(pdh + buf * 0.5, 2)
                 t1 = round(pd_mid, 2)
@@ -737,14 +770,14 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
                 trigger = f"Confirmed: Bearish 5m rejection below PDH (${pdh:.2f}) at ${price:.2f}"
                 invalidation = f"Breakout above PDH stop at ${stop:.2f}"
                 rationale = (
-                    f"SPY tested the upper range near PDH (${pdh:.2f}, high ${session_high:.2f}) and sellers stepped in "
+                    f"{sym} tested the upper range near PDH (${pdh:.2f}, high ${session_high:.2f}) and sellers stepped in "
                     f"(open ${open_5m:.2f} -> ${price:.2f}), favoring PUTS toward Midpoint (${pd_mid:.2f}) and PDL (${pdl:.2f})."
                 )
             else:
                 outcome_label = "Bullish Hold Above Midpoint Targeting PDH"
                 action = "BUY CALLS"
                 bias = "Bullish Continuation Above Midpoint"
-                suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+                suggested_strike = _suggest_option_strike(sym, price, "CALLS")
                 entry = round(price, 2)
                 stop = round(pd_mid - buf * 0.5, 2)
                 t1 = round(pdh, 2)
@@ -752,7 +785,7 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
                 trigger = f"Confirmed: Holding above Midpoint (${pd_mid:.2f}) with bullish 5m candle at ${price:.2f}"
                 invalidation = f"Break below Midpoint stop at ${stop:.2f}"
                 rationale = (
-                    f"SPY held above Midpoint (${pd_mid:.2f}) on the opening 5m candle (${open_5m:.2f} -> ${price:.2f}), "
+                    f"{sym} held above Midpoint (${pd_mid:.2f}) on the opening 5m candle (${open_5m:.2f} -> ${price:.2f}), "
                     f"favoring CALLS targeting PDH (${pdh:.2f}) and PWH (${pwh:.2f})."
                 )
         else:
@@ -760,7 +793,7 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
                 outcome_label = "Lower-Range Bounce Above PDL Support Targeting Mid"
                 action = "BUY CALLS"
                 bias = "Bullish Bounce off Lower Range / PDL Zone"
-                suggested_strike = f"SPY ${round(price + 1.0):.0f} CALLS"
+                suggested_strike = _suggest_option_strike(sym, price, "CALLS")
                 entry = round(price, 2)
                 stop = round(pdl - buf * 0.5, 2)
                 t1 = round(pd_mid, 2)
@@ -768,14 +801,14 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
                 trigger = f"Confirmed: Bullish 5m defense above PDL (${pdl:.2f}) at ${price:.2f}"
                 invalidation = f"Breakdown below PDL stop at ${stop:.2f}"
                 rationale = (
-                    f"SPY defended the lower range above PDL (${pdl:.2f}, low ${session_low:.2f}) with buyers stepping in "
+                    f"{sym} defended the lower range above PDL (${pdl:.2f}, low ${session_low:.2f}) with buyers stepping in "
                     f"(${open_5m:.2f} -> ${price:.2f}), favoring CALLS toward Midpoint (${pd_mid:.2f}) and PDH (${pdh:.2f})."
                 )
             else:
                 outcome_label = "Bearish Breakdown Below Midpoint Targeting PDL"
                 action = "BUY PUTS"
                 bias = "Bearish Continuation Below Midpoint"
-                suggested_strike = f"SPY ${round(price - 1.0):.0f} PUTS"
+                suggested_strike = _suggest_option_strike(sym, price, "PUTS")
                 entry = round(price, 2)
                 stop = round(pd_mid + buf * 0.5, 2)
                 t1 = round(pdl, 2)
@@ -783,9 +816,25 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
                 trigger = f"Confirmed: Trading below Midpoint (${pd_mid:.2f}) with bearish 5m candle at ${price:.2f}"
                 invalidation = f"Reclaim above Midpoint stop at ${stop:.2f}"
                 rationale = (
-                    f"SPY rejected below Midpoint (${pd_mid:.2f}) on the opening 5m candle (${open_5m:.2f} -> ${price:.2f}), "
+                    f"{sym} rejected below Midpoint (${pd_mid:.2f}) on the opening 5m candle (${open_5m:.2f} -> ${price:.2f}), "
                     f"favoring PUTS targeting PDL (${pdl:.2f}) and PWL (${pwl:.2f})."
                 )
+
+    # Enforce strict directional consistency on Stop, T1, and T2 relative to Entry
+    if "PUTS" in action:
+        if t1 >= entry - atr * 0.12:
+            t1 = round(entry - atr * 0.5, 2)
+        if t2 >= t1 - atr * 0.12:
+            t2 = round(t1 - atr * 0.5, 2)
+        if stop <= entry or (stop - entry) > atr * 0.75:
+            stop = round(max(pdl + buf, entry + atr * 0.3) if price <= pdl else entry + atr * 0.35, 2)
+    else:
+        if t1 <= entry + atr * 0.12:
+            t1 = round(entry + atr * 0.5, 2)
+        if t2 <= t1 + atr * 0.12:
+            t2 = round(t1 + atr * 0.5, 2)
+        if stop >= entry or (entry - stop) > atr * 0.75:
+            stop = round(min(pdh - buf, entry - atr * 0.3) if price >= pdh else entry - atr * 0.35, 2)
 
     # Calculate Risk / Reward
     risk = abs(entry - stop) if entry != stop else 1.0
@@ -793,6 +842,8 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
     rr = round(reward / risk, 1) if risk > 0 else 2.0
 
     return {
+        "ticker": sym,
+        "yf_symbol": yf_sym,
         "price": price,
         "session_high": round(session_high, 2),
         "session_low": round(session_low, 2),
@@ -823,6 +874,11 @@ def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None) 
         "morning_signal": v4_data.get("signal", {}),
         "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT")
     }
+
+
+def get_spy_valid_outcome_and_trade_idea(current_price: Optional[float] = None, ticker: str = "SPY") -> dict:
+    """Backward-compatible wrapper around get_valid_outcome_and_trade_idea."""
+    return get_valid_outcome_and_trade_idea(ticker=ticker, current_price=current_price)
 
 
 if __name__ == "__main__":

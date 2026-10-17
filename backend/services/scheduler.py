@@ -1434,63 +1434,124 @@ def macro_hourly_checkin_job():
 
 # ── V4 & V3 Day Trading Scheduler Jobs ────────────────────────────────────────
 
-def spy_v4_summary_job():
-    """Send the SPY Day Trading V4 plan to Telegram."""
-    if not _SPY_V4_SUMMARY_ENABLED:
-        logger.info("[scheduler] SPY V4 summary skipped: SPY_V4_SUMMARY_ENABLED=0")
-        return
+_V4_TICKERS_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "db", "v4_alert_tickers.json",
+)
+V4_POPULAR_OPTIONS = ["SPY", "SPXW", "QQQ", "IWM", "DIA", "NVDA", "TSLA", "AAPL", "META", "AMD"]
 
-    import html
+
+def get_v4_alert_tickers() -> list[str]:
+    """Return the active list of tickers configured for 8:00 AM & 8:35 AM V4 alerts."""
+    try:
+        if os.path.exists(_V4_TICKERS_PATH):
+            with open(_V4_TICKERS_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+                if isinstance(data, dict) and isinstance(data.get("tickers"), list):
+                    cleaned = [str(t).strip().upper() for t in data["tickers"] if str(t).strip()]
+                    if cleaned:
+                        return list(dict.fromkeys(cleaned))
+    except Exception:
+        pass
+
+    state = _load_scheduler_state()
+    if isinstance(state.get("v4_alert_tickers"), list):
+        cleaned = [str(t).strip().upper() for t in state["v4_alert_tickers"] if str(t).strip()]
+        if cleaned:
+            return list(dict.fromkeys(cleaned))
+
+    env_val = os.getenv("V4_ALERT_TICKERS", "SPY,SPXW")
+    cleaned = [t.strip().upper() for t in env_val.split(",") if t.strip()]
+    return list(dict.fromkeys(cleaned)) if cleaned else ["SPY", "SPXW"]
+
+
+def set_v4_alert_tickers(tickers: list[str]) -> list[str]:
+    """Persist the user's chosen V4 alert tickers to disk and scheduler state."""
+    cleaned = list(dict.fromkeys([str(t).strip().upper() for t in (tickers or []) if str(t).strip()]))
+    if not cleaned:
+        cleaned = ["SPY"]
 
     try:
-        from backend.services.scanner import scan_single
+        os.makedirs(os.path.dirname(_V4_TICKERS_PATH), exist_ok=True)
+        payload = {
+            "tickers": cleaned,
+            "popular_options": V4_POPULAR_OPTIONS,
+            "updated_at": datetime.now(CST).isoformat(timespec="seconds"),
+        }
+        tmp = f"{_V4_TICKERS_PATH}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+        os.replace(tmp, _V4_TICKERS_PATH)
+    except Exception as exc:
+        logger.warning("[scheduler] failed to write v4_alert_tickers.json: %s", exc)
 
+    state = _load_scheduler_state()
+    state["v4_alert_tickers"] = cleaned
+    _save_scheduler_state(state)
+    return cleaned
+
+
+def _send_v4_summary_for_ticker(ticker: str) -> dict:
+    """Send the Day Trading V4 Playbook for a single ticker (SPY, SPXW, QQQ, etc.) to Telegram."""
+    import html
+    sym = (ticker or "SPY").strip().upper()
+
+    try:
+        row: dict = {"ticker": sym}
+        # First try direct V4 engine (supports SPY, SPXW/^GSPC, QQQ, IWM, and all equities)
         try:
-            row = scan_single("SPY", None, None, "daytrading")
-        except TypeError:
-            row = scan_single("SPY")
+            from day_trading.v4 import analyze as _dt4_direct
+            _direct = _dt4_direct(sym)
+            if _direct.get("signal"):
+                _sig = _direct["signal"]
+                _lvl = _direct.get("levels") or {}
+                row.update({
+                    "dt4_enabled": True,
+                    "dt4_setup": _sig.get("setup"),
+                    "dt4_context": _sig.get("context"),
+                    "dt4_side": _sig.get("side"),
+                    "dt4_bias": _sig.get("bias"),
+                    "dt4_grade": _sig.get("grade"),
+                    "dt4_level": _sig.get("level"),
+                    "dt4_level_val": _sig.get("level_val"),
+                    "dt4_entry": _sig.get("entry"),
+                    "dt4_stop": _sig.get("stop"),
+                    "dt4_t1": _sig.get("t1"),
+                    "dt4_t2": _sig.get("t2"),
+                    "dt4_rr": _sig.get("rr"),
+                    "dt4_trigger": _sig.get("trigger"),
+                    "dt4_invalidation": _sig.get("invalidation"),
+                    "dt4_target_plan": _sig.get("target_plan"),
+                    "dt4_exit_plan": _sig.get("exit_plan"),
+                    "dt4_note": _sig.get("note"),
+                    "dt4_pdh": _lvl.get("pdh"),
+                    "dt4_pdl": _lvl.get("pdl"),
+                    "dt4_pwh": _lvl.get("pwh"),
+                    "dt4_pwl": _lvl.get("pwl"),
+                    "dt4_atr": _lvl.get("atr"),
+                    "dt4_outcomes": _direct.get("outcomes"),
+                    "price": _direct.get("price") or row.get("price"),
+                })
+            elif _direct.get("error"):
+                row["error"] = _direct.get("error")
+        except Exception as _e:
+            logger.warning(f"[scheduler] {sym} direct V4 analyze failed: {_e}")
 
-        if not row.get("dt4_setup") or row.get("error"):
+        if not row.get("dt4_setup") and sym not in {"SPXW", "SPX", "$SPX", "^GSPC"}:
             try:
-                from day_trading.v4 import analyze as _dt4_direct
-                _direct = _dt4_direct("SPY")
-                if _direct.get("signal"):
-                    _sig = _direct["signal"]
-                    _lvl = _direct.get("levels") or {}
-                    row.update({
-                        "dt4_enabled": True,
-                        "dt4_setup": _sig.get("setup"),
-                        "dt4_context": _sig.get("context"),
-                        "dt4_side": _sig.get("side"),
-                        "dt4_bias": _sig.get("bias"),
-                        "dt4_grade": _sig.get("grade"),
-                        "dt4_level": _sig.get("level"),
-                        "dt4_level_val": _sig.get("level_val"),
-                        "dt4_entry": _sig.get("entry"),
-                        "dt4_stop": _sig.get("stop"),
-                        "dt4_t1": _sig.get("t1"),
-                        "dt4_t2": _sig.get("t2"),
-                        "dt4_rr": _sig.get("rr"),
-                        "dt4_trigger": _sig.get("trigger"),
-                        "dt4_invalidation": _sig.get("invalidation"),
-                        "dt4_target_plan": _sig.get("target_plan"),
-                        "dt4_exit_plan": _sig.get("exit_plan"),
-                        "dt4_note": _sig.get("note"),
-                        "dt4_pdh": _lvl.get("pdh"),
-                        "dt4_pdl": _lvl.get("pdl"),
-                        "dt4_pwh": _lvl.get("pwh"),
-                        "dt4_pwl": _lvl.get("pwl"),
-                        "dt4_atr": _lvl.get("atr"),
-                        "dt4_outcomes": _direct.get("outcomes"),
-                        "price": _direct.get("price") or row.get("price"),
-                    })
-            except Exception as _e:
-                logger.warning(f"[scheduler] SPY direct V4 fallback failed: {_e}")
+                from backend.services.scanner import scan_single
+                try:
+                    s_row = scan_single(sym, None, None, "daytrading")
+                except TypeError:
+                    s_row = scan_single(sym)
+                if s_row:
+                    row.update(s_row)
+            except Exception as _se:
+                logger.warning(f"[scheduler] {sym} scan_single fallback failed: {_se}")
 
         chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
         if row.get("error") and not row.get("dt4_setup"):
             msg = (
-                f"<b>SPY Day Trading V4 — {today_str()}</b>\n"
+                f"<b>{html.escape(sym)} Day Trading V4 — {today_str()}</b>\n"
                 f"Unavailable: {html.escape(str(row.get('error') or 'unknown error'))}"
             )
             send_telegram(
@@ -1499,8 +1560,8 @@ def spy_v4_summary_job():
                 msg,
                 message_thread_id=thread_id,
             )
-            logger.warning("[scheduler] SPY V4 summary unavailable: %s", row.get("error"))
-            return
+            logger.warning("[scheduler] %s V4 summary unavailable: %s", sym, row.get("error"))
+            return {"ticker": sym, "sent": False, "error": row.get("error")}
 
         def _money(value) -> str:
             return f"${float(value):.2f}" if isinstance(value, (int, float)) else "—"
@@ -1538,10 +1599,10 @@ def spy_v4_summary_job():
                 )
                 outcomes = compute_outcomes(float(row["price"]), _lvl_obj)
             except Exception as _oe:
-                logger.debug(f"[scheduler] On-the-fly outcomes computation failed: {_oe}")
+                logger.debug(f"[scheduler] On-the-fly outcomes computation failed for {sym}: {_oe}")
 
         msg_lines = [
-            f"🎯 <b>SPY Day Trading V4 Playbook — {today_str()}</b>",
+            f"🎯 <b>{html.escape(sym)} Day Trading V4 Playbook — {today_str()}</b>",
             f"Status: <b>{side_label}</b> | Setup: <b>{setup_text}</b> | Grade: <b>{grade}</b>",
             f"Bias: {bias} | Context: {context}",
             f"Price: <b>{_money(row.get('price'))}</b> | ATR: {_money(row.get('dt4_atr'))}",
@@ -1571,10 +1632,11 @@ def spy_v4_summary_job():
         except Exception:
             pass
 
-        # ── SPY News Sentiment (Good / Bad / Neutral) ──────────────────────
+        # ── Ticker News Sentiment (Good / Bad / Neutral) ───────────────────
+        news_sym = "SPY" if sym in {"SPXW", "SPX", "$SPX", "^GSPC"} else ("QQQ" if sym in {"NDX", "$NDX", "^NDX"} else sym)
         try:
             import news_sentiment
-            news_res = news_sentiment.get_news_details("SPY")
+            news_res = news_sentiment.get_news_details(news_sym)
             raw_label = (news_res.get("label") or "No").strip()
             g_score = news_res.get("good_score", 0)
             b_score = news_res.get("bad_score", 0)
@@ -1586,7 +1648,7 @@ def spy_v4_summary_job():
             else:
                 sent_badge = f"⚪ Neutral ({g_score} Good / {b_score} Bad)"
 
-            msg_lines.append(f"📰 <b>SPY News Sentiment:</b> {sent_badge}")
+            msg_lines.append(f"📰 <b>{html.escape(sym)} News Sentiment:</b> {sent_badge}")
 
             headlines = news_res.get("headlines") or []
             shown = 0
@@ -1601,8 +1663,8 @@ def spy_v4_summary_job():
                     if shown >= 2:
                         break
         except Exception as _ne:
-            logger.warning(f"[scheduler] SPY news sentiment fetch failed: {_ne}")
-            msg_lines.append("📰 <b>SPY News Sentiment:</b> ⚪ Neutral")
+            logger.warning(f"[scheduler] {sym} news sentiment fetch failed: {_ne}")
+            msg_lines.append(f"📰 <b>{html.escape(sym)} News Sentiment:</b> ⚪ Neutral")
 
         if not range_wait:
             level = html.escape(str(row.get("dt4_level") or "—"))
@@ -1676,29 +1738,40 @@ def spy_v4_summary_job():
             msg,
             message_thread_id=thread_id,
         )
-        logger.info("[scheduler] SPY V4 summary sent=%s setup=%s side=%s", sent, setup, side)
+        logger.info("[scheduler] %s V4 summary sent=%s setup=%s side=%s", sym, sent, setup, side)
+        return {"ticker": sym, "sent": sent, "setup": setup, "side": side, "price": row.get("price")}
     except Exception as e:
-        logger.error(f"[scheduler] SPY V4 summary failed: {e}")
+        logger.error(f"[scheduler] {sym} V4 summary failed: {e}")
+        return {"ticker": sym, "sent": False, "error": str(e)}
 
 
-def spy_v4_post_open_outcome_job():
-    """
-    8:35 AM CST (Mon-Fri) — 5 Minutes Post-Market Open SPY Outcome Validation Alert.
-    Evaluates the 5-min post-open candle against the 8:00 AM V4 Playbook to declare
-    which outcome has triggered as VALID, and provides actionable CALLS vs PUTS trade levels.
-    """
+def spy_v4_summary_job(tickers: list[str] | None = None):
+    """Send the Day Trading V4 Playbook to Telegram for all configured V4 alert tickers."""
     if not _SPY_V4_SUMMARY_ENABLED:
-        logger.info("[scheduler] SPY 8:35 AM validation skipped: SPY_V4_SUMMARY_ENABLED=0")
-        return
+        logger.info("[scheduler] V4 summary skipped: SPY_V4_SUMMARY_ENABLED=0")
+        return {"skipped": True}
 
+    target_tickers = [t.strip().upper() for t in (tickers or get_v4_alert_tickers()) if str(t).strip()]
+    if not target_tickers:
+        target_tickers = ["SPY"]
+
+    results = {}
+    for sym in target_tickers:
+        results[sym] = _send_v4_summary_for_ticker(sym)
+    return {"tickers": target_tickers, "results": results}
+
+
+def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
+    """Send the 8:35 AM 5-Min Post-Open Outcome Validation Alert for a single ticker."""
     import html
-    from day_trading.v4 import get_spy_valid_outcome_and_trade_idea
+    from day_trading.v4 import get_valid_outcome_and_trade_idea
 
+    sym = (ticker or "SPY").strip().upper()
     try:
-        data = get_spy_valid_outcome_and_trade_idea()
+        data = get_valid_outcome_and_trade_idea(ticker=sym)
         if data.get("error"):
-            logger.warning(f"[scheduler] SPY 8:35 AM outcome validation failed: {data['error']}")
-            return
+            logger.warning(f"[scheduler] {sym} 8:35 AM outcome validation failed: {data['error']}")
+            return {"ticker": sym, "sent": False, "error": data["error"]}
 
         price = data.get("price", 0)
         valid_outcome = data.get("valid_outcome", "Unknown")
@@ -1707,7 +1780,7 @@ def spy_v4_post_open_outcome_job():
 
         action = idea.get("action", "WAIT")
         action_emoji = "🟢" if "CALLS" in action else "🔴" if "PUTS" in action else "⏸"
-        contract = idea.get("suggested_contract", "SPY ATM")
+        contract = idea.get("suggested_contract", f"{sym} ATM")
         entry = idea.get("entry_level", price)
         stop = idea.get("stop_loss", price)
         t1 = idea.get("target_1", price)
@@ -1729,12 +1802,12 @@ def spy_v4_post_open_outcome_job():
         chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
 
         lines = [
-            f"🎯 <b>SPY Open Validation — 5-Min Post-Open ({now_str})</b>",
+            f"🎯 <b>{html.escape(sym)} Open Validation — 5-Min Post-Open ({now_str})</b>",
             f"<b>Valid Outcome:</b> {action_emoji} <b>{html.escape(valid_outcome)}</b>",
             f"<i>{html.escape(rationale)}</i>",
             "",
             "📊 <b>Market Structure & Levels:</b>",
-            f"• SPY Price: <b>${price:.2f}</b>",
+            f"• {html.escape(sym)} Price: <b>${price:.2f}</b>",
             f"• PDH: ${pdh:.2f} | PDL: ${pdl:.2f} | Mid: ${pd_mid:.2f} | ATR: ${atr:.2f}",
             "",
             "⚡ <b>Actionable Trade Idea:</b>",
@@ -1756,12 +1829,40 @@ def spy_v4_post_open_outcome_job():
             msg,
             message_thread_id=thread_id,
         )
-        logger.info(f"[scheduler] SPY 8:35 AM outcome validation sent={sent}: {valid_outcome}")
-        return {"sent": sent, "valid_outcome": valid_outcome, "trade_idea": idea}
+        logger.info(f"[scheduler] {sym} 8:35 AM outcome validation sent={sent}: {valid_outcome}")
+        return {"ticker": sym, "sent": sent, "valid_outcome": valid_outcome, "trade_idea": idea}
 
     except Exception as e:
-        logger.error(f"[scheduler] SPY 8:35 AM outcome validation failed: {e}")
-        return {"error": str(e)}
+        logger.error(f"[scheduler] {sym} 8:35 AM outcome validation failed: {e}")
+        return {"ticker": sym, "sent": False, "error": str(e)}
+
+
+def spy_v4_post_open_outcome_job(tickers: list[str] | None = None):
+    """
+    8:35 AM CST (Mon-Fri) — 5 Minutes Post-Market Open Outcome Validation Alert.
+    Evaluates the 5-min post-open candle against the 8:00 AM V4 Playbook for all configured
+    V4 alert tickers (e.g. SPY, SPXW, QQQ) to declare the single valid outcome & trade idea.
+    """
+    if not _SPY_V4_SUMMARY_ENABLED:
+        logger.info("[scheduler] V4 8:35 AM validation skipped: SPY_V4_SUMMARY_ENABLED=0")
+        return {"skipped": True}
+
+    target_tickers = [t.strip().upper() for t in (tickers or get_v4_alert_tickers()) if str(t).strip()]
+    if not target_tickers:
+        target_tickers = ["SPY"]
+
+    results = {}
+    for sym in target_tickers:
+        results[sym] = _send_v4_post_open_outcome_for_ticker(sym)
+
+    first_res = results.get(target_tickers[0], {})
+    return {
+        "tickers": target_tickers,
+        "results": results,
+        "sent": any(r.get("sent") for r in results.values()),
+        "valid_outcome": first_res.get("valid_outcome"),
+        "trade_idea": first_res.get("trade_idea"),
+    }
 
 
 def sweep_digest_job():
