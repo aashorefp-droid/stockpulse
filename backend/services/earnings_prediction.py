@@ -74,7 +74,18 @@ def get_next_earnings_details(
     next_date = None
     next_time = "TBD"
     next_eps_est = None
+    prior_eps_est = None
     next_rev_est = None
+    prior_rev_est = None
+
+    def _fmt_rev_val(rev_val: Any) -> Optional[str]:
+        try:
+            rv = float(rev_val or 0)
+            if rv <= 0 or math.isnan(rv):
+                return None
+            return f"${rv / 1e9:.2f}B" if rv >= 1e9 else f"${rv / 1e6:.2f}M"
+        except Exception:
+            return None
 
     # Check calendar
     try:
@@ -92,8 +103,30 @@ def get_next_earnings_details(
                 next_eps_est = cal.get("Earnings Average") or cal.get("Earnings Low")
             if "Revenue Average" in cal:
                 rev_avg = cal.get("Revenue Average")
-                if rev_avg and rev_avg > 0:
-                    next_rev_est = f"${rev_avg / 1e9:.2f}B" if rev_avg >= 1e9 else f"${rev_avg / 1e6:.2f}M"
+                next_rev_est = _fmt_rev_val(rev_avg)
+    except Exception:
+        pass
+
+    # Fallback / enrich from tk.earnings_estimate and tk.revenue_estimate
+    try:
+        ee_df = getattr(tk, "earnings_estimate", None)
+        if ee_df is not None and not ee_df.empty:
+            row_ee = ee_df.loc["0q"] if "0q" in ee_df.index else ee_df.iloc[0]
+            if next_eps_est is None and pd.notna(row_ee.get("avg")):
+                next_eps_est = float(row_ee.get("avg"))
+            if pd.notna(row_ee.get("yearAgoEps")):
+                prior_eps_est = round(float(row_ee.get("yearAgoEps")), 2)
+    except Exception:
+        pass
+
+    try:
+        re_df = getattr(tk, "revenue_estimate", None)
+        if re_df is not None and not re_df.empty:
+            row_re = re_df.loc["0q"] if "0q" in re_df.index else re_df.iloc[0]
+            if next_rev_est is None and pd.notna(row_re.get("avg")):
+                next_rev_est = _fmt_rev_val(row_re.get("avg"))
+            if pd.notna(row_re.get("yearAgoRevenue")):
+                prior_rev_est = _fmt_rev_val(row_re.get("yearAgoRevenue"))
     except Exception:
         pass
 
@@ -179,6 +212,24 @@ def get_next_earnings_details(
             if total > 0:
                 historical_beat_rate_pct = round((beats / total) * 100, 1)
 
+    # Fallback to tk.earnings_history if last_eps_est or last_eps_act is still None
+    if last_eps_est is None or last_eps_act is None:
+        try:
+            eh_df = getattr(tk, "earnings_history", None)
+            if eh_df is not None and not eh_df.empty:
+                last_eh = eh_df.iloc[-1]
+                if last_eps_act is None and pd.notna(last_eh.get("epsActual")):
+                    last_eps_act = round(float(last_eh.get("epsActual")), 2)
+                if last_eps_est is None and pd.notna(last_eh.get("epsEstimate")):
+                    last_eps_est = round(float(last_eh.get("epsEstimate")), 2)
+                if last_surprise_pct is None and last_eps_act is not None and last_eps_est not in (None, 0):
+                    last_surprise_pct = round(((last_eps_act - last_eps_est) / abs(last_eps_est)) * 100, 2)
+                    last_beat_status = "BEAT" if last_surprise_pct > 0.5 else ("MISS" if last_surprise_pct < -0.5 else "IN-LINE")
+        except Exception:
+            pass
+    if last_eps_est is None and prior_eps_est is not None:
+        last_eps_est = prior_eps_est
+
     # Implied Move from options ATM straddle or fallback
     expected_move_pct = None
     try:
@@ -206,7 +257,9 @@ def get_next_earnings_details(
             "is_tomorrow": is_tomorrow,
             "status_label": status_label,
             "next_eps_estimate": round(float(next_eps_est), 2) if next_eps_est is not None else None,
+            "prior_eps_estimate": prior_eps_est,
             "next_revenue_estimate": next_rev_est,
+            "prior_revenue_estimate": prior_rev_est,
             "pe_ratio": pe_ratio,
             "forward_pe": forward_pe,
             "last_earnings_eps_actual": last_eps_act,

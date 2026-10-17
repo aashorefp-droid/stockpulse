@@ -588,21 +588,135 @@ def compute_history_stats(moves: list[dict]) -> dict:
 
 # ── Estimate revisions & revenue beat ─────────────────────────────────────────
 
+def _fmt_rev_short(val: Any) -> Optional[str]:
+    try:
+        v = float(val or 0)
+        if v <= 0 or pd.isna(v):
+            return None
+        if v >= 1e9:
+            return f"${v / 1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v / 1e6:.1f}M"
+        return f"${v:,.0f}"
+    except Exception:
+        return None
+
+
 def get_estimate_revisions(ticker: str) -> dict:
     """
-    Fetch EPS estimate revision trend and forward revenue growth via Yahoo Finance
-    quoteSummary earningsTrend module.
+    Fetch EPS estimate revision trend, prior-year EPS, and forward/prior revenue estimates
+    via yfinance Ticker (eps_trend, eps_revisions, earnings_estimate, revenue_estimate)
+    with quoteSummary fallback.
 
     Returns:
-        est_current   — current consensus EPS estimate for upcoming quarter
-        est_90d_ago   — what that estimate was 90 days ago
-        revision_pct  — % change: (current − 90d) / |90d|  (positive = raised)
-        up_30d        — # analysts who raised estimate in last 30 days
-        down_30d      — # analysts who cut estimate in last 30 days
-        net_30d       — up_30d − down_30d
-        rev_growth_est — forward revenue growth estimate %
-        analyst_count — number of analysts covering earnings
+        est_current         — current consensus EPS estimate for upcoming quarter
+        est_90d_ago         — what that estimate was 90 days ago
+        est_30d_ago         — what that estimate was 30 days ago
+        eps_prior_year      — year-ago EPS for the same quarter
+        eps_yoy_growth      — expected YoY EPS growth %
+        revision_pct        — % change: (current − 90d) / |90d|  (positive = raised)
+        up_30d              — # analysts who raised estimate in last 30 days
+        down_30d            — # analysts who cut estimate in last 30 days
+        net_30d             — up_30d − down_30d
+        rev_est_current     — current consensus revenue estimate (formatted, e.g. $28.11B)
+        rev_prior_year      — year-ago revenue for same quarter (formatted, e.g. $28.10B)
+        rev_growth_est      — forward revenue growth estimate %
+        analyst_count       — number of analysts covering earnings
     """
+    try:
+        tk = yf.Ticker(ticker)
+        est_cur = None
+        est_90d = None
+        est_30d = None
+        eps_prior = None
+        eps_yoy = None
+        up_30d = 0
+        dn_30d = 0
+        up_7d = 0
+        dn_7d = 0
+        rev_cur_raw = None
+        rev_pri_raw = None
+        rev_growth = None
+        n_analysts = None
+
+        def _pick_row(df: Any):
+            if df is None or getattr(df, "empty", True):
+                return None
+            for p in ("0q", "+1q", "1q", "0y"):
+                if p in df.index:
+                    return df.loc[p]
+            return df.iloc[0]
+
+        def _val(row: Any, *cols: str) -> Optional[float]:
+            if row is None:
+                return None
+            for c in cols:
+                if c in row and pd.notna(row[c]):
+                    try:
+                        return float(row[c])
+                    except Exception:
+                        pass
+            return None
+
+        r_trend = _pick_row(getattr(tk, "eps_trend", None))
+        if r_trend is not None:
+            est_cur = _val(r_trend, "current")
+            est_90d = _val(r_trend, "90daysAgo")
+            est_30d = _val(r_trend, "30daysAgo")
+
+        r_rev = _pick_row(getattr(tk, "eps_revisions", None))
+        if r_rev is not None:
+            up_30d = int(_val(r_rev, "upLast30days") or 0)
+            dn_30d = int(_val(r_rev, "downLast30days") or 0)
+            up_7d = int(_val(r_rev, "upLast7days") or 0)
+            dn_7d = int(_val(r_rev, "downLast7Days", "downLast7days") or 0)
+
+        r_ee = _pick_row(getattr(tk, "earnings_estimate", None))
+        if r_ee is not None:
+            if est_cur is None:
+                est_cur = _val(r_ee, "avg")
+            eps_prior = _val(r_ee, "yearAgoEps")
+            ee_growth = _val(r_ee, "growth")
+            if ee_growth is not None:
+                eps_yoy = round(ee_growth * 100, 1)
+            elif est_cur is not None and eps_prior is not None and abs(eps_prior) >= 0.01:
+                eps_yoy = round(((est_cur - eps_prior) / abs(eps_prior)) * 100, 1)
+            n_analysts = _val(r_ee, "numberOfAnalysts")
+
+        r_re = _pick_row(getattr(tk, "revenue_estimate", None))
+        if r_re is not None:
+            rev_cur_raw = _val(r_re, "avg")
+            rev_pri_raw = _val(r_re, "yearAgoRevenue")
+            re_growth = _val(r_re, "growth")
+            if re_growth is not None:
+                rev_growth = re_growth
+            elif rev_cur_raw and rev_pri_raw and rev_pri_raw > 0:
+                rev_growth = (rev_cur_raw - rev_pri_raw) / rev_pri_raw
+
+        if est_cur is not None or rev_cur_raw is not None:
+            revision_pct = None
+            if est_cur is not None and est_90d and est_90d != 0:
+                revision_pct = round((est_cur - est_90d) / abs(est_90d) * 100, 1)
+            return {
+                "est_current":      round(est_cur, 2) if est_cur is not None else None,
+                "est_90d_ago":      round(est_90d, 2) if est_90d is not None else None,
+                "est_30d_ago":      round(est_30d, 2) if est_30d is not None else None,
+                "eps_prior_year":   round(eps_prior, 2) if eps_prior is not None else None,
+                "eps_yoy_growth":   eps_yoy,
+                "revision_pct":     revision_pct,
+                "up_7d":            up_7d,
+                "up_30d":           up_30d,
+                "down_7d":          dn_7d,
+                "down_30d":         dn_30d,
+                "net_30d":          up_30d - dn_30d,
+                "rev_est_current":  _fmt_rev_short(rev_cur_raw),
+                "rev_prior_year":   _fmt_rev_short(rev_pri_raw),
+                "rev_growth_est":   round(rev_growth * 100, 1) if rev_growth is not None else None,
+                "analyst_count":    int(n_analysts) if n_analysts is not None else None,
+            }
+    except Exception:
+        pass
+
     try:
         r = requests.get(
             f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}",
@@ -618,8 +732,7 @@ def get_estimate_revisions(ticker: str) -> dict:
                    .get("earningsTrend", {})
                    .get("trend", []))
 
-        # Take current quarter ("0q") or next quarter ("1q") — whichever is available first
-        current = next((t for t in trends if t.get("period") in ("0q", "1q")), None)
+        current = next((t for t in trends if t.get("period") in ("0q", "1q", "+1q")), None)
         if not current:
             return {}
 
@@ -634,10 +747,13 @@ def get_estimate_revisions(ticker: str) -> dict:
         est_cur    = _raw(eps_trend.get("current"))
         est_90d    = _raw(eps_trend.get("90daysAgo"))
         est_30d    = _raw(eps_trend.get("30daysAgo"))
+        eps_prior  = _raw(eps_est.get("yearAgoEps"))
         up_30d     = int(_raw(eps_rev.get("upLast30days")) or 0)
         dn_30d     = int(_raw(eps_rev.get("downLast30days")) or 0)
         up_7d      = int(_raw(eps_rev.get("upLast7days")) or 0)
         dn_7d      = int(_raw(eps_rev.get("downLast7days")) or 0)
+        rev_cur    = _raw(rev_est.get("avg"))
+        rev_pri    = _raw(rev_est.get("yearAgoRevenue"))
         rev_growth = _raw(rev_est.get("growth"))
         n_analysts = _raw(eps_est.get("numberOfAnalysts"))
 
@@ -649,12 +765,15 @@ def get_estimate_revisions(ticker: str) -> dict:
             "est_current":    round(est_cur, 2) if est_cur is not None else None,
             "est_90d_ago":    round(est_90d, 2) if est_90d is not None else None,
             "est_30d_ago":    round(est_30d, 2) if est_30d is not None else None,
+            "eps_prior_year": round(eps_prior, 2) if eps_prior is not None else None,
             "revision_pct":   revision_pct,
             "up_7d":          up_7d,
             "up_30d":         up_30d,
             "down_7d":        dn_7d,
             "down_30d":       dn_30d,
             "net_30d":        up_30d - dn_30d,
+            "rev_est_current": _fmt_rev_short(rev_cur),
+            "rev_prior_year":  _fmt_rev_short(rev_pri),
             "rev_growth_est": round(rev_growth * 100, 1) if rev_growth is not None else None,
             "analyst_count":  int(n_analysts) if n_analysts is not None else None,
         }

@@ -1077,16 +1077,22 @@ async def fetch_earningshub_week_analysis(
         "| :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     for h in top_headliners[:15]:
-        sess_short = "BMO" if "Before" in str(h.get("session", "")) else ("AMC" if "After" in str(h.get("session", "")) else h.get("session", ""))
-        eps_cell = f"{h.get('eps_estimate', 'N/A')} vs {h.get('eps_prior_year', 'N/A')}"
-        if h.get("eps_yoy_growth_pct") is not None:
-            eps_cell += f" ({h['eps_yoy_growth_pct']:+.1f}%)"
-        rev_cell = f"{h.get('revenue_estimate', 'N/A')} vs {h.get('revenue_prior_year', 'N/A')}"
-        if h.get("revenue_yoy_growth_pct") is not None:
-            rev_cell += f" ({h['revenue_yoy_growth_pct']:+.1f}%)"
+        sess_raw = str(h.get("session", ""))
+        sess_short = "BMO" if sess_raw.startswith("BMO") else ("AMC" if sess_raw.startswith("AMC") else sess_raw)
+
+        def _eps_fmt(v: Any) -> str:
+            return f"${float(v):.2f}" if v is not None else "N/A"
+
+        eps_cell = f"{_eps_fmt(h.get('eps_estimate'))} vs {_eps_fmt(h.get('eps_prior'))}"
+        if h.get("eps_yoy_pct") and h.get("eps_yoy_pct") != "N/A":
+            eps_cell += f" ({h['eps_yoy_pct']})"
+        rev_cell = f"{h.get('revenue_estimate', 'N/A')} vs {h.get('revenue_prior', 'N/A')}"
+        if h.get("revenue_yoy_pct") and h.get("revenue_yoy_pct") != "N/A":
+            rev_cell += f" ({h['revenue_yoy_pct']})"
         headliner_rows.append(
-            f"| {h.get('weekday', '')[:3]} {h.get('date', '')} ({sess_short}) | **{h.get('symbol', '')}** | {h.get('company', '')} | {h.get('market_cap', '')} | {eps_cell} | {rev_cell} |"
+            f"| {h.get('day', '')[:3]} {h.get('date', '')} ({sess_short}) | **{h.get('symbol', '')}** | {h.get('company', '')} | {h.get('market_cap', '')} | {eps_cell} | {rev_cell} |"
         )
+
 
     ep_rows = [
         "| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Validated Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |",

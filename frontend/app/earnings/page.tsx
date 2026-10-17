@@ -589,6 +589,7 @@ export default function EarningsPage() {
                     <div className="text-xs text-muted mb-1">EPS Est (current)</div>
                     <div className="font-bold">{rv.est_current != null ? `$${rv.est_current}` : "—"}</div>
                     <div className="text-xs text-muted">90d ago: {rv.est_90d_ago != null ? `$${rv.est_90d_ago}` : "—"}</div>
+                    <div className="text-xs text-muted">Prior yr: {rv.eps_prior_year != null ? `$${rv.eps_prior_year}` : "—"}</div>
                   </div>
                   <div>
                     <div className="text-xs text-muted mb-1">90-Day Revision</div>
@@ -614,6 +615,15 @@ export default function EarningsPage() {
                   {/* Revenue */}
                   <div>
                     <div className="text-xs text-muted mb-1">Revenue</div>
+                    {rv.rev_est_current && (
+                      <div className="font-bold">
+                        {rv.rev_est_current}
+                        <span className="text-xs text-muted font-normal"> est</span>
+                      </div>
+                    )}
+                    {rv.rev_prior_year && (
+                      <div className="text-xs text-muted">Prior yr: {rv.rev_prior_year}</div>
+                    )}
                     {rb.rev_beat_rate != null && (
                       <div className={`font-bold ${rb.rev_beat_rate >= 70 ? "text-green-400" : rb.rev_beat_rate >= 50 ? "text-yellow-400" : "text-red-400"}`}>
                         {rb.rev_beat_rate}% beat rate
