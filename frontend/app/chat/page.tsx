@@ -758,9 +758,9 @@ export default function ChatPage() {
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#121626] border border-[#1d243b] rounded-lg p-2.5 text-xs">
                   <div>
-                    <span className="text-[10px] text-slate-400 block font-mono">RECOMMENDED CONTRACT</span>
+                    <span className="text-[10px] text-slate-400 block font-mono">OPEN CONTRACT (ATM)</span>
                     <span className="font-bold text-white font-mono">
-                      {spyOutcome.trade_idea?.suggested_contract || `${currentActiveTicker} ATM`}
+                      {spyOutcome.trade_idea?.open_contract || spyOutcome.trade_idea?.suggested_contract || `${currentActiveTicker} ATM`}
                     </span>
                   </div>
                   <div>
@@ -778,6 +778,24 @@ export default function ChatPage() {
                     </span>
                   </div>
                 </div>
+
+                {(spyOutcome.trade_idea?.cost_efficient_otm || spyOutcome.trade_idea?.cost_efficient_spread) && (
+                  <div className="bg-[#101626] border border-cyan-500/25 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-[11px] font-mono">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-cyan-300 font-bold uppercase">💡 Cost-Efficient Options:</span>
+                      {spyOutcome.trade_idea?.cost_efficient_otm && (
+                        <span className="text-slate-200">
+                          <b className="text-emerald-300">OTM Runner:</b> {spyOutcome.trade_idea.cost_efficient_otm}
+                        </span>
+                      )}
+                    </div>
+                    {spyOutcome.trade_idea?.cost_efficient_spread && (
+                      <div className="text-slate-200">
+                        <b className="text-purple-300">Debit Spread:</b> {spyOutcome.trade_idea.cost_efficient_spread}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {spyOutcome.backtest && (
                   <div className="bg-[#101524] border border-[#1e2942] rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">

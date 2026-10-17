@@ -1801,6 +1801,9 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
 
         chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
 
+        ce_otm = idea.get("cost_efficient_otm", "")
+        ce_spread = idea.get("cost_efficient_spread", "")
+
         lines = [
             f"🎯 <b>{html.escape(sym)} Open Validation — 5-Min Post-Open ({now_str})</b>",
             f"<b>Valid Outcome:</b> {action_emoji} <b>{html.escape(valid_outcome)}</b>",
@@ -1812,7 +1815,17 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
             "",
             "⚡ <b>Actionable Trade Idea:</b>",
             f"• <b>Recommendation:</b> {action_emoji} <b>{html.escape(action)}</b>",
-            f"• <b>Contract:</b> <code>{html.escape(contract)}</code> ({idea.get('expiry_type', '0DTE')})",
+            f"• <b>Open Contract:</b> <code>{html.escape(contract)}</code> ({idea.get('expiry_type', '0DTE')})",
+            *(
+                [f"• <b>Cost-Efficient OTM:</b> <code>{html.escape(ce_otm)}</code>"]
+                if ce_otm
+                else []
+            ),
+            *(
+                [f"• <b>Cost-Efficient Spread:</b> <code>{html.escape(ce_spread)}</code>"]
+                if ce_spread
+                else []
+            ),
             f"• <b>Entry Trigger:</b> <b>${entry:.2f}</b> ({html.escape(trigger)})",
             f"• <b>Stop Loss:</b> <b>${stop:.2f}</b> ({html.escape(invalidation)})",
             f"• <b>Target 1:</b> <b>${t1:.2f}</b> · <b>Target 2:</b> <b>${t2:.2f}</b>",

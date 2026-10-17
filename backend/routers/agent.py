@@ -65,22 +65,26 @@ Your Response Guidelines:
   4. **Key Financial Multiples**: Market Cap, Trailing/Forward P/E, Revenue Growth, Profit Margin, Short Float, and Wall St Analyst target.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers (including StockVerdicts.com insights). If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
 - The 3 StockPulse "Pulse" Strategies & Historical Date Backtesting:
-  You receive all 3 live & backtestable Pulse strategies in every ticker's context block:
+  You receive all 3 live & backtestable Pulse strategies in every ticker's context block. For EVERY Pulse strategy (`Pulse`, `Long Term Pulse`, and `Earning Pulse`), you MUST always present BOTH:
+  - **Open Contract (`open_contract` / `suggested_contract`)**: Primary ATM single-leg contract (`Delta ~0.45–0.55`).
+  - **Cost-Efficient Contract Options (`cost_efficient_otm` & `cost_efficient_spread`)**:
+    1. **Low-Cost OTM Runner (`cost_efficient_otm`)**: `Delta ~0.28–0.35` OTM single-leg contract (~50% lower upfront premium with high convexity toward `Target 1`).
+    2. **Defined-Risk Vertical Debit Spread (`cost_efficient_spread`)**: Buy the ATM leg and sell the `Target 1` strike (`~55–65% lower capital cost`, protects against Theta decay & post-earnings IV crush).
   1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
      - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle**.
      - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
-     - Recommends `0DTE or Next Expiry` Calls vs. Puts with Entry, Stop-Loss, Target 1, Target 2, and R:R.
+     - Recommends `0DTE or Next Expiry` Calls vs. Puts (`Open Contract` + `Cost-Efficient OTM Runner` + `Cost-Efficient Vertical Debit Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R.
   2. **Long Term Pulse (`long_term_pulse`) — Month & Day High/Low Engine**:
      - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)**.
      - Triggered when the user asks for `'long term pulse'` (e.g., `'tsla long term pulse'`, `'what is tesla long term pulse on 09/15/2026?'`, `'backtest nvda long term pulse on 10/01/2026'`).
-     - Recommends `30–60 DTE Monthly Options or Swing Shares` with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
+     - Recommends `30–60 DTE Monthly Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Cost-Efficient Vertical Debit Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
   3. **Earning Pulse (`earning_pulse`) — Quarterly & Monthly High/Low Engine**:
      - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)**.
      - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
-     - Recommends `45–90 DTE Quarterly / Post-Earnings Options` with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
+     - Recommends `45–90 DTE Quarterly / Post-Earnings Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Cost-Efficient Vertical Debit Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
   4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
      - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks how today's Pulse performed after 8:35 AM:
-     - Present the **Key Levels as of `scan_date`**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Contract`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
+     - Present the **Key Levels as of `scan_date`**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Open Contract`, `Cost-Efficient OTM & Debit Spread`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
        - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`)
        - **Execution Timeline**: Exact timestamp/date when `T1`, `T2`, or `Stop` was hit, Post-Entry High & Low, and End/Close Price
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
@@ -96,7 +100,7 @@ Your Response Guidelines:
      - Highlight the fastest expected YoY EPS & Revenue growers (`fastest_eps_growth_leaders`, `fastest_revenue_growth_leaders`) and key sector clusters (AI/Semis/Tech, Aerospace & Defense, Financials, Healthcare, Consumer, Energy/Industrials).
      - Flag mega-caps facing expected YoY EPS compression (`earnings_contraction_watch`) where forward guidance will dictate the post-earnings move.
   5. **⚡ Earning Pulse (`PQH`/`PQL` & `PMH`/`PML`) Battle Plans for Marquee Reporters**:
-     - Using the attached `earning_pulse_setups`, present the pre-earnings technical posture (`Current Price`, `Quarterly Range PQL–PQH`, `Monthly Range PML–PMH`, `Validated Outcome`, `Action`, `Option Contract`, `Entry`, `Stop`, `T1`, `T2`, `R:R`) for the week's top headliners (e.g., `META`, `TSLA`, `NFLX`, `LRCX`, `GE`, `PG`).
+     - Using the attached `earning_pulse_setups`, present the pre-earnings technical posture (`Current Price`, `Quarterly Range PQL–PQH`, `Monthly Range PML–PMH`, `Validated Outcome`, `Action`, `Open Contract`, `Cost-Efficient OTM Runner & Debit Spread`, `Entry`, `Stop`, `T1`, `T2`, `R:R`) for the week's top headliners (e.g., `META`, `TSLA`, `NFLX`, `LRCX`, `GE`, `PG`).
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -1021,6 +1025,9 @@ async def fetch_earningshub_week_analysis(
                     "bias": ti.get("bias"),
                     "action": ti.get("action"),
                     "suggested_contract": ti.get("suggested_contract"),
+                    "open_contract": ti.get("open_contract"),
+                    "cost_efficient_otm": ti.get("cost_efficient_otm"),
+                    "cost_efficient_spread": ti.get("cost_efficient_spread"),
                     "entry": ti.get("entry_level") or ti.get("entry"),
                     "stop": ti.get("stop_loss") or ti.get("stop"),
                     "target_1": ti.get("target_1"),

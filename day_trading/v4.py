@@ -628,6 +628,132 @@ def _suggest_option_strike(ticker: str, price: float, side: Literal["CALLS", "PU
     return f"{sym} ${strike} {side}"
 
 
+def _build_pulse_contract_options(
+    ticker: str,
+    price: float,
+    action: str,
+    t1: float,
+    t2: float,
+    atr: float,
+    horizon: Literal["pulse", "long_term", "earning"] = "pulse",
+) -> dict:
+    """
+    Generates both:
+    1. Open / Naked Single-Leg ATM Contract (`open_contract` / `suggested_contract`)
+    2. Cost-Efficient Contract Options:
+       - `cost_efficient_otm`: Lower-cost OTM Runner (Delta ~0.28–0.35, ~45–60% lower premium)
+       - `cost_efficient_spread`: Defined-Risk Vertical Debit Spread anchored to Target 1 (cuts cost by ~55–70% and protects against Theta decay & post-earnings IV crush)
+    """
+    sym = (ticker or "SPY").strip().upper()
+    is_calls = "CALL" in (action or "").upper() or "LONG" in (action or "").upper()
+    side: Literal["CALLS", "PUTS"] = "CALLS" if is_calls else "PUTS"
+    opt_word = "CALL" if is_calls else "PUT"
+    short_code = "C" if is_calls else "P"
+
+    # Determine realistic CBOE option strike increment
+    if sym in {"SPXW", "SPX", "$SPX", "^GSPC", "NDX", "$NDX", "^NDX"} or price >= 500.0:
+        step = 5
+    elif sym in {"SPY", "QQQ", "IWM", "DIA", "TQQQ", "SQQQ"}:
+        step = 1 if horizon == "pulse" else (5 if price >= 250.0 else 2)
+    elif price >= 200.0:
+        step = 2 if horizon == "pulse" else 5
+    elif price >= 50.0:
+        step = 1 if horizon == "pulse" else (5 if price >= 110.0 else 2)
+    else:
+        step = 1
+
+    if horizon == "pulse":
+        dte_tag = "0DTE / Next Expiry"
+        open_delta = "Delta 0.45–0.55 ATM"
+        otm_delta = "Delta 0.28–0.35 OTM"
+        max_spread_atr_mult = 1.4
+    elif horizon == "long_term":
+        dte_tag = "30–60 DTE"
+        open_delta = "Delta 0.45–0.55 ATM"
+        otm_delta = "Delta 0.30–0.35 OTM"
+        max_spread_atr_mult = 2.6
+    else:
+        dte_tag = "45–90 DTE"
+        open_delta = "Delta 0.45–0.60 ATM"
+        otm_delta = "Delta 0.28–0.35 OTM"
+        max_spread_atr_mult = 3.2
+
+    # 1. Open / Primary ATM strike
+    if is_calls:
+        open_strike = int(round((price + max(step * 0.35, 0.5)) / step) * step)
+        if open_strike < int(price):
+            open_strike += step
+    else:
+        open_strike = int(round((price - max(step * 0.35, 0.5)) / step) * step)
+        if open_strike > int(round(price)):
+            open_strike -= step
+
+    # 2. Cost-Efficient OTM Single-Leg Runner (positioned ~55% toward T1 or ~0.7–1.0x ATR OTM)
+    dist_to_t1 = max(abs(t1 - price) * 0.55, atr * (0.65 if horizon == "pulse" else 0.95))
+    if is_calls:
+        otm_strike = max(open_strike + step, int(round((price + dist_to_t1) / step) * step))
+    else:
+        otm_strike = min(open_strike - step, int(round((price - dist_to_t1) / step) * step))
+
+    # 3. Cost-Efficient Vertical Debit Spread (Buy open_strike, Sell Target 1 strike)
+    max_width = max(step * 2, int(round((atr * max_spread_atr_mult) / step) * step))
+    if is_calls:
+        raw_short = int(round(t1 / step) * step)
+        if raw_short <= open_strike:
+            raw_short = max(open_strike + step, int(round(t2 / step) * step))
+        short_strike = min(max(open_strike + step, raw_short), open_strike + max_width)
+    else:
+        raw_short = int(round(t1 / step) * step)
+        if raw_short >= open_strike:
+            raw_short = min(open_strike - step, int(round(t2 / step) * step))
+        short_strike = max(min(open_strike - step, raw_short), open_strike - max_width)
+
+    spread_width = round(float(abs(short_strike - open_strike)), 2)
+    est_debit = round(max(0.25, spread_width * 0.34), 2)
+    max_profit = round(spread_width - est_debit, 2)
+    est_roi_pct = int(round((max_profit / est_debit) * 100)) if est_debit > 0 else 180
+
+    open_contract_str = (
+        f"{sym} ${open_strike} {side}"
+        if horizon == "pulse"
+        else f"{sym} ${open_strike} {side} ({dte_tag})"
+    )
+    open_contract_full = f"{sym} ${open_strike} {side} ({dte_tag} · {open_delta})"
+    cost_efficient_otm = (
+        f"{sym} ${otm_strike} {side} ({dte_tag} · {otm_delta} Runner, ~50% Lower Premium)"
+    )
+    cost_efficient_spread = (
+        f"{sym} ${open_strike}/${short_strike} {opt_word} DEBIT SPREAD "
+        f"(Buy ${open_strike}{short_code} / Sell ${short_strike}{short_code} · {dte_tag} · "
+        f"Est. Debit ~${est_debit:.2f} for ${spread_width:.0f} Width, +{est_roi_pct}% Max ROI)"
+    )
+    cost_efficient_summary = (
+        f"OTM Runner: {sym} ${otm_strike} {side} ({otm_delta}) | "
+        f"Debit Spread: Buy ${open_strike}{short_code} / Sell ${short_strike}{short_code} (~${est_debit:.2f} debit vs ${spread_width:.0f} width)"
+    )
+
+    return {
+        "suggested_contract": open_contract_str,
+        "open_contract": open_contract_full,
+        "cost_efficient_otm": cost_efficient_otm,
+        "cost_efficient_spread": cost_efficient_spread,
+        "cost_efficient_summary": cost_efficient_summary,
+        "cost_efficient_contracts": {
+            "otm_single_leg": cost_efficient_otm,
+            "vertical_debit_spread": cost_efficient_spread,
+            "long_leg": f"BUY {sym} ${open_strike} {opt_word}",
+            "short_leg": f"SELL {sym} ${short_strike} {opt_word}",
+            "spread_width": spread_width,
+            "estimated_debit": est_debit,
+            "max_profit_per_spread": max_profit,
+            "estimated_max_roi": f"+{est_roi_pct}%",
+            "benefit": (
+                "Cuts upfront capital by ~50–65% vs. open ATM contract and offsets Theta decay & IV crush."
+            ),
+        },
+    }
+
+
 def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
     """
     Extracts a target date from a date string or natural-language query such as:
@@ -1218,6 +1344,16 @@ def get_valid_outcome_and_trade_idea(
         fallback_close=daily_close,
     )
 
+    contract_opts = _build_pulse_contract_options(
+        ticker=sym,
+        price=entry,
+        action=action,
+        t1=t1,
+        t2=t2,
+        atr=atr,
+        horizon="pulse",
+    )
+
     return {
         "strategy_name": "Pulse (Day Trading 8:35 AM Open Validator)",
         "ticker": sym,
@@ -1234,6 +1370,11 @@ def get_valid_outcome_and_trade_idea(
             "action": action,
             "bias": bias,
             "suggested_contract": suggested_strike,
+            "open_contract": contract_opts["open_contract"],
+            "cost_efficient_otm": contract_opts["cost_efficient_otm"],
+            "cost_efficient_spread": contract_opts["cost_efficient_spread"],
+            "cost_efficient_summary": contract_opts["cost_efficient_summary"],
+            "cost_efficient_contracts": contract_opts["cost_efficient_contracts"],
             "expiry_type": "0DTE or Next Expiry (Delta 0.40 - 0.50)",
             "entry_level": entry,
             "stop_loss": stop,
@@ -1471,6 +1612,16 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         timeframe_label=f"Multi-Day Forward Backtest (Up to 30 Trading Days After {scan_date.isoformat()})",
     )
 
+    lt_contracts = _build_pulse_contract_options(
+        ticker=sym,
+        price=entry,
+        action=action,
+        t1=t1,
+        t2=t2,
+        atr=atr,
+        horizon="long_term",
+    )
+
     return {
         "strategy_name": "Long Term Pulse (Month & Day High/Low Engine)",
         "ticker": sym,
@@ -1485,6 +1636,11 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
             "action": action,
             "bias": bias,
             "suggested_contract": f"{strike} (30–60 DTE)",
+            "open_contract": lt_contracts["open_contract"],
+            "cost_efficient_otm": lt_contracts["cost_efficient_otm"],
+            "cost_efficient_spread": lt_contracts["cost_efficient_spread"],
+            "cost_efficient_summary": lt_contracts["cost_efficient_summary"],
+            "cost_efficient_contracts": lt_contracts["cost_efficient_contracts"],
             "expiry_type": "30–60 DTE Monthly Options or Swing Shares (Delta 0.45 - 0.55)",
             "entry_level": entry,
             "stop_loss": stop,
@@ -1730,6 +1886,16 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         timeframe_label=f"Multi-Week Earnings/Quarterly Backtest (Up to 60 Trading Days After {scan_date.isoformat()})",
     )
 
+    ep_contracts = _build_pulse_contract_options(
+        ticker=sym,
+        price=entry,
+        action=action,
+        t1=t1,
+        t2=t2,
+        atr=atr,
+        horizon="earning",
+    )
+
     return {
         "strategy_name": "Earning Pulse (Quarterly & Monthly High/Low Engine)",
         "ticker": sym,
@@ -1744,6 +1910,11 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "action": action,
             "bias": bias,
             "suggested_contract": f"{strike} (45–90 DTE)",
+            "open_contract": ep_contracts["open_contract"],
+            "cost_efficient_otm": ep_contracts["cost_efficient_otm"],
+            "cost_efficient_spread": ep_contracts["cost_efficient_spread"],
+            "cost_efficient_summary": ep_contracts["cost_efficient_summary"],
+            "cost_efficient_contracts": ep_contracts["cost_efficient_contracts"],
             "expiry_type": "45–90 DTE Quarterly / Post-Earnings Options (Delta 0.45 - 0.60)",
             "entry_level": entry,
             "stop_loss": stop,
