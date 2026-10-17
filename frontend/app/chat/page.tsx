@@ -361,10 +361,7 @@ export default function ChatPage() {
 
   const isGeneral = ticker === "GENERAL";
   const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
-  const isV4Ticker =
-    !isGeneral &&
-    (["SPY", "SPXW", "SPX", "QQQ", "IWM", "DIA"].includes(currentActiveTicker) ||
-      v4AlertTickers.includes(currentActiveTicker));
+  const isV4Ticker = !isGeneral && Boolean(currentActiveTicker);
 
   useEffect(() => {
     if (isV4Ticker) {

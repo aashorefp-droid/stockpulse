@@ -916,7 +916,11 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "ABOUT", "ONLY", "ITS", "IT", "NOT", "YES", "NO", "SURE", "FINE",
         "HELP", "LIKE", "NEWS", "AUTO", "TECH", "EDIT", "TEST", "TIME",
         "ANALYZE", "ANALYSIS", "EVALUATE", "CHECK", "REVIEW", "SETUP", "SETUPS",
-        "MARKET", "MARKETS", "INDICES", "INDEX", "MACRO"
+        "MARKET", "MARKETS", "INDICES", "INDEX", "MACRO",
+        "VALID", "OUTCOME", "OUTCOMES", "PLAYBOOK", "AFTER", "BEFORE", "MORNING",
+        "ALERT", "ALERTS", "POST", "MIN", "MINS", "MINUTE", "MINUTES",
+        "CST", "EST", "EDT", "CDT", "CT", "ET", "PM", "DTE", "ATM", "OTM", "ITM",
+        "DELTA", "GAMMA", "GEX", "PDH", "PDL", "PWH", "PWL", "MID", "ATR"
     }
 
     explicit_ticker = None
@@ -942,14 +946,22 @@ async def chat_with_agent(req: ChatRequest, request: Request):
             if caps_tokens:
                 explicit_ticker = caps_tokens[-1]
 
-        # Stage 4: Fallback for short queries (e.g. "aaoi", "aaoi setup", "analyze aaoi")
-        if not explicit_ticker and not is_general_query and not is_universe_query:
+        # Stage 4: Fallback for short queries (e.g. "tsla v4", "aaoi setup", "analyze tsla")
+        if not explicit_ticker and not is_general_query:
             raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
             for t in raw_tokens:
                 up = t.upper()
                 if up not in ticker_stop_words and len(up) >= 2:
                     explicit_ticker = up
                     break
+
+    # If an explicit ticker was detected (e.g. "TSLA v4 after 8:35 AM" or "TSLA trade idea today"),
+    # prioritize the ticker unless the user explicitly asked for Default 50 / Universe / Watchlist.
+    explicit_universe_only = any(u in user_lower for u in [
+        "default 50", "default50", "universe", "watchlist", "screener", "scanner", "which stock", "best stocks"
+    ])
+    if explicit_ticker and not explicit_universe_only:
+        is_universe_query = False
 
     # If no explicit ticker was found and user is asking about trades/setups/picks/entries/targets, treat as universe query
     if not is_market_query and not is_universe_query and not explicit_ticker and not is_general_query:
