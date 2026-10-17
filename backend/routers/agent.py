@@ -50,14 +50,10 @@ Your Response Guidelines:
   Followed by high-conviction institutional battle plans for the top 3 setups explaining the technical catalyst, Volume Profile support/resistance (POC/VAL/VAH), and risk management.
   CRITICAL: NEVER claim live prices were not attached or provide abstract algebraic formulas when actual institutional setup prices are provided in your context block. Use the exact numbers provided in the INSTITUTIONAL UNIVERSE DATA block!
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
-- Day Trading V4 & Post-Open Options Trade Ideas (Calls vs Puts — SPY, SPXW, QQQ, IWM, NVDA, TSLA, etc.):
-  When analyzing SPY, SPXW, QQQ, or any ticker with Day Trading V4 data (`day_trading_v4`), or when the user asks for 0DTE/day-trade ideas, calls vs puts, or asks 'What is the valid outcome?':
-  Evaluate the live Day Trading V4 engine (PDH, PDL, PWH, PWL, Midpoint, and single validated post-open outcome).
-  Provide a structured decision:
-  1. Valid Outcome: Explicitly declare the single validated outcome from the 8:00 AM playbook based on current price action and 5-minute opening candle vs PDH/PDL.
-  2. Trade Idea: High-conviction decision between CALLS vs PUTS.
-  3. Actionable Levels: Exact Entry Trigger, Invalidation Stop-Loss, Target 1, Target 2, and R:R ratio.
-  4. Options Contract & Scaling: Recommended strike (Delta 0.40–0.50 ATM/near-OTM; $5 increments for SPXW/SPX, $1 increments for SPY/QQQ), 0DTE/next expiry, scale 50% at T1, trail stop to breakeven.
+- Day Trading V4 (8:35 AM Opening Candle Playbook) vs. Intraday CPR Plan:
+  You receive BOTH `day_trading_v4` (locked to the 8:30–8:35 AM CT opening 5-minute candle vs PDH/PDL/PWH/PWL) AND `intraday_cpr_plan` (live multi-timeframe 10m/30m/4H bias, Central Pivot Range TC/P/BC, and ATR intraday stops/targets).
+  - When the user asks for **V4** (e.g. 'TSLA v4', 'SPY v4', '8:35 AM valid outcome'), present the `day_trading_v4` 8:35 AM opening-candle validation, PDH/PDL/PWH/PWL levels, and V4 options trade idea. If current live price has since crossed the V4 invalidation stop, explicitly note that the 8:35 AM setup was stopped out/invalidated later in the session.
+  - When the user asks for **Intraday** (e.g. 'TSLA intraday plan', 'intraday setup'), present the `intraday_cpr_plan` (Direction, Option Strike, Entry, Intra Stop, Intra T1/T2, CPR TC/P/BC, and 10m/30m/4H bias alignment), and optionally contrast it with the 8:35 AM V4 outcome.
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -595,6 +591,15 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
             ret["spy_day_trading_v4"] = v4_res
     except Exception as se:
         logger.warning(f"Error computing V4 valid outcome for {ticker}: {se}")
+
+    try:
+        from backend.services.plan_service import generate_intraday_plan
+        intra_res = await asyncio.to_thread(generate_intraday_plan, [ticker])
+        rows = (intra_res or {}).get("rows") or []
+        if rows:
+            ret["intraday_cpr_plan"] = rows[0]
+    except Exception as ie:
+        logger.warning(f"Error computing Intraday CPR plan for {ticker}: {ie}")
 
     return ret
 
