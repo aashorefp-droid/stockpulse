@@ -152,9 +152,8 @@ function opexInfo(today: Date): { tomorrow: boolean; kind: string; tone: string 
 
 export default function MarketRisk() {
   const pathname = usePathname();
-  if (pathname?.startsWith("/chat")) {
-    return null;
-  }
+  // On /chat only a slim bar is shown: Market Risk · Bias · VIX · Econ calendar (no sectors).
+  const isChat = !!pathname?.startsWith("/chat");
 
   const [data, setData]           = useState<MacroData | null>(null);
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
@@ -166,8 +165,8 @@ export default function MarketRisk() {
     try {
       const [macroRes, fngRes, secRes] = await Promise.allSettled([
         fetch(`${API_BASE}/api/macro/snapshot`),
-        fetch(CNN_FNG_URL),
-        fetch(`${API_BASE}/api/macro/sector-gex`),
+        isChat ? Promise.reject(new Error("skip")) : fetch(CNN_FNG_URL),
+        isChat ? Promise.reject(new Error("skip")) : fetch(`${API_BASE}/api/macro/sector-gex`),
       ]);
 
       if (macroRes.status === "rejected" || !macroRes.value.ok) {
@@ -202,7 +201,7 @@ export default function MarketRisk() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isChat]);
 
   useEffect(() => {
     refresh();
@@ -322,6 +321,67 @@ export default function MarketRisk() {
     .map(t => items.find(i => i.ticker === t))
     .filter(Boolean) as MacroItem[];
   const sectorItems = items.filter(i => i.category === "sector");
+
+  // ── Compact bar for /chat: Market Risk · Bias · VIX · Econ calendar only (no sectors) ──
+  if (isChat) {
+    const vixItem = items.find(i => i.ticker === "^VIX");
+    const vixCol  = !vixItem ? "text-muted"
+      : vixItem.price > 22 ? "text-red"
+      : vixItem.price > 17 ? "text-yellow"
+      : "text-green";
+    return (
+      <div className="border-b border-border bg-card/40 px-2 sm:px-4 lg:px-6 py-1.5">
+        <div className="w-full flex flex-wrap items-center gap-x-3 gap-y-1">
+          {/* Market Risk */}
+          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-bold tracking-wide ${riskStyles}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${riskDot}`} />
+            MARKET RISK: {risk.label}
+          </div>
+
+          {/* Bias (Day to Buy / Sell / Sideline) */}
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-bold tracking-wide ${dayVerdict.style}`}
+            title={dayVerdict.reason}
+          >
+            <span className="text-[9px] font-semibold uppercase opacity-70">Bias</span>
+            <span>{dayVerdict.emoji}</span>
+            {dayVerdict.label}
+          </div>
+
+          {/* VIX */}
+          {vixItem && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded border border-border bg-card/60 text-[11px]">
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">VIX</span>
+              <span className="font-mono font-semibold text-white">{vixItem.price.toFixed(2)}</span>
+              <span className={`font-mono text-[10px] ${vixItem.chg_1d > 0 ? "text-red" : vixItem.chg_1d < 0 ? "text-green" : "text-muted"}`}>
+                {vixItem.chg_1d > 0 ? "+" : ""}{vixItem.chg_1d.toFixed(2)}%
+              </span>
+              <span className={`h-1.5 w-1.5 rounded-full ${vixCol.replace("text-", "bg-")}`} />
+            </div>
+          )}
+
+          {/* Econ calendar */}
+          {economic_events && economic_events.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap text-[10px]">
+              <span className="font-semibold uppercase tracking-wide text-muted" title="High-impact economic events scheduled for the next 7 days">Econ (Week)</span>
+              {economic_events.slice(0, 6).map(event => (
+                <span
+                  key={`${event.day}-${event.date}-${event.title}`}
+                  className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 ${eventTone(event)}`}
+                  title={`${event.day} ${event.date}: ${event.note ?? event.title}${event.time ? ` at ${event.time}` : ""}. 7-day economic calendar.`}
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${event.impact === "High" ? "bg-yellow" : "bg-muted"}`} />
+                  <span className="font-semibold">{event.day}</span>
+                  <span>{event.title === "No major scheduled" ? "No major" : event.title}</span>
+                  {event.time && <span className="text-muted">{event.time.replace(" AM ET", "a").replace(" PM ET", "p")}</span>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="border-b border-border bg-card/40 px-4 py-2">
