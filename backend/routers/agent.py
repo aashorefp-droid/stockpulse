@@ -71,6 +71,7 @@ Your Response Guidelines:
     1. **Low-Cost OTM Runner (`cost_efficient_otm`)**: `Delta ~0.28–0.35` OTM single-leg contract (~50% lower upfront premium with high convexity toward `Target 1`).
     2. **Defined-Risk Vertical Debit Spread (`cost_efficient_spread`)**: Buy the ATM leg and sell the `Target 1` strike (`~55–65% lower capital cost`, protects against Theta decay & post-earnings IV crush).
     3. **Directional Butterfly Spread (`cost_efficient_butterfly`)**: Symmetrical `1x : -2x : 1x` Call or Put Butterfly centered on `Target 1` (`~80–85% lower capital cost`, `~6x–7x` max ROI if price pins near `Target 1`, and profits from Theta decay & post-earnings IV crush).
+  - For any Pulse inquiry, present a clean **Markdown Table** comparing the **Key Levels**, **Entry / Stop / Targets (T1 & T2) / R:R**, and all 4 **Contract Options** (`Open Contract`, `OTM Runner`, `Vertical Debit Spread`, and `🦋 Directional Butterfly`).
   1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
      - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle**.
      - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
@@ -92,18 +93,18 @@ Your Response Guidelines:
   5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
      - When the user asks specifically for the **Intraday Plan** (`'TSLA intraday'`), present the live multi-timeframe `10m/30m/4H` bias, Central Pivot Range (`CPR TC/P/BC`), and ATR intraday stops/targets.
 - Weekly Earnings Calendar & Comprehensive Analysis (`earningshub.com/earnings-calendar/this-week`):
-  When the user asks for `'Next week earnings analysis'`, `'This week earnings analysis'`, `'weekly earnings analysis'`, or `'earnings calendar'`, you receive the `EARNINGSHUB WEEKLY EARNINGS CALENDAR & INSTITUTIONAL ANALYSIS` block fetched live from `https://earningshub.com/earnings-calendar/this-week`. Present a comprehensive, institutional-grade analysis structured into 5 sections:
+  When the user asks for `'Next week earnings analysis'`, `'This week earnings analysis'`, `'weekly earnings analysis'`, or `'earnings calendar'`, you receive the `EARNINGSHUB WEEKLY EARNINGS CALENDAR & INSTITUTIONAL ANALYSIS` block fetched live from `https://earningshub.com/earnings-calendar/this-week` (including pre-formatted `ready_markdown_tables`). Present a comprehensive, institutional-grade analysis structured into 5 sections using Markdown tables:
   1. **Executive Summary & Macro/Economic Catalysts**: Total companies reporting, confirmed count, `$10B+` mega/large-cap count, busiest day of the week, and the week's scheduled Economic/Fed events (`economic_events`).
-  2. **Marquee Market-Moving Headliners Table**: Clean markdown table of the top 12–15 largest/most important reporters:
+  2. **Marquee Market-Moving Headliners Table**: Output the clean GitHub-Flavored Markdown table (`ready_markdown_tables.marquee_headliners_table`) of the top 15 largest/most important reporters:
      `| Date & Session | Ticker | Company | Market Cap | EPS Est vs Prior (YoY %) | Revenue Est vs Prior (YoY %) |`
   3. **Day-by-Day Schedule (Monday – Friday, BMO vs. AMC)**: For each day (`Monday` through `Friday`), highlight key **🌅 Before Open (BMO)** and **🌙 After Close (AMC)** reporters plus that day's macro events.
   4. **Sector Themes, High-Growth Leaders & Contraction Watchlist**:
-     - Highlight the fastest expected YoY EPS & Revenue growers (`fastest_eps_growth_leaders`, `fastest_revenue_growth_leaders`) and key sector clusters (AI/Semis/Tech, Aerospace & Defense, Financials, Healthcare, Consumer, Energy/Industrials).
-     - Flag mega-caps facing expected YoY EPS compression (`earnings_contraction_watch`) where forward guidance will dictate the post-earnings move.
-  5. **⚡ Earning Pulse (`PQH`/`PQL` & `PMH`/`PML`) Battle Plans for Marquee Reporters**:
-     - Using the attached `earning_pulse_setups`, present the pre-earnings technical posture (`Current Price`, `Quarterly Range PQL–PQH`, `Monthly Range PML–PMH`, `Validated Outcome`, `Action`, `Open Contract`, `Cost-Efficient OTM Runner, Debit Spread & Butterfly`, `Entry`, `Stop`, `T1`, `T2`, `R:R`) for the week's top headliners (e.g., `META`, `TSLA`, `NFLX`, `LRCX`, `GE`, `PG`).
+     - Highlight the fastest expected YoY EPS & Revenue growers (`fastest_eps_growth_leaders_5b_plus`, `fastest_revenue_growth_leaders_5b_plus`) and key sector clusters (AI/Semis/Tech, Aerospace & Defense, Financials, Healthcare, Consumer, Energy/Industrials).
+     - Flag mega-caps facing expected YoY EPS compression (`earnings_contraction_watchlist`) where forward guidance will dictate the post-earnings move.
+  5. **⚡ Earning Pulse (`PQH`/`PQL` & `PMH`/`PML`) Battle Plans Table for Marquee Reporters**:
+     - Output the clean GitHub-Flavored Markdown table (`ready_markdown_tables.earning_pulse_battle_plans_table`) showing `| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |` for the week's top headliners.
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
-- Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
+- Clarity & Formatting: Always use clean GitHub-Flavored Markdown tables (`| Col 1 | Col 2 |` with `| :--- | :--- |` header separator rows), bold key levels, and concise, high-conviction institutional summaries.
 """
 
 AGENT_TOOLS = [
@@ -1040,6 +1041,39 @@ async def fetch_earningshub_week_analysis(
     except Exception as epe:
         logger.warning(f"Error enriching top headliners with Earning Pulse: {epe}")
 
+    headliner_rows = [
+        "| Date & Session | Ticker | Company | Market Cap | EPS Est vs Prior (YoY %) | Revenue Est vs Prior (YoY %) |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for h in top_headliners[:15]:
+        sess_short = "BMO" if "Before" in str(h.get("session", "")) else ("AMC" if "After" in str(h.get("session", "")) else h.get("session", ""))
+        eps_cell = f"{h.get('eps_estimate', 'N/A')} vs {h.get('eps_prior_year', 'N/A')}"
+        if h.get("eps_yoy_growth_pct") is not None:
+            eps_cell += f" ({h['eps_yoy_growth_pct']:+.1f}%)"
+        rev_cell = f"{h.get('revenue_estimate', 'N/A')} vs {h.get('revenue_prior_year', 'N/A')}"
+        if h.get("revenue_yoy_growth_pct") is not None:
+            rev_cell += f" ({h['revenue_yoy_growth_pct']:+.1f}%)"
+        headliner_rows.append(
+            f"| {h.get('weekday', '')[:3]} {h.get('date', '')} ({sess_short}) | **{h.get('symbol', '')}** | {h.get('company', '')} | {h.get('market_cap', '')} | {eps_cell} | {rev_cell} |"
+        )
+
+    ep_rows = [
+        "| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Validated Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+    ]
+    for s in earning_pulse_setups:
+        ce_parts = []
+        if s.get("cost_efficient_otm"):
+            ce_parts.append(f"**OTM:** {s['cost_efficient_otm']}")
+        if s.get("cost_efficient_spread"):
+            ce_parts.append(f"**Spread:** {s['cost_efficient_spread']}")
+        if s.get("cost_efficient_butterfly"):
+            ce_parts.append(f"**🦋 Butterfly:** {s['cost_efficient_butterfly']}")
+        ce_str = " · ".join(ce_parts) if ce_parts else "N/A"
+        ep_rows.append(
+            f"| **{s.get('symbol')}** | ${s.get('current_price')} | {s.get('quarterly_range')} | {s.get('monthly_range')} | **{s.get('action')}** ({s.get('valid_outcome')}) | `{s.get('open_contract') or s.get('suggested_contract')}` | {ce_str} | Entry ${s.get('entry')} · Stop ${s.get('stop')} · T1 ${s.get('target_1')} → T2 ${s.get('target_2')} ({s.get('reward_risk')}) |"
+        )
+
     result_payload: Dict[str, Any] = {
         "source": "https://earningshub.com/earnings-calendar/this-week",
         "week_window": f"{start_str} to {end_str}",
@@ -1049,6 +1083,10 @@ async def fetch_earningshub_week_analysis(
             "mega_and_large_cap_10b_plus": sum(1 for it in formatted if it["market_cap_raw"] >= 10e9),
             "billion_dollar_plus_count": sum(1 for it in formatted if it["market_cap_raw"] >= 1e9),
             "busiest_day": busiest_day,
+        },
+        "ready_markdown_tables": {
+            "marquee_headliners_table": "\n".join(headliner_rows),
+            "earning_pulse_battle_plans_table": "\n".join(ep_rows),
         },
         "top_headliners": top_headliners,
         "daily_schedule": daily_schedule,

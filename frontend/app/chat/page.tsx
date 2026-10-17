@@ -878,14 +878,14 @@ export default function ChatPage() {
               )}
 
               <div
-                className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 text-sm leading-relaxed ${
+                className={`${
                   m.role === "user"
-                    ? "bg-[#1f3a5f] text-white border border-[#4d9fff]/30 rounded-tr-none shadow-md"
-                    : "bg-[#121520] text-slate-200 border border-[#1e2337] rounded-tl-none shadow-sm"
-                }`}
+                    ? "max-w-[85%] sm:max-w-[75%] bg-[#1f3a5f] text-white border border-[#4d9fff]/30 rounded-tr-none shadow-md"
+                    : "max-w-[96%] sm:max-w-[92%] bg-[#121520] text-slate-200 border border-[#1e2337] rounded-tl-none shadow-sm overflow-hidden"
+                } rounded-2xl p-4 text-sm leading-relaxed`}
               >
                 {/* Formatted Content */}
-                <div className="whitespace-pre-wrap font-sans text-xs sm:text-sm">
+                <div className="font-sans text-xs sm:text-sm">
                   {m.content ? (
                     formatChatMarkdown(m.content)
                   ) : (
@@ -1211,34 +1211,245 @@ export default function ChatPage() {
   );
 }
 
-/**
- * Lightweight helper to render markdown bolding, code ticks, and blockquotes without dependencies
- */
-function formatChatMarkdown(text: string) {
-  const parts = text.split(/(\*\*.*?\*\*|`.*?`|\n> .*)/g);
-
+function formatInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*.*?\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g);
   return parts.map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
       return (
         <strong key={i} className="text-white font-bold">
           {part.slice(2, -2)}
         </strong>
       );
     }
-    if (part.startsWith("`") && part.endsWith("`")) {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
       return (
-        <code key={i} className="bg-slate-800 text-emerald-300 px-1 py-0.5 rounded font-mono text-[11px]">
+        <code
+          key={i}
+          className="bg-slate-800/90 text-emerald-300 px-1.5 py-0.5 rounded font-mono text-[11px] border border-slate-700/60"
+        >
           {part.slice(1, -1)}
         </code>
       );
     }
-    if (part.startsWith("\n> ")) {
+    const linkMatch = part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if (linkMatch) {
       return (
-        <blockquote key={i} className="border-l-2 border-[#4d9fff] pl-2 text-slate-300 italic my-1">
-          {part.replace("\n> ", "")}
-        </blockquote>
+        <a
+          key={i}
+          href={linkMatch[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-cyan-400 hover:text-cyan-300 underline"
+        >
+          {linkMatch[1]}
+        </a>
       );
     }
     return part;
   });
+}
+
+function parseTableCells(rowLine: string): string[] {
+  const trimmed = rowLine.trim();
+  const withoutOuter = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  return withoutOuter.split("|").map((c) => c.trim());
+}
+
+function isTableSeparatorLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|") && !trimmed.includes("-")) return false;
+  return /^\|?[\s:|-]+\|?$/.test(trimmed) && trimmed.includes("-");
+}
+
+/**
+ * Full institutional Markdown renderer supporting GitHub-Flavored Markdown Tables,
+ * Headings, Blockquotes, Lists, Dividers, Bold, Code ticks, and Links without external dependencies.
+ */
+function formatChatMarkdown(text: string) {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const blocks: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // 1. Check for Markdown Table block (header row with `|` followed by `| :--- |` separator row)
+    if (
+      trimmed.includes("|") &&
+      i + 1 < lines.length &&
+      isTableSeparatorLine(lines[i + 1])
+    ) {
+      const headers = parseTableCells(trimmed);
+      i += 2; // skip header + separator line
+      const rows: string[][] = [];
+      while (i < lines.length) {
+        const rowTrim = lines[i].trim();
+        if (!rowTrim || !rowTrim.includes("|")) break;
+        if (isTableSeparatorLine(rowTrim)) {
+          i++;
+          continue;
+        }
+        rows.push(parseTableCells(rowTrim));
+        i++;
+      }
+
+      blocks.push(
+        <div
+          key={`tbl-${i}`}
+          className="my-3 overflow-x-auto rounded-xl border border-[#242c44] bg-[#0b0e17] shadow-inner"
+        >
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-[#151b2e] border-b border-[#242c44] text-cyan-300 font-mono text-[11px] uppercase tracking-wider">
+                {headers.map((h, hIdx) => (
+                  <th key={hIdx} className="py-2.5 px-3 font-semibold whitespace-nowrap">
+                    {formatInlineMarkdown(h)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1a2035]">
+              {rows.map((row, rIdx) => (
+                <tr
+                  key={rIdx}
+                  className={
+                    rIdx % 2 === 0
+                      ? "bg-[#0e121e]/90 hover:bg-[#161d31] transition-colors"
+                      : "bg-[#121726]/90 hover:bg-[#161d31] transition-colors"
+                  }
+                >
+                  {headers.map((_, cIdx) => (
+                    <td key={cIdx} className="py-2 px-3 text-slate-200 align-top leading-relaxed">
+                      {formatInlineMarkdown(row[cIdx] ?? "")}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    // 2. Empty line -> spacing
+    if (!trimmed) {
+      i++;
+      continue;
+    }
+
+    // 3. Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push(<hr key={`hr-${i}`} className="border-[#1e263d] my-2.5" />);
+      i++;
+      continue;
+    }
+
+    // 4. Headings (#, ##, ###, ####)
+    if (trimmed.startsWith("#### ")) {
+      blocks.push(
+        <h4 key={`h4-${i}`} className="text-xs sm:text-sm font-bold text-cyan-300 mt-3 mb-1">
+          {formatInlineMarkdown(trimmed.slice(5))}
+        </h4>
+      );
+      i++;
+      continue;
+    }
+    if (trimmed.startsWith("### ")) {
+      blocks.push(
+        <h3 key={`h3-${i}`} className="text-sm sm:text-base font-bold text-emerald-300 mt-3.5 mb-1">
+          {formatInlineMarkdown(trimmed.slice(4))}
+        </h3>
+      );
+      i++;
+      continue;
+    }
+    if (trimmed.startsWith("## ")) {
+      blocks.push(
+        <h2
+          key={`h2-${i}`}
+          className="text-sm sm:text-base font-bold text-white border-b border-[#1e263d] pb-1 mt-4 mb-1.5"
+        >
+          {formatInlineMarkdown(trimmed.slice(3))}
+        </h2>
+      );
+      i++;
+      continue;
+    }
+    if (trimmed.startsWith("# ")) {
+      blocks.push(
+        <h1
+          key={`h1-${i}`}
+          className="text-base sm:text-lg font-bold text-white border-b border-[#1e263d] pb-1.5 mt-4 mb-2"
+        >
+          {formatInlineMarkdown(trimmed.slice(2))}
+        </h1>
+      );
+      i++;
+      continue;
+    }
+
+    // 5. Blockquotes (> ...)
+    if (trimmed.startsWith("> ")) {
+      blocks.push(
+        <blockquote
+          key={`bq-${i}`}
+          className="border-l-2 border-[#4d9fff] bg-[#151b2b]/60 pl-3 py-1.5 pr-2 rounded-r-lg text-slate-200 italic my-1.5"
+        >
+          {formatInlineMarkdown(trimmed.slice(2))}
+        </blockquote>
+      );
+      i++;
+      continue;
+    }
+
+    // 6. Bullet list item (- , * , • )
+    const bulletMatch = line.match(/^(\s*)([-*•])\s+(.*)$/);
+    if (bulletMatch) {
+      const indent = Math.min(Math.floor(bulletMatch[1].length / 2), 3);
+      blocks.push(
+        <div
+          key={`li-${i}`}
+          style={{ paddingLeft: `${indent * 14}px` }}
+          className="flex items-start gap-2 my-1"
+        >
+          <span className="text-emerald-400 font-bold select-none mt-0.5">•</span>
+          <span className="flex-1 text-slate-200">{formatInlineMarkdown(bulletMatch[3])}</span>
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    // 7. Numbered list item (1. , 2. , etc.)
+    const numMatch = line.match(/^(\s*)(\d+\.)\s+(.*)$/);
+    if (numMatch) {
+      const indent = Math.min(Math.floor(numMatch[1].length / 2), 3);
+      blocks.push(
+        <div
+          key={`ol-${i}`}
+          style={{ paddingLeft: `${indent * 14}px` }}
+          className="flex items-start gap-2 my-1"
+        >
+          <span className="text-cyan-400 font-mono font-bold text-xs select-none mt-0.5">
+            {numMatch[2]}
+          </span>
+          <span className="flex-1 text-slate-200">{formatInlineMarkdown(numMatch[3])}</span>
+        </div>
+      );
+      i++;
+      continue;
+    }
+
+    // 8. Standard paragraph line
+    blocks.push(
+      <p key={`p-${i}`} className="my-1.5 whitespace-pre-wrap">
+        {formatInlineMarkdown(line)}
+      </p>
+    );
+    i++;
+  }
+
+  return <div className="space-y-1">{blocks}</div>;
 }
