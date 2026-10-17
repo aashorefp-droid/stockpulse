@@ -713,6 +713,21 @@ def _build_pulse_contract_options(
     max_profit = round(spread_width - est_debit, 2)
     est_roi_pct = int(round((max_profit / est_debit) * 100)) if est_debit > 0 else 180
 
+    # 4. Cost-Efficient Directional Butterfly (1x : -2x : 1x centered at Target 1 `short_strike`)
+    wing_w = int(abs(short_strike - open_strike))
+    if wing_w < step:
+        wing_w = step
+    bf_body = short_strike
+    if is_calls:
+        bf_wing1 = open_strike
+        bf_wing2 = bf_body + wing_w
+    else:
+        bf_wing1 = open_strike
+        bf_wing2 = max(step, bf_body - wing_w)
+    bf_est_debit = round(max(0.15, wing_w * 0.12), 2)
+    bf_max_profit = round(wing_w - bf_est_debit, 2)
+    bf_roi_pct = int(round((bf_max_profit / bf_est_debit) * 100)) if bf_est_debit > 0 else 650
+
     open_contract_str = (
         f"{sym} ${open_strike} {side}"
         if horizon == "pulse"
@@ -727,9 +742,15 @@ def _build_pulse_contract_options(
         f"(Buy ${open_strike}{short_code} / Sell ${short_strike}{short_code} · {dte_tag} · "
         f"Est. Debit ~${est_debit:.2f} for ${spread_width:.0f} Width, +{est_roi_pct}% Max ROI)"
     )
+    cost_efficient_butterfly = (
+        f"{sym} ${bf_wing1}/${bf_body}/${bf_wing2} {opt_word} BUTTERFLY "
+        f"(+1 ${bf_wing1}{short_code} / -2 ${bf_body}{short_code} / +1 ${bf_wing2}{short_code} · {dte_tag} · "
+        f"Pinned at T1 ${bf_body} · Est. Debit ~${bf_est_debit:.2f} for ${wing_w:.0f} Wing, +{bf_roi_pct}% Max ROI)"
+    )
     cost_efficient_summary = (
         f"OTM Runner: {sym} ${otm_strike} {side} ({otm_delta}) | "
-        f"Debit Spread: Buy ${open_strike}{short_code} / Sell ${short_strike}{short_code} (~${est_debit:.2f} debit vs ${spread_width:.0f} width)"
+        f"Debit Spread: Buy ${open_strike}{short_code} / Sell ${short_strike}{short_code} (~${est_debit:.2f} debit) | "
+        f"Butterfly: +1 ${bf_wing1}{short_code} / -2 ${bf_body}{short_code} / +1 ${bf_wing2}{short_code} (~${bf_est_debit:.2f} debit)"
     )
 
     return {
@@ -737,18 +758,25 @@ def _build_pulse_contract_options(
         "open_contract": open_contract_full,
         "cost_efficient_otm": cost_efficient_otm,
         "cost_efficient_spread": cost_efficient_spread,
+        "cost_efficient_butterfly": cost_efficient_butterfly,
         "cost_efficient_summary": cost_efficient_summary,
         "cost_efficient_contracts": {
             "otm_single_leg": cost_efficient_otm,
             "vertical_debit_spread": cost_efficient_spread,
+            "butterfly_spread": cost_efficient_butterfly,
             "long_leg": f"BUY {sym} ${open_strike} {opt_word}",
             "short_leg": f"SELL {sym} ${short_strike} {opt_word}",
+            "butterfly_legs": f"BUY 1x ${bf_wing1}{short_code} / SELL 2x ${bf_body}{short_code} (at T1) / BUY 1x ${bf_wing2}{short_code}",
             "spread_width": spread_width,
             "estimated_debit": est_debit,
             "max_profit_per_spread": max_profit,
             "estimated_max_roi": f"+{est_roi_pct}%",
+            "butterfly_wing_width": float(wing_w),
+            "butterfly_estimated_debit": bf_est_debit,
+            "butterfly_max_profit": bf_max_profit,
+            "butterfly_estimated_max_roi": f"+{bf_roi_pct}%",
             "benefit": (
-                "Cuts upfront capital by ~50–65% vs. open ATM contract and offsets Theta decay & IV crush."
+                "Debit Spread cuts upfront capital by ~50–65%; Butterfly cuts capital by ~80–85% with ~6x–7x max payout if price pins near Target 1 while profiting from Theta & IV crush."
             ),
         },
     }
@@ -1373,6 +1401,7 @@ def get_valid_outcome_and_trade_idea(
             "open_contract": contract_opts["open_contract"],
             "cost_efficient_otm": contract_opts["cost_efficient_otm"],
             "cost_efficient_spread": contract_opts["cost_efficient_spread"],
+            "cost_efficient_butterfly": contract_opts["cost_efficient_butterfly"],
             "cost_efficient_summary": contract_opts["cost_efficient_summary"],
             "cost_efficient_contracts": contract_opts["cost_efficient_contracts"],
             "expiry_type": "0DTE or Next Expiry (Delta 0.40 - 0.50)",
@@ -1639,6 +1668,7 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
             "open_contract": lt_contracts["open_contract"],
             "cost_efficient_otm": lt_contracts["cost_efficient_otm"],
             "cost_efficient_spread": lt_contracts["cost_efficient_spread"],
+            "cost_efficient_butterfly": lt_contracts["cost_efficient_butterfly"],
             "cost_efficient_summary": lt_contracts["cost_efficient_summary"],
             "cost_efficient_contracts": lt_contracts["cost_efficient_contracts"],
             "expiry_type": "30–60 DTE Monthly Options or Swing Shares (Delta 0.45 - 0.55)",
@@ -1913,6 +1943,7 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "open_contract": ep_contracts["open_contract"],
             "cost_efficient_otm": ep_contracts["cost_efficient_otm"],
             "cost_efficient_spread": ep_contracts["cost_efficient_spread"],
+            "cost_efficient_butterfly": ep_contracts["cost_efficient_butterfly"],
             "cost_efficient_summary": ep_contracts["cost_efficient_summary"],
             "cost_efficient_contracts": ep_contracts["cost_efficient_contracts"],
             "expiry_type": "45–90 DTE Quarterly / Post-Earnings Options (Delta 0.45 - 0.60)",

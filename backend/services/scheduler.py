@@ -1803,6 +1803,7 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
 
         ce_otm = idea.get("cost_efficient_otm", "")
         ce_spread = idea.get("cost_efficient_spread", "")
+        ce_butterfly = idea.get("cost_efficient_butterfly", "")
 
         lines = [
             f"🎯 <b>{html.escape(sym)} Open Validation — 5-Min Post-Open ({now_str})</b>",
@@ -1824,6 +1825,11 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
             *(
                 [f"• <b>Cost-Efficient Spread:</b> <code>{html.escape(ce_spread)}</code>"]
                 if ce_spread
+                else []
+            ),
+            *(
+                [f"• <b>Cost-Efficient Butterfly:</b> <code>{html.escape(ce_butterfly)}</code>"]
+                if ce_butterfly
                 else []
             ),
             f"• <b>Entry Trigger:</b> <b>${entry:.2f}</b> ({html.escape(trigger)})",
