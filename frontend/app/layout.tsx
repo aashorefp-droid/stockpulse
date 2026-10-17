@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Navbar />
         <BackendStatusBanner />
         <MarketRisk />
-        <main className="max-w-screen-2xl mx-auto px-4 py-6">{children}</main>
+        <main className="w-full max-w-none px-2 sm:px-4 lg:px-6 py-3">{children}</main>
         <AnalystChatDrawer />
       </body>
     </html>

@@ -55,6 +55,7 @@ export default function ChatPage() {
   const [v4Saving, setV4Saving] = useState<boolean>(false);
   const [v4SaveStatus, setV4SaveStatus] = useState<string>("");
   const [showLeftMenu, setShowLeftMenu] = useState<boolean>(true);
+  const [showPulseCard, setShowPulseCard] = useState<boolean>(false);
   const [menuTickerInput, setMenuTickerInput] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -213,6 +214,7 @@ export default function ChatPage() {
   }, []);
 
   const insertPromptIntoChat = (template: string) => {
+    setShowPulseCard(false);
     const cleanTicker = menuTickerInput.trim().toUpperCase();
     const finalTemplate = cleanTicker ? template.replace(/<ticker>/gi, cleanTicker) : template;
     setInput(finalTemplate);
@@ -232,6 +234,7 @@ export default function ChatPage() {
   const applyTickerToInput = (sym: string) => {
     const clean = sym.trim().toUpperCase();
     if (!clean) return;
+    setShowPulseCard(false);
     setMenuTickerInput(clean);
     if (POPULAR_TICKERS.includes(clean)) {
       setTicker(clean);
@@ -260,6 +263,7 @@ export default function ChatPage() {
     if (!rawText || isStreaming) return;
     const textToSend = rawText.replace(/<ticker>/gi, fallbackSym);
 
+    setShowPulseCard(false);
     const userMessage: Message = { role: "user", content: textToSend };
     const nextMessages = [...messages, userMessage];
     setMessages(nextMessages);
@@ -610,7 +614,7 @@ export default function ChatPage() {
   ];
 
   return (
-    <div className="max-w-7xl mx-auto space-y-4">
+    <div className="w-full max-w-none space-y-3">
       {/* ── TOP CONTROL BAR ─────────────────────────────────────── */}
       <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -921,77 +925,116 @@ export default function ChatPage() {
 
       {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
-        {/* Pulse Strategy Suite Banner: Pulse (8:35 Day/Week) | Long Term Pulse (Month & Day) | Earning Pulse (Quarter & Month) + Backtest */}
+        {/* Pulse Strategy Suite Banner: Compact 1-Line Toolbar by Default (Expandable via Show Card button) */}
         {isV4Ticker && (
-          <div className="bg-[#0d111d] border-b border-[#1f273d] p-3 sm:p-4 px-4 sm:px-6 transition-all">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-[#1a2035]">
+          <div className="bg-[#0d111d] border-b border-[#1f273d] px-3 sm:px-5 py-2 transition-all">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   onClick={() => setPulseMode("pulse")}
-                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                  className={`px-2 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
                     pulseMode === "pulse"
                       ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
                       : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
                   }`}
                 >
-                  🎯 Pulse (8:35 Day/Week)
+                  🎯 Pulse
                 </button>
                 <button
                   onClick={() => setPulseMode("long_term")}
-                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                  className={`px-2 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
                     pulseMode === "long_term"
                       ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300"
                       : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
                   }`}
                 >
-                  📅 Long Term Pulse (Month & Day)
+                  📅 Long Term
                 </button>
                 <button
                   onClick={() => setPulseMode("earning")}
-                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                  className={`px-2 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
                     pulseMode === "earning"
                       ? "bg-purple-500/20 border-purple-500/50 text-purple-300"
                       : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
                   }`}
                 >
-                  ⚡ Earning Pulse (Quarter & Month)
+                  ⚡ Earning
                 </button>
+
+                {/* Compact 1-Line Summary Pill */}
+                {spyLoading && !spyOutcome ? (
+                  <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5 ml-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+                    Loading {currentActiveTicker}...
+                  </span>
+                ) : spyOutcome ? (
+                  <div className="flex flex-wrap items-center gap-1.5 ml-1 text-[11px] font-mono">
+                    <span className="text-white font-bold">
+                      {currentActiveTicker} ${spyOutcome.price?.toFixed(2)}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] ${
+                        spyOutcome.trade_idea?.action?.includes("CALLS")
+                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                          : "bg-red-500/15 border-red-500/40 text-red-300"
+                      }`}
+                    >
+                      {spyOutcome.trade_idea?.action} (
+                      {spyOutcome.trade_idea?.suggested_contract || "ATM"})
+                    </span>
+                    <span className="text-slate-300 hidden xl:inline">
+                      Entry <b className="text-emerald-400">${spyOutcome.trade_idea?.entry_level?.toFixed(2)}</b> → T1{" "}
+                      <b className="text-cyan-400">${spyOutcome.trade_idea?.target_1?.toFixed(2)}</b>
+                    </span>
+                    {spyOutcome.backtest?.result_badge && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          spyOutcome.backtest.result_badge.includes("WIN")
+                            ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                            : spyOutcome.backtest.result_badge.includes("STOPPED")
+                            ? "bg-red-500/15 text-red-300 border border-red-500/30"
+                            : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                        }`}
+                      >
+                        {spyOutcome.backtest.result_badge}
+                      </span>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono text-slate-400">⏪ Backtest Date:</span>
+                <span className="text-[11px] font-mono text-slate-400 hidden sm:inline">⏪ Date:</span>
                 <input
                   type="date"
                   value={pulseDate}
                   onChange={(e) => setPulseDate(e.target.value)}
-                  className="bg-[#121626] border border-slate-700 text-white font-mono text-[11px] px-2 py-1 rounded-md focus:outline-none focus:border-[#4d9fff]"
+                  className="bg-[#121626] border border-slate-700 text-white font-mono text-[11px] px-2 py-0.5 rounded-md focus:outline-none focus:border-[#4d9fff]"
                 />
                 {pulseDate && (
                   <button
                     onClick={() => setPulseDate("")}
-                    className="text-[11px] font-mono px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:text-white"
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 hover:text-white"
                   >
                     Today
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setShowPulseCard(!showPulseCard)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border transition-all ${
+                    showPulseCard
+                      ? "bg-[#4d9fff]/20 border-[#4d9fff]/50 text-[#4d9fff]"
+                      : "bg-[#121626] border-slate-700 text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {showPulseCard ? "▴ Hide Card" : "📊 Show Card ▾"}
+                </button>
               </div>
             </div>
 
-            {spyLoading && !spyOutcome ? (
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-400 py-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>
-                  Calculating {currentActiveTicker}{" "}
-                  {pulseMode === "long_term"
-                    ? "Long Term Pulse (Month & Day High/Lows)"
-                    : pulseMode === "earning"
-                    ? "Earning Pulse (Quarterly & Monthly High/Lows)"
-                    : "Pulse (8:35 AM Post-Open Playbook)"}
-                  {pulseDate ? ` & Backtest for ${pulseDate}` : ""}...
-                </span>
-              </div>
-            ) : spyOutcome ? (
-              <div className="space-y-2.5">
+            {showPulseCard && spyOutcome ? (
+              <div className="space-y-2.5 mt-2.5 pt-2.5 border-t border-[#1a2035]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm">
