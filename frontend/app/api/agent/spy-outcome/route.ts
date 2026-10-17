@@ -10,10 +10,15 @@ export async function GET(req: NextRequest) {
   ).replace(/\/+$/, "");
 
   const ticker = req.nextUrl.searchParams.get("ticker") || "SPY";
+  const mode = req.nextUrl.searchParams.get("mode") || "pulse";
+  const date = req.nextUrl.searchParams.get("date") || "";
 
   try {
+    const qs = `ticker=${encodeURIComponent(ticker)}&mode=${encodeURIComponent(mode)}${
+      date ? `&date=${encodeURIComponent(date)}` : ""
+    }`;
     const upstreamResp = await fetch(
-      `${backendBase}/api/agent/spy-outcome?ticker=${encodeURIComponent(ticker)}`,
+      `${backendBase}/api/agent/spy-outcome?${qs}`,
       {
         method: "GET",
         cache: "no-store",

@@ -33,6 +33,8 @@ export default function ChatPage() {
   const [keyInput, setKeyInput] = useState<string>("");
   const [spyOutcome, setSpyOutcome] = useState<any>(null);
   const [spyLoading, setSpyLoading] = useState<boolean>(false);
+  const [pulseMode, setPulseMode] = useState<"pulse" | "long_term" | "earning">("pulse");
+  const [pulseDate, setPulseDate] = useState<string>("");
   const [v4AlertTickers, setV4AlertTickers] = useState<string[]>(["SPY", "SPXW"]);
   const [v4PopularOptions, setV4PopularOptions] = useState<string[]>([
     "SPY",
@@ -367,7 +369,9 @@ export default function ChatPage() {
     if (isV4Ticker) {
       setSpyLoading(true);
       setSpyOutcome(null);
-      const q = `?ticker=${encodeURIComponent(currentActiveTicker)}`;
+      const q = `?ticker=${encodeURIComponent(currentActiveTicker)}&mode=${encodeURIComponent(pulseMode)}${
+        pulseDate ? `&date=${encodeURIComponent(pulseDate)}` : ""
+      }`;
       fetch(`/api/agent/spy-outcome${q}`)
         .then((res) => {
           if (!res.ok) throw new Error("Proxy error");
@@ -384,7 +388,7 @@ export default function ChatPage() {
     } else {
       setSpyOutcome(null);
     }
-  }, [isV4Ticker, currentActiveTicker]);
+  }, [isV4Ticker, currentActiveTicker, pulseMode, pulseDate]);
 
   const quickPrompts = isGeneral
     ? [
@@ -397,31 +401,35 @@ export default function ChatPage() {
           prompt: "From Default 50 stocks, what is the best swing trade ticker today based on institutional scoring?",
         },
         {
-          title: "Wyckoff Volume Profile",
-          prompt: "Explain how Wyckoff Volume Profile POC, VAL, and VAH work for identifying institutional accumulation vs distribution.",
+          title: "⚡ TSLA Pulse Today",
+          prompt: "What is Tesla pulse today? Provide the 8:35 AM validated outcome, key levels (PDH/PDL/PWH/PWL), Calls vs Puts trade idea, and backtest status.",
         },
         {
-          title: "High Beta Risk Management",
-          prompt: "How should a swing trader size positions and manage stop-losses on High Beta stocks (>1.5x SPY)?",
+          title: "⏪ Backtest TSLA Pulse (10/12/2026)",
+          prompt: "Backtest Tesla pulse for 10/12/2026: show the exact key levels as of 10/12/2026, the validated trade idea, and how it performed in the backtest.",
         },
       ]
     : isV4Ticker
     ? [
         {
-          title: `🎯 ${currentActiveTicker} Calls or Puts Today`,
-          prompt: `What is the valid outcome for ${currentActiveTicker} based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for ${currentActiveTicker} Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.`,
+          title: `🎯 ${currentActiveTicker} Pulse Today`,
+          prompt: `What is ${currentActiveTicker} pulse today? Provide the 8:35 AM validated outcome, key levels (PDH/PDL/PWH/PWL), Calls vs Puts trade idea, and intraday backtest status.`,
+        },
+        {
+          title: `📅 ${currentActiveTicker} Long Term Pulse`,
+          prompt: `What is ${currentActiveTicker} Long Term Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Month (PMH/PML) and Day (PDH/PDL) Highs & Lows, multi-week trade plan, and forward backtest details.`,
+        },
+        {
+          title: `⚡ ${currentActiveTicker} Earning Pulse`,
+          prompt: `What is ${currentActiveTicker} Earning Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, 45–90 DTE options setup, and forward backtest details.`,
+        },
+        {
+          title: `⏪ Backtest ${currentActiveTicker} (${pulseDate || "10/12/2026"})`,
+          prompt: `Backtest ${currentActiveTicker} pulse on ${pulseDate || "10/12/2026"}: provide the exact levels as of ${pulseDate || "10/12/2026"}, the validated Pulse, Long Term Pulse, and Earning Pulse setups, and full backtest verification.`,
         },
         {
           title: `📈 ${currentActiveTicker} Fundamentals (StockVerdicts)`,
           prompt: `Analyze ${currentActiveTicker} fundamentals and fair value from StockVerdicts.com: Verdict (Growth/Value/Avoid), Fair-Value Price Ladder (Heavy Buy / Buy / Fair / Exit), Factor Scores, Earnings Quality checks, Insider/Institutional activity, and Pros & Cons.`,
-        },
-        {
-          title: `📊 ${currentActiveTicker} V4 vs Intraday Plan`,
-          prompt: `Compare ${currentActiveTicker} Day Trading V4 (8:35 AM opening candle playbook vs PDH/PDL) with the live Intraday CPR Plan (10m/30m/4H bias, CPR TC/P/BC, and Intra Stop/Targets).`,
-        },
-        {
-          title: "🏛️ Macro & Gamma Alignment",
-          prompt: `How does ${currentActiveTicker} align with today's Dealer Gamma (GEX), Market Regime, and economic calendar? Is this a day for calls or puts?`,
         },
       ]
     : [
@@ -604,21 +612,90 @@ export default function ChatPage() {
 
       {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
       <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
-        {/* V4 Automatic Post-Open Outcome & Trade Plan Banner */}
+        {/* Pulse Strategy Suite Banner: Pulse (8:35 Day/Week) | Long Term Pulse (Month & Day) | Earning Pulse (Quarter & Month) + Backtest */}
         {isV4Ticker && (
           <div className="bg-[#0d111d] border-b border-[#1f273d] p-3 sm:p-4 px-4 sm:px-6 transition-all">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5 pb-2 border-b border-[#1a2035]">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  onClick={() => setPulseMode("pulse")}
+                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                    pulseMode === "pulse"
+                      ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-300"
+                      : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  🎯 Pulse (8:35 Day/Week)
+                </button>
+                <button
+                  onClick={() => setPulseMode("long_term")}
+                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                    pulseMode === "long_term"
+                      ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300"
+                      : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  📅 Long Term Pulse (Month & Day)
+                </button>
+                <button
+                  onClick={() => setPulseMode("earning")}
+                  className={`px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all ${
+                    pulseMode === "earning"
+                      ? "bg-purple-500/20 border-purple-500/50 text-purple-300"
+                      : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
+                  }`}
+                >
+                  ⚡ Earning Pulse (Quarter & Month)
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-slate-400">⏪ Backtest Date:</span>
+                <input
+                  type="date"
+                  value={pulseDate}
+                  onChange={(e) => setPulseDate(e.target.value)}
+                  className="bg-[#121626] border border-slate-700 text-white font-mono text-[11px] px-2 py-1 rounded-md focus:outline-none focus:border-[#4d9fff]"
+                />
+                {pulseDate && (
+                  <button
+                    onClick={() => setPulseDate("")}
+                    className="text-[11px] font-mono px-2 py-1 rounded-md bg-slate-800 text-slate-300 hover:text-white"
+                  >
+                    Today
+                  </button>
+                )}
+              </div>
+            </div>
+
             {spyLoading && !spyOutcome ? (
               <div className="flex items-center gap-2 text-xs font-mono text-slate-400 py-1">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>Calculating live {currentActiveTicker} post-open outcome & trade levels from 8:00 AM Playbook...</span>
+                <span>
+                  Calculating {currentActiveTicker}{" "}
+                  {pulseMode === "long_term"
+                    ? "Long Term Pulse (Month & Day High/Lows)"
+                    : pulseMode === "earning"
+                    ? "Earning Pulse (Quarterly & Monthly High/Lows)"
+                    : "Pulse (8:35 AM Post-Open Playbook)"}
+                  {pulseDate ? ` & Backtest for ${pulseDate}` : ""}...
+                </span>
               </div>
             ) : spyOutcome ? (
               <div className="space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">🎯</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm">
+                      {pulseMode === "long_term" ? "📅" : pulseMode === "earning" ? "⚡" : "🎯"}
+                    </span>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                      {currentActiveTicker} 8:35 AM Post-Open Valid Outcome
+                      {currentActiveTicker}{" "}
+                      {pulseMode === "long_term"
+                        ? "Long Term Pulse"
+                        : pulseMode === "earning"
+                        ? "Earning Pulse"
+                        : "8:35 AM Pulse"}{" "}
+                      {spyOutcome.scan_date ? `(${spyOutcome.scan_date})` : ""}
                     </span>
                     <span
                       className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-semibold border ${
@@ -632,16 +709,42 @@ export default function ChatPage() {
                       {spyOutcome.valid_outcome}
                     </span>
                   </div>
-                  <div className="text-[11px] font-mono text-slate-400 flex items-center gap-2">
+                  <div className="text-[11px] font-mono text-slate-400 flex flex-wrap items-center gap-2">
                     <span>
                       {currentActiveTicker}: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b>
                     </span>
-                    <span>·</span>
-                    <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
-                    <span>·</span>
-                    <span>PDL: <b>${spyOutcome.key_levels?.pdl?.toFixed(2)}</b></span>
-                    <span>·</span>
-                    <span>Mid: <b>${spyOutcome.key_levels?.pd_mid?.toFixed(2)}</b></span>
+                    {pulseMode === "earning" ? (
+                      <>
+                        <span>·</span>
+                        <span>PQH: <b>${spyOutcome.key_levels?.pqh?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PQL: <b>${spyOutcome.key_levels?.pql?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PMH: <b>${spyOutcome.key_levels?.pmh?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PML: <b>${spyOutcome.key_levels?.pml?.toFixed(2)}</b></span>
+                      </>
+                    ) : pulseMode === "long_term" ? (
+                      <>
+                        <span>·</span>
+                        <span>PMH: <b>${spyOutcome.key_levels?.pmh?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PML: <b>${spyOutcome.key_levels?.pml?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PDL: <b>${spyOutcome.key_levels?.pdl?.toFixed(2)}</b></span>
+                      </>
+                    ) : (
+                      <>
+                        <span>·</span>
+                        <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PDL: <b>${spyOutcome.key_levels?.pdl?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>Mid: <b>${spyOutcome.key_levels?.pd_mid?.toFixed(2)}</b></span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -668,6 +771,30 @@ export default function ChatPage() {
                   </div>
                 </div>
 
+                {spyOutcome.backtest && (
+                  <div className="bg-[#101524] border border-[#1e2942] rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-slate-400 uppercase">Backtest:</span>
+                      <span
+                        className={`px-2 py-0.5 rounded font-bold ${
+                          spyOutcome.backtest.result_badge?.includes("WIN")
+                            ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                            : spyOutcome.backtest.result_badge?.includes("STOPPED")
+                            ? "bg-red-500/15 text-red-300 border border-red-500/30"
+                            : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                        }`}
+                      >
+                        {spyOutcome.backtest.result_badge}
+                      </span>
+                      <span className="text-slate-300">{spyOutcome.backtest.summary}</span>
+                    </div>
+                    <div className="text-slate-400">
+                      MFE: <b className="text-emerald-400">{spyOutcome.backtest.max_favorable_excursion}</b> · MAE:{" "}
+                      <b className="text-red-400">{spyOutcome.backtest.max_adverse_excursion}</b>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
                   <p className="text-[11px] text-slate-400 line-clamp-1 italic">
                     💡 {spyOutcome.trade_idea?.rationale}
@@ -685,7 +812,11 @@ export default function ChatPage() {
                     <button
                       onClick={() =>
                         handleSend(
-                          `What is the valid outcome for ${currentActiveTicker} based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for ${currentActiveTicker} Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.`
+                          pulseMode === "long_term"
+                            ? `What is ${currentActiveTicker} Long Term Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Month (PMH/PML) and Day (PDH/PDL) Highs & Lows, trade plan, and backtest details.`
+                            : pulseMode === "earning"
+                            ? `What is ${currentActiveTicker} Earning Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, trade plan, and backtest details.`
+                            : `What is ${currentActiveTicker} pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Provide the validated outcome, key levels, Calls vs Puts trade idea, and backtest verification.`
                         )
                       }
                       disabled={isStreaming}

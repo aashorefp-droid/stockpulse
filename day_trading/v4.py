@@ -628,58 +628,414 @@ def _suggest_option_strike(ticker: str, price: float, side: Literal["CALLS", "PU
     return f"{sym} ${strike} {side}"
 
 
-def analyze(ticker: str) -> dict:
+def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
+    """
+    Extracts a target date from a date string or natural-language query such as:
+    '10/12/2026', '2026-10-12', '10-12-2026', '10/12', 'Oct 12, 2026',
+    'what is tesla pulse on 10/12/2026?'
+    """
+    if not raw_text:
+        return None
+    import re
+    from datetime import timedelta
+
+    s = str(raw_text).strip()
+    lower = s.lower()
+    today = date.today()
+    if "yesterday" in lower:
+        d = today - timedelta(days=1)
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d
+
+    # 1. YYYY-MM-DD or YYYY/MM/DD
+    m_iso = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", s)
+    if m_iso:
+        try:
+            return date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+        except ValueError:
+            pass
+
+    # 2. MM/DD/YYYY or MM-DD-YYYY or MM/DD/YY
+    m_mdy = re.search(r"\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2}|\d{2})\b", s)
+    if m_mdy:
+        try:
+            yr = int(m_mdy.group(3))
+            if yr < 100:
+                yr += 2000
+            return date(yr, int(m_mdy.group(1)), int(m_mdy.group(2)))
+        except ValueError:
+            pass
+
+    # 3. Month Name DD, YYYY or Month Name DD (e.g. Oct 12, 2026 or October 12)
+    month_map = {
+        "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+        "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+        "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+    }
+    m_named = re.search(
+        r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(20\d{2}))?\b",
+        lower,
+    )
+    if m_named:
+        try:
+            mo = month_map[m_named.group(1)]
+            dy = int(m_named.group(2))
+            yr = int(m_named.group(3)) if m_named.group(3) else today.year
+            return date(yr, mo, dy)
+        except ValueError:
+            pass
+
+    # 4. Short MM/DD (e.g. "on 10/12" or "pulse 10/12") — avoid matching option expiries unless standalone
+    m_short = re.search(r"(?:on|for|date|pulse|v4)\s+(\d{1,2})/(\d{1,2})\b", lower)
+    if m_short:
+        try:
+            return date(today.year, int(m_short.group(1)), int(m_short.group(2)))
+        except ValueError:
+            pass
+
+    return None
+
+
+def _resolve_trading_session(daily_df: pd.DataFrame, requested_date: date) -> tuple[date, pd.DataFrame, Optional[pd.Series]]:
+    """
+    Finds the exact or nearest prior trading session in daily_df for requested_date,
+    returning (resolved_date, completed_before_date, session_row).
+    """
+    daily = _norm_daily(daily_df)
+    if daily.empty:
+        return requested_date, pd.DataFrame(), None
+    idx_dates = [_idx_date(i) for i in daily.index]
+    # If requested_date is on or after first available bar, find exact match or latest trading date <= requested_date
+    valid_dates = [d for d in idx_dates if d <= requested_date]
+    resolved = valid_dates[-1] if valid_dates else idx_dates[-1]
+    completed = daily[[d < resolved for d in idx_dates]]
+    session_rows = daily[[d == resolved for d in idx_dates]]
+    session = session_rows.iloc[-1] if not session_rows.empty else None
+    return resolved, completed, session
+
+
+def _simulate_trade_backtest(
+    bars_df: pd.DataFrame,
+    entry: float,
+    stop: float,
+    t1: float,
+    t2: float,
+    action: str,
+    *,
+    timeframe_label: str = "Intraday (Post-8:35 AM CT)",
+    fallback_high: Optional[float] = None,
+    fallback_low: Optional[float] = None,
+    fallback_close: Optional[float] = None,
+) -> dict:
+    """
+    Simulates trade execution chronologically across `bars_df` (5m/1h intraday bars or subsequent daily bars).
+    Tracks 50% scale at T1 + stop moved to breakeven, T2 hit, Stop hit, MFE, MAE, and realized R-multiple.
+    """
+    is_calls = "CALL" in action.upper() or "LONG" in action.upper()
+    risk = abs(entry - stop) if abs(entry - stop) > 0.001 else max(entry * 0.01, 0.5)
+
+    t1_hit = False
+    t1_hit_at: Optional[str] = None
+    t2_hit = False
+    t2_hit_at: Optional[str] = None
+    stop_hit = False
+    stop_hit_at: Optional[str] = None
+    runner_be_hit = False
+    runner_be_at: Optional[str] = None
+
+    post_high = entry
+    post_low = entry
+    last_close = entry
+    bars_evaluated = 0
+
+    if bars_df is not None and not bars_df.empty:
+        active_stop = stop
+        for idx, row in bars_df.iterrows():
+            bars_evaluated += 1
+            h = float(row.get("High", row.get("high", entry)))
+            l = float(row.get("Low", row.get("low", entry)))
+            c = float(row.get("Close", row.get("close", entry)))
+            post_high = max(post_high, h)
+            post_low = min(post_low, l)
+            last_close = c
+
+            try:
+                ts = pd.Timestamp(idx)
+                if ts.tzinfo is not None:
+                    ts_ct = ts.tz_convert("America/Chicago")
+                    ts_label = ts_ct.strftime("%Y-%m-%d %I:%M %p CT") if (ts_ct.hour or ts_ct.minute) else ts_ct.strftime("%Y-%m-%d")
+                else:
+                    ts_label = ts.strftime("%Y-%m-%d %H:%M") if (ts.hour or ts.minute) else ts.strftime("%Y-%m-%d")
+            except Exception:
+                ts_label = str(idx)
+
+            if is_calls:
+                # Check stop first if bar broke below active_stop before hitting targets
+                if not t1_hit and l <= active_stop:
+                    stop_hit = True
+                    stop_hit_at = ts_label
+                    break
+                if h >= t1 and not t1_hit:
+                    t1_hit = True
+                    t1_hit_at = ts_label
+                    active_stop = entry  # Trail stop to breakeven after T1
+                if h >= t2 and not t2_hit:
+                    t2_hit = True
+                    t2_hit_at = ts_label
+                    break
+                if t1_hit and not t2_hit and l <= active_stop and t1_hit_at != ts_label:
+                    runner_be_hit = True
+                    runner_be_at = ts_label
+                    break
+            else:
+                if not t1_hit and h >= active_stop:
+                    stop_hit = True
+                    stop_hit_at = ts_label
+                    break
+                if l <= t1 and not t1_hit:
+                    t1_hit = True
+                    t1_hit_at = ts_label
+                    active_stop = entry  # Trail stop to breakeven after T1
+                if l <= t2 and not t2_hit:
+                    t2_hit = True
+                    t2_hit_at = ts_label
+                    break
+                if t1_hit and not t2_hit and h >= active_stop and t1_hit_at != ts_label:
+                    runner_be_hit = True
+                    runner_be_at = ts_label
+                    break
+    elif fallback_high is not None and fallback_low is not None and fallback_close is not None:
+        bars_evaluated = 1
+        post_high = max(entry, float(fallback_high))
+        post_low = min(entry, float(fallback_low))
+        last_close = float(fallback_close)
+        if is_calls:
+            if post_high >= t2:
+                t1_hit = True
+                t2_hit = True
+                t1_hit_at = "Session High"
+                t2_hit_at = "Session High"
+            elif post_high >= t1:
+                t1_hit = True
+                t1_hit_at = "Session High"
+                if post_low <= entry:
+                    runner_be_hit = True
+                    runner_be_at = "Intraday Pullback"
+            elif post_low <= stop:
+                stop_hit = True
+                stop_hit_at = "Session Low"
+        else:
+            if post_low <= t2:
+                t1_hit = True
+                t2_hit = True
+                t1_hit_at = "Session Low"
+                t2_hit_at = "Session Low"
+            elif post_low <= t1:
+                t1_hit = True
+                t1_hit_at = "Session Low"
+                if post_high >= entry:
+                    runner_be_hit = True
+                    runner_be_at = "Intraday Bounce"
+            elif post_high >= stop:
+                stop_hit = True
+                stop_hit_at = "Session High"
+
+    if is_calls:
+        mfe_dlr = round(max(0.0, post_high - entry), 2)
+        mae_dlr = round(max(0.0, entry - post_low), 2)
+        unscaled_close_pnl = last_close - entry
+    else:
+        mfe_dlr = round(max(0.0, entry - post_low), 2)
+        mae_dlr = round(max(0.0, post_high - entry), 2)
+        unscaled_close_pnl = entry - last_close
+
+    mfe_pct = round((mfe_dlr / entry) * 100, 2) if entry > 0 else 0.0
+    mae_pct = round((mae_dlr / entry) * 100, 2) if entry > 0 else 0.0
+
+    if t2_hit:
+        status = "WIN — Target 1 & Target 2 Hit"
+        badge = "✅ FULL WIN (T1 & T2 HIT)"
+        realized_pnl = 0.5 * abs(t1 - entry) + 0.5 * abs(t2 - entry)
+        summary = (
+            f"Hit Target 1 (${t1:.2f}) at {t1_hit_at} and Target 2 (${t2:.2f}) at {t2_hit_at}. "
+            f"Scaled 50% at T1 + 50% at T2 for +${realized_pnl:.2f}/sh (+{realized_pnl / risk:.2f}R)."
+        )
+    elif t1_hit and runner_be_hit:
+        status = "WIN — Target 1 Hit (50% Scaled, Runner Stopped at Breakeven)"
+        badge = "✅ WIN (T1 HIT · RUNNER BE)"
+        realized_pnl = 0.5 * abs(t1 - entry)
+        summary = (
+            f"Hit Target 1 (${t1:.2f}) at {t1_hit_at} (50% profit locked), then runner stopped at breakeven (${entry:.2f}) at {runner_be_at} "
+            f"for +${realized_pnl:.2f}/sh (+{realized_pnl / risk:.2f}R)."
+        )
+    elif t1_hit:
+        status = "WIN — Target 1 Hit (50% Scaled, Runner Held to Close)"
+        badge = "✅ WIN (T1 HIT)"
+        realized_pnl = 0.5 * abs(t1 - entry) + 0.5 * unscaled_close_pnl
+        summary = (
+            f"Hit Target 1 (${t1:.2f}) at {t1_hit_at} (50% profit locked) and runner finished at ${last_close:.2f} "
+            f"for +${realized_pnl:.2f}/sh (+{realized_pnl / risk:.2f}R)."
+        )
+    elif stop_hit:
+        status = "LOSS — Stop Loss Hit"
+        badge = "❌ STOPPED OUT"
+        realized_pnl = -abs(entry - stop)
+        summary = (
+            f"Invalidation stop (${stop:.2f}) was hit at {stop_hit_at} before reaching Target 1 (${t1:.2f}). "
+            f"Peak favorable move before/after was +${mfe_dlr:.2f} ({mfe_pct:+.2f}%). Result: -${abs(realized_pnl):.2f}/sh (-1.00R)."
+        )
+    elif bars_evaluated > 0:
+        realized_pnl = unscaled_close_pnl
+        r_mult = realized_pnl / risk
+        badge = f"⏳ EOD / ACTIVE ({realized_pnl:+.2f}/sh · {r_mult:+.2f}R)"
+        status = "OPEN / EOD Mark-to-Market (Neither Stop nor T1 Hit)"
+        summary = (
+            f"Neither Stop (${stop:.2f}) nor Target 1 (${t1:.2f}) was hit across {bars_evaluated} bars. "
+            f"Range [${post_low:.2f} – ${post_high:.2f}], finished at ${last_close:.2f} ({realized_pnl:+.2f}/sh, {r_mult:+.2f}R)."
+        )
+    else:
+        realized_pnl = 0.0
+        badge = "⏳ PENDING FOLLOW-THROUGH"
+        status = "No subsequent bars after entry yet"
+        summary = "Entry triggered on the latest bar; awaiting forward price bars for backtest resolution."
+
+    return {
+        "timeframe": timeframe_label,
+        "bars_evaluated": bars_evaluated,
+        "status": status,
+        "result_badge": badge,
+        "t1_hit": t1_hit,
+        "t1_hit_at": t1_hit_at,
+        "t2_hit": t2_hit,
+        "t2_hit_at": t2_hit_at,
+        "stop_hit": stop_hit,
+        "stop_hit_at": stop_hit_at,
+        "runner_breakeven_hit": runner_be_hit,
+        "post_entry_high": round(post_high, 2),
+        "post_entry_low": round(post_low, 2),
+        "end_price": round(last_close, 2),
+        "max_favorable_excursion": f"+${mfe_dlr:.2f} (+{mfe_pct:.2f}%)",
+        "max_adverse_excursion": f"-${mae_dlr:.2f} (-{mae_pct:.2f}%)",
+        "realized_pnl_per_share": round(realized_pnl, 2),
+        "realized_r_multiple": f"{realized_pnl / risk:+.2f}R",
+        "summary": summary,
+    }
+
+
+def analyze(ticker: str, target_date: Optional[str] = None) -> dict:
     import yfinance as yf
 
     clean_ticker = (ticker or "SPY").strip().upper()
     yf_sym = _yf_symbol(clean_ticker)
-    daily = yf.Ticker(yf_sym).history(period="30d", interval="1d", auto_adjust=True)
+    req_date = parse_pulse_date(target_date) if isinstance(target_date, str) else target_date
+    period = "2y" if req_date else "60d"
+    daily = yf.Ticker(yf_sym).history(period=period, interval="1d", auto_adjust=True)
+    if req_date and not daily.empty:
+        resolved_date, _, _ = _resolve_trading_session(daily, req_date)
+        return analyze_from_daily(clean_ticker, daily, scan_date=resolved_date)
     return analyze_from_daily(clean_ticker, daily)
 
 
-def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optional[float] = None) -> dict:
+def get_valid_outcome_and_trade_idea(
+    ticker: str = "SPY",
+    current_price: Optional[float] = None,
+    target_date: Optional[str] = None,
+) -> dict:
     """
-    Evaluates current price action + first 5-minute opening candle for any ticker (SPY, SPXW, QQQ, etc.)
-    against previous day/week key levels (PDH, PDL, PWH, PWL, Mid) to determine the SINGLE VALID OUTCOME
-    from the 8:00 AM Playbook and returns ONE decisive Calls OR Puts trade idea with strike, entry, stop, and targets.
+    PULSE (Day Trading V4 Engine):
+    Evaluates the 8:30–8:35 AM CT first 5-minute opening candle for any ticker (SPY, SPXW, QQQ, TSLA, etc.)
+    on today's session OR any historical `target_date` (e.g. '10/12/2026') against prior day/week key levels
+    (PDH, PDL, PWH, PWL, Mid) to determine the SINGLE VALID OUTCOME and performs a full intraday backtest!
     """
     import yfinance as yf
+    from datetime import timedelta
 
     sym = (ticker or "SPY").strip().upper()
     yf_sym = _yf_symbol(sym)
+    req_date = parse_pulse_date(target_date) if isinstance(target_date, str) else target_date
 
-    v4_data = analyze(sym)
+    period = "2y" if req_date else "60d"
+    daily_raw = yf.Ticker(yf_sym).history(period=period, interval="1d", auto_adjust=True)
+    daily = _norm_daily(daily_raw)
+    if daily.empty:
+        return {"ticker": sym, "error": "missing daily bars"}
+
+    if req_date:
+        scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
+    else:
+        idx_dates = [_idx_date(i) for i in daily.index]
+        scan_date = idx_dates[-1]
+        completed, session_row = _split_session(daily, scan_date)
+
+    if len(completed) < 5:
+        return {"ticker": sym, "error": f"Insufficient historical bars prior to {scan_date}"}
+
+    v4_data = analyze_from_daily(sym, daily, scan_date=scan_date, current_price=current_price)
     if v4_data.get("error"):
         return {"ticker": sym, "error": v4_data["error"]}
 
     price = float(current_price) if current_price and current_price > 0 else float(v4_data.get("price", 0))
     session_high = float(v4_data.get("session_high") or price)
     session_low = float(v4_data.get("session_low") or price)
+    daily_open = float(session_row["open"]) if session_row is not None else price
+    daily_high = float(session_row["high"]) if session_row is not None else session_high
+    daily_low = float(session_row["low"]) if session_row is not None else session_low
+    daily_close = float(session_row["close"]) if session_row is not None else price
 
-    # Inspect intraday 5-minute bars to capture the 8:30–8:35 AM CT (09:30–09:35 ET) opening candle
-    open_5m = price
+    # Inspect intraday 5-minute bars on `scan_date` to capture the 8:30–8:35 AM CT (09:30–09:35 ET) opening candle
+    open_5m = daily_open
     close_5m = price
-    latest_price = price
+    latest_price = daily_close
+    post_entry_bars = pd.DataFrame()
+    candle_source = "Daily Session Bar (Historical >60d fallback)"
+
     try:
-        intraday = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
-        if not intraday.empty:
-            last_date = intraday.index[-1].date()
-            today_bars = intraday[intraday.index.date == last_date]
-            if not today_bars.empty:
-                first_bar = today_bars.iloc[0]
-                last_bar = today_bars.iloc[-1]
-                open_5m = float(first_bar["Open"])
-                close_5m = float(first_bar["Close"])
-                high_5m = float(first_bar["High"])
-                low_5m = float(first_bar["Low"])
-                latest_price = round(float(last_bar["Close"]), 2)
-                if current_price is None or current_price <= 0:
-                    price = round(close_5m, 2)
-                    session_high = round(high_5m, 2)
-                    session_low = round(low_5m, 2)
-                else:
-                    session_high = max(session_high, float(today_bars["High"].max()))
-                    session_low = min(session_low, float(today_bars["Low"].min()))
+        days_ago = (date.today() - scan_date).days
+        if days_ago <= 58:
+            if req_date:
+                start_str = scan_date.isoformat()
+                end_str = (scan_date + timedelta(days=2)).isoformat()
+                intraday = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="5m", auto_adjust=True)
+            else:
+                intraday = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
+            if not intraday.empty:
+                day_bars = intraday[[_idx_date(i) == scan_date for i in intraday.index]]
+                if not day_bars.empty:
+                    first_bar = day_bars.iloc[0]
+                    last_bar = day_bars.iloc[-1]
+                    open_5m = float(first_bar["Open"])
+                    close_5m = float(first_bar["Close"])
+                    high_5m = float(first_bar["High"])
+                    low_5m = float(first_bar["Low"])
+                    latest_price = round(float(last_bar["Close"]), 2)
+                    post_entry_bars = day_bars.iloc[1:]
+                    candle_source = f"8:30–8:35 AM CT 5m Opening Candle ({scan_date.isoformat()})"
+                    if current_price is None or current_price <= 0:
+                        price = round(close_5m, 2)
+                        session_high = round(high_5m, 2)
+                        session_low = round(low_5m, 2)
+        elif days_ago <= 720:
+            start_str = scan_date.isoformat()
+            end_str = (scan_date + timedelta(days=2)).isoformat()
+            intraday_1h = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="1h", auto_adjust=True)
+            if not intraday_1h.empty:
+                day_bars = intraday_1h[[_idx_date(i) == scan_date for i in intraday_1h.index]]
+                if not day_bars.empty:
+                    first_bar = day_bars.iloc[0]
+                    last_bar = day_bars.iloc[-1]
+                    open_5m = float(first_bar["Open"])
+                    close_5m = float(first_bar["Close"])
+                    high_5m = float(first_bar["High"])
+                    low_5m = float(first_bar["Low"])
+                    latest_price = round(float(last_bar["Close"]), 2)
+                    post_entry_bars = day_bars.iloc[1:]
+                    candle_source = f"Opening 1h Candle ({scan_date.isoformat()} — >60d lookback)"
+                    if current_price is None or current_price <= 0:
+                        price = round(close_5m, 2)
+                        session_high = round(high_5m, 2)
+                        session_low = round(low_5m, 2)
     except Exception:
         pass
 
@@ -848,10 +1204,29 @@ def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optiona
     reward = abs(t1 - entry)
     rr = round(reward / risk, 1) if risk > 0 else 2.0
 
+    # Run Intraday Backtest from 8:35 AM CT through session close
+    backtest = _simulate_trade_backtest(
+        post_entry_bars,
+        entry=entry,
+        stop=stop,
+        t1=t1,
+        t2=t2,
+        action=action,
+        timeframe_label=f"Intraday Session ({scan_date.isoformat()} · Post-8:35 AM CT)",
+        fallback_high=daily_high,
+        fallback_low=daily_low,
+        fallback_close=daily_close,
+    )
+
     return {
+        "strategy_name": "Pulse (Day Trading 8:35 AM Open Validator)",
         "ticker": sym,
         "yf_symbol": yf_sym,
+        "scan_date": scan_date.isoformat(),
+        "requested_date": req_date.isoformat() if req_date else None,
+        "candle_source": candle_source,
         "price": price,
+        "latest_session_close": round(latest_price, 2),
         "session_high": round(session_high, 2),
         "session_low": round(session_low, 2),
         "valid_outcome": outcome_label,
@@ -871,15 +1246,544 @@ def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optiona
             "execution_strategy": "Scale 50% profit at Target 1, immediately move stop to breakeven, and let runner trail for Target 2."
         },
         "key_levels": {
-            "pdh": pdh,
-            "pdl": pdl,
-            "pwh": pwh,
-            "pwl": pwl,
-            "pd_mid": pd_mid,
-            "atr": atr,
+            "pdh": round(pdh, 2),
+            "pdl": round(pdl, 2),
+            "pwh": round(pwh, 2),
+            "pwl": round(pwl, 2),
+            "pd_mid": round(pd_mid, 2),
+            "atr": round(atr, 2),
         },
+        "backtest": backtest,
         "morning_signal": v4_data.get("signal", {}),
         "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT")
+    }
+
+
+def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) -> dict:
+    """
+    LONG TERM PULSE (Month & Day High/Low Strategy):
+    Evaluates price action against Previous Month High/Low (PMH / PML) AND Previous Day High/Low (PDH / PDL)
+    on today's session or any historical `target_date`, returning a multi-week swing / options trade plan
+    plus a forward multi-day backtest (up to 30 trading days after `scan_date`).
+    """
+    import yfinance as yf
+
+    sym = (ticker or "SPY").strip().upper()
+    yf_sym = _yf_symbol(sym)
+    req_date = parse_pulse_date(target_date) if isinstance(target_date, str) else target_date
+
+    daily_raw = yf.Ticker(yf_sym).history(period="2y", interval="1d", auto_adjust=True)
+    daily = _norm_daily(daily_raw)
+    if daily.empty:
+        return {"ticker": sym, "error": "missing daily bars"}
+
+    idx_dates = [_idx_date(i) for i in daily.index]
+    if req_date:
+        scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
+    else:
+        scan_date = idx_dates[-1]
+        completed, session_row = _split_session(daily, scan_date)
+
+    if len(completed) < 22:
+        return {"ticker": sym, "error": f"Insufficient historical bars prior to {scan_date} for Long Term Pulse"}
+
+    # Previous Day High / Low (PDH / PDL)
+    prev_day = completed.iloc[-1]
+    pdh = round(float(prev_day["high"]), 2)
+    pdl = round(float(prev_day["low"]), 2)
+    pd_mid = round((pdh + pdl) / 2.0, 2)
+    pd_close = round(float(prev_day["close"]), 2)
+
+    # Previous Month High / Low (PMH / PML) — check prior calendar month if >=15 bars, else prior 21 trading bars
+    comp_dates = [_idx_date(i) for i in completed.index]
+    prev_month_year = (scan_date.year, scan_date.month - 1) if scan_date.month > 1 else (scan_date.year - 1, 12)
+    cal_month_df = completed[[(d.year, d.month) == prev_month_year for d in comp_dates]]
+    month_df = cal_month_df if len(cal_month_df) >= 12 else completed.tail(21)
+
+    pmh = round(float(month_df["high"].max()), 2)
+    pml = round(float(month_df["low"].min()), 2)
+    pm_mid = round((pmh + pml) / 2.0, 2)
+    pm_range = round(max(pmh - pml, 0.5), 2)
+    atr = round(_atr(completed, 14), 2)
+    buf = round(max(atr * 0.25, pm_range * 0.04), 2)
+
+    if session_row is not None:
+        open_px = round(float(session_row["open"]), 2)
+        high_px = round(float(session_row["high"]), 2)
+        low_px = round(float(session_row["low"]), 2)
+        price = round(float(session_row["close"]), 2)
+    else:
+        open_px = pd_close
+        high_px = pdh
+        low_px = pdl
+        price = pd_close
+
+    # Determine Long Term Pulse Validated Outcome from Month (PMH/PML) + Day (PDH/PDL) Highs & Lows
+    if high_px > pmh and price < pmh:
+        outcome_label = "Monthly High Sweep & Daily Rejection Below PMH (Bearish Multi-Week Reversal)"
+        action = "BUY PUTS"
+        bias = "Bearish — Failed Breakout Above Previous Month High (PMH)"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(high_px, pmh) + buf, 2)
+        t1 = round(pm_mid if pm_mid < entry - atr * 0.5 else pdl, 2)
+        t2 = round(pml if pml < t1 - atr * 0.5 else entry - pm_range * 0.6, 2)
+        trigger = f"Swept PMH (${pmh:.2f} -> high ${high_px:.2f}) and closed back below PMH at ${price:.2f}"
+        invalidation = f"Daily close above monthly sweep high (${stop:.2f})"
+        rationale = (
+            f"{sym} swept above Previous Month High (${pmh:.2f}) to ${high_px:.2f} and rejected back below to ${price:.2f}, "
+            f"signaling institutional supply at monthly resistance targeting Monthly Mid (${t1:.2f}) and PML (${t2:.2f})."
+        )
+    elif price >= pmh and price >= pdh:
+        outcome_label = "Monthly & Daily Breakout Above PMH & PDH (Bullish Multi-Week Expansion)"
+        action = "BUY CALLS"
+        bias = "Bullish — Confirmed Breakout Above Both Monthly (PMH) & Daily (PDH) Highs"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(pmh, pdh) - buf, 2)
+        t1 = round(max(entry + atr * 1.5, pmh + pm_range * 0.382), 2)
+        t2 = round(max(t1 + atr * 1.5, pmh + pm_range * 0.618), 2)
+        trigger = f"Holding above both PMH (${pmh:.2f}) and PDH (${pdh:.2f}) at ${price:.2f}"
+        invalidation = f"Daily close back below PMH/PDH support stop (${stop:.2f})"
+        rationale = (
+            f"{sym} broke and held above both Previous Month High (${pmh:.2f}) and Previous Day High (${pdh:.2f}), "
+            f"unlocking multi-week trend expansion toward ${t1:.2f} and ${t2:.2f}."
+        )
+    elif low_px < pml and price > pml:
+        outcome_label = "Monthly Low Sweep & Daily Reclaim Above PML (Bullish Multi-Week Reversal)"
+        action = "BUY CALLS"
+        bias = "Bullish — Liquidity Sweep & Reclaim Above Previous Month Low (PML)"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(low_px, pml) - buf, 2)
+        t1 = round(pm_mid if pm_mid > entry + atr * 0.5 else pdh, 2)
+        t2 = round(pmh if pmh > t1 + atr * 0.5 else entry + pm_range * 0.6, 2)
+        trigger = f"Swept PML (${pml:.2f} -> low ${low_px:.2f}) and reclaimed above PML at ${price:.2f}"
+        invalidation = f"Daily close below monthly sweep low (${stop:.2f})"
+        rationale = (
+            f"{sym} undercut Previous Month Low (${pml:.2f}) to ${low_px:.2f} and reclaimed back above to ${price:.2f}, "
+            f"confirming a multi-week bear-trap reversal toward Monthly Mid (${t1:.2f}) and PMH (${t2:.2f})."
+        )
+    elif price <= pml and price <= pdl:
+        outcome_label = "Monthly & Daily Breakdown Below PML & PDL (Bearish Multi-Week Breakdown)"
+        action = "BUY PUTS"
+        bias = "Bearish — Confirmed Breakdown Below Both Monthly (PML) & Daily (PDL) Lows"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(pml, pdl) + buf, 2)
+        t1 = round(min(entry - atr * 1.5, pml - pm_range * 0.382), 2)
+        t2 = round(min(t1 - atr * 1.5, pml - pm_range * 0.618), 2)
+        trigger = f"Closed below both PML (${pml:.2f}) and PDL (${pdl:.2f}) at ${price:.2f}"
+        invalidation = f"Daily close back above PML/PDL stop (${stop:.2f})"
+        rationale = (
+            f"{sym} broke down below both Previous Month Low (${pml:.2f}) and Previous Day Low (${pdl:.2f}), "
+            f"confirming multi-week downside continuation toward ${t1:.2f} and ${t2:.2f}."
+        )
+    elif price >= pdh:
+        outcome_label = "Daily Breakout Above PDH Inside Monthly Range Targeting PMH"
+        action = "BUY CALLS"
+        bias = "Bullish — Daily PDH Breakout Rotating Toward Monthly High (PMH)"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(max(pdl, pdh - atr * 0.8), 2)
+        t1 = round(pmh if pmh > entry + atr * 0.5 else entry + atr * 1.5, 2)
+        t2 = round(max(t1 + atr * 1.2, pmh + pm_range * 0.382), 2)
+        trigger = f"Daily breakout above PDH (${pdh:.2f}) inside monthly range [${pml:.2f} – ${pmh:.2f}]"
+        invalidation = f"Break below daily support stop at ${stop:.2f}"
+        rationale = (
+            f"{sym} cleared Previous Day High (${pdh:.2f}) while rotating inside the monthly range, "
+            f"targeting Previous Month High (${pmh:.2f}) and ${t2:.2f}."
+        )
+    elif price <= pdl:
+        outcome_label = "Daily Breakdown Below PDL Inside Monthly Range Targeting PML"
+        action = "BUY PUTS"
+        bias = "Bearish — Daily PDL Breakdown Rotating Toward Monthly Low (PML)"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(min(pdh, pdl + atr * 0.8), 2)
+        t1 = round(pml if pml < entry - atr * 0.5 else entry - atr * 1.5, 2)
+        t2 = round(min(t1 - atr * 1.2, pml - pm_range * 0.382), 2)
+        trigger = f"Daily breakdown below PDL (${pdl:.2f}) inside monthly range [${pml:.2f} – ${pmh:.2f}]"
+        invalidation = f"Reclaim above daily resistance stop at ${stop:.2f}"
+        rationale = (
+            f"{sym} broke below Previous Day Low (${pdl:.2f}) inside the monthly range, "
+            f"targeting Previous Month Low (${pml:.2f}) and ${t2:.2f}."
+        )
+    elif price >= pm_mid:
+        outcome_label = "Holding Upper Monthly Range (Above PM Mid) & Daily Support Targeting PMH"
+        action = "BUY CALLS"
+        bias = "Bullish — Upper Monthly Range Consolidation"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(pdl - buf * 0.5, entry - atr * 0.9), 2)
+        t1 = round(max(pdh, pmh), 2)
+        t2 = round(max(t1 + atr * 1.2, pmh + pm_range * 0.25), 2)
+        trigger = f"Holding above Monthly Midpoint (${pm_mid:.2f}) with daily support at PDL (${pdl:.2f})"
+        invalidation = f"Close below PDL / monthly midpoint stop (${stop:.2f})"
+        rationale = (
+            f"{sym} is holding the upper half of the monthly range above PM Mid (${pm_mid:.2f}) and PDL (${pdl:.2f}), "
+            f"favoring bullish rotation toward PMH (${pmh:.2f})."
+        )
+    else:
+        outcome_label = "Trading in Lower Monthly Range (Below PM Mid) Below PDH Targeting PML"
+        action = "BUY PUTS"
+        bias = "Bearish — Lower Monthly Range Weakness"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(pdh + buf * 0.5, entry + atr * 0.9), 2)
+        t1 = round(min(pdl, pml), 2)
+        t2 = round(min(t1 - atr * 1.2, pml - pm_range * 0.25), 2)
+        trigger = f"Trading below Monthly Midpoint (${pm_mid:.2f}) and capped below PDH (${pdh:.2f})"
+        invalidation = f"Reclaim above PDH / monthly midpoint stop (${stop:.2f})"
+        rationale = (
+            f"{sym} remains in the lower half of the monthly range below PM Mid (${pm_mid:.2f}) and PDH (${pdh:.2f}), "
+            f"favoring downside rotation toward PML (${pml:.2f})."
+        )
+
+    # Directional safety guard
+    if "PUTS" in action:
+        if t1 >= entry - atr * 0.3:
+            t1 = round(entry - atr * 1.2, 2)
+        if t2 >= t1 - atr * 0.3:
+            t2 = round(t1 - atr * 1.2, 2)
+        if stop <= entry:
+            stop = round(entry + atr * 0.85, 2)
+    else:
+        if t1 <= entry + atr * 0.3:
+            t1 = round(entry + atr * 1.2, 2)
+        if t2 <= t1 + atr * 0.3:
+            t2 = round(t1 + atr * 1.2, 2)
+        if stop >= entry:
+            stop = round(entry - atr * 0.85, 2)
+
+    risk = abs(entry - stop) if entry != stop else 1.0
+    rr = round(abs(t1 - entry) / risk, 2)
+
+    # Forward multi-day backtest across up to 30 trading days after scan_date
+    future_daily = daily[[d > scan_date for d in idx_dates]].head(30)
+    backtest = _simulate_trade_backtest(
+        future_daily,
+        entry=entry,
+        stop=stop,
+        t1=t1,
+        t2=t2,
+        action=action,
+        timeframe_label=f"Multi-Day Forward Backtest (Up to 30 Trading Days After {scan_date.isoformat()})",
+    )
+
+    return {
+        "strategy_name": "Long Term Pulse (Month & Day High/Low Engine)",
+        "ticker": sym,
+        "scan_date": scan_date.isoformat(),
+        "requested_date": req_date.isoformat() if req_date else None,
+        "price": price,
+        "session_open": open_px,
+        "session_high": high_px,
+        "session_low": low_px,
+        "valid_outcome": outcome_label,
+        "trade_idea": {
+            "action": action,
+            "bias": bias,
+            "suggested_contract": f"{strike} (30–60 DTE)",
+            "expiry_type": "30–60 DTE Monthly Options or Swing Shares (Delta 0.45 - 0.55)",
+            "entry_level": entry,
+            "stop_loss": stop,
+            "target_1": t1,
+            "target_2": t2,
+            "reward_risk": f"{rr}x",
+            "trigger_condition": trigger,
+            "invalidation_rule": invalidation,
+            "rationale": rationale,
+            "execution_strategy": "Scale 50% at Target 1, move stop to breakeven, and trail runner toward Target 2.",
+        },
+        "key_levels": {
+            "pmh": pmh,
+            "pml": pml,
+            "pm_mid": pm_mid,
+            "pm_range": pm_range,
+            "pdh": pdh,
+            "pdl": pdl,
+            "pd_mid": pd_mid,
+            "atr_14d": atr,
+        },
+        "backtest": backtest,
+        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT"),
+    }
+
+
+def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) -> dict:
+    """
+    EARNING PULSE (Quarterly & Monthly High/Low Strategy):
+    Evaluates price action against Previous Quarter High/Low (PQH / PQL) AND Previous Month High/Low (PMH / PML)
+    on today's session or any historical `target_date`, returning a macro/earnings swing trade plan
+    plus a forward multi-week backtest (up to 60 trading days after `scan_date`).
+    """
+    import yfinance as yf
+
+    sym = (ticker or "SPY").strip().upper()
+    yf_sym = _yf_symbol(sym)
+    req_date = parse_pulse_date(target_date) if isinstance(target_date, str) else target_date
+
+    daily_raw = yf.Ticker(yf_sym).history(period="2y", interval="1d", auto_adjust=True)
+    daily = _norm_daily(daily_raw)
+    if daily.empty:
+        return {"ticker": sym, "error": "missing daily bars"}
+
+    idx_dates = [_idx_date(i) for i in daily.index]
+    if req_date:
+        scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
+    else:
+        scan_date = idx_dates[-1]
+        completed, session_row = _split_session(daily, scan_date)
+
+    if len(completed) < 63:
+        return {"ticker": sym, "error": f"Insufficient historical bars prior to {scan_date} for Earning Pulse"}
+
+    comp_dates = [_idx_date(i) for i in completed.index]
+
+    # Previous Month High / Low (PMH / PML)
+    prev_month_year = (scan_date.year, scan_date.month - 1) if scan_date.month > 1 else (scan_date.year - 1, 12)
+    cal_month_df = completed[[(d.year, d.month) == prev_month_year for d in comp_dates]]
+    month_df = cal_month_df if len(cal_month_df) >= 12 else completed.tail(21)
+    pmh = round(float(month_df["high"].max()), 2)
+    pml = round(float(month_df["low"].min()), 2)
+    pm_mid = round((pmh + pml) / 2.0, 2)
+    pm_range = round(max(pmh - pml, 0.5), 2)
+
+    # Previous Quarter High / Low (PQH / PQL) — prior calendar quarter if >=40 bars, else prior 63 trading days
+    curr_q = (scan_date.month - 1) // 3 + 1
+    prev_q = curr_q - 1 if curr_q > 1 else 4
+    prev_q_year = scan_date.year if curr_q > 1 else scan_date.year - 1
+    prev_q_months = {(prev_q - 1) * 3 + 1, (prev_q - 1) * 3 + 2, (prev_q - 1) * 3 + 3}
+    cal_q_df = completed[[d.year == prev_q_year and d.month in prev_q_months for d in comp_dates]]
+    quarter_df = cal_q_df if len(cal_q_df) >= 35 else completed.tail(63)
+
+    pqh = round(float(quarter_df["high"].max()), 2)
+    pql = round(float(quarter_df["low"].min()), 2)
+    pq_mid = round((pqh + pql) / 2.0, 2)
+    pq_range = round(max(pqh - pql, 1.0), 2)
+    atr = round(_atr(completed, 14), 2)
+    buf = round(max(atr * 0.4, pq_range * 0.03), 2)
+
+    if session_row is not None:
+        open_px = round(float(session_row["open"]), 2)
+        high_px = round(float(session_row["high"]), 2)
+        low_px = round(float(session_row["low"]), 2)
+        price = round(float(session_row["close"]), 2)
+    else:
+        prev_day = completed.iloc[-1]
+        open_px = round(float(prev_day["open"]), 2)
+        high_px = round(float(prev_day["high"]), 2)
+        low_px = round(float(prev_day["low"]), 2)
+        price = round(float(prev_day["close"]), 2)
+
+    # Determine Earning Pulse Validated Outcome from Quarterly (PQH/PQL) + Monthly (PMH/PML) Highs & Lows
+    if high_px > pqh and price < pqh:
+        outcome_label = "Quarterly High Sweep & Rejection Below PQH (Bearish Earnings/Macro Exhaustion)"
+        action = "BUY PUTS"
+        bias = "Bearish — Failed Breakout Above Previous Quarter High (PQH)"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(high_px, pqh) + buf, 2)
+        t1 = round(pm_mid if pm_mid < entry - atr else pq_mid, 2)
+        t2 = round(pml if pml < t1 - atr else pql, 2)
+        trigger = f"Swept PQH (${pqh:.2f} -> high ${high_px:.2f}) and rejected below PQH at ${price:.2f}"
+        invalidation = f"Close above quarterly sweep high (${stop:.2f})"
+        rationale = (
+            f"{sym} swept above Previous Quarter High (${pqh:.2f}) to ${high_px:.2f} and failed to hold, "
+            f"indicating quarterly resistance exhaustion targeting ${t1:.2f} and ${t2:.2f}."
+        )
+    elif price >= pqh and price >= pmh:
+        outcome_label = "Quarterly & Monthly Breakout Above PQH & PMH (Bullish Earnings Drift Expansion)"
+        action = "BUY CALLS"
+        bias = "Bullish — Confirmed Breakout Above Both Quarterly (PQH) & Monthly (PMH) Highs"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(pqh, pmh) - buf, 2)
+        t1 = round(max(entry + atr * 2.0, pqh + pq_range * 0.382), 2)
+        t2 = round(max(t1 + atr * 2.0, pqh + pq_range * 0.618), 2)
+        trigger = f"Breakout & hold above both PQH (${pqh:.2f}) and PMH (${pmh:.2f}) at ${price:.2f}"
+        invalidation = f"Close back below PQH/PMH breakout stop (${stop:.2f})"
+        rationale = (
+            f"{sym} cleared both Previous Quarter High (${pqh:.2f}) and Previous Month High (${pmh:.2f}), "
+            f"confirming a structural quarterly breakout targeting ${t1:.2f} and ${t2:.2f}."
+        )
+    elif low_px < pql and price > pql:
+        outcome_label = "Quarterly Low Sweep & Reclaim Above PQL (Bullish Institutional Accumulation)"
+        action = "BUY CALLS"
+        bias = "Bullish — Liquidity Sweep & Reclaim Above Previous Quarter Low (PQL)"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(low_px, pql) - buf, 2)
+        t1 = round(pm_mid if pm_mid > entry + atr else pq_mid, 2)
+        t2 = round(pmh if pmh > t1 + atr else pqh, 2)
+        trigger = f"Swept PQL (${pql:.2f} -> low ${low_px:.2f}) and reclaimed above PQL at ${price:.2f}"
+        invalidation = f"Close below quarterly sweep low (${stop:.2f})"
+        rationale = (
+            f"{sym} swept below Previous Quarter Low (${pql:.2f}) to ${low_px:.2f} and reclaimed back above to ${price:.2f}, "
+            f"signaling institutional accumulation targeting ${t1:.2f} and ${t2:.2f}."
+        )
+    elif price <= pql and price <= pml:
+        outcome_label = "Quarterly & Monthly Breakdown Below PQL & PML (Bearish Structural Breakdown)"
+        action = "BUY PUTS"
+        bias = "Bearish — Confirmed Breakdown Below Both Quarterly (PQL) & Monthly (PML) Lows"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(pql, pml) + buf, 2)
+        t1 = round(min(entry - atr * 2.0, pql - pq_range * 0.382), 2)
+        t2 = round(min(t1 - atr * 2.0, pql - pq_range * 0.618), 2)
+        trigger = f"Breakdown below both PQL (${pql:.2f}) and PML (${pml:.2f}) at ${price:.2f}"
+        invalidation = f"Reclaim back above PQL/PML stop (${stop:.2f})"
+        rationale = (
+            f"{sym} broke below both Previous Quarter Low (${pql:.2f}) and Previous Month Low (${pml:.2f}), "
+            f"opening structural downside toward ${t1:.2f} and ${t2:.2f}."
+        )
+    elif price >= pmh:
+        outcome_label = "Monthly Breakout Above PMH Inside Quarterly Range Targeting PQH"
+        action = "BUY CALLS"
+        bias = "Bullish — Monthly Breakout Rotating Toward Quarterly High (PQH)"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(max(pm_mid, pmh - atr * 1.2), 2)
+        t1 = round(pqh if pqh > entry + atr * 0.8 else entry + atr * 2.0, 2)
+        t2 = round(max(t1 + atr * 1.5, pqh + pq_range * 0.382), 2)
+        trigger = f"Holding above PMH (${pmh:.2f}) inside quarterly range [${pql:.2f} – ${pqh:.2f}]"
+        invalidation = f"Close back below monthly breakout stop (${stop:.2f})"
+        rationale = (
+            f"{sym} broke above Previous Month High (${pmh:.2f}) inside the quarterly structure, "
+            f"targeting Previous Quarter High (${pqh:.2f}) and ${t2:.2f}."
+        )
+    elif price <= pml:
+        outcome_label = "Monthly Breakdown Below PML Inside Quarterly Range Targeting PQL"
+        action = "BUY PUTS"
+        bias = "Bearish — Monthly Breakdown Rotating Toward Quarterly Low (PQL)"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(min(pm_mid, pml + atr * 1.2), 2)
+        t1 = round(pql if pql < entry - atr * 0.8 else entry - atr * 2.0, 2)
+        t2 = round(min(t1 - atr * 1.5, pql - pq_range * 0.382), 2)
+        trigger = f"Trading below PML (${pml:.2f}) inside quarterly range [${pql:.2f} – ${pqh:.2f}]"
+        invalidation = f"Reclaim above monthly breakdown stop (${stop:.2f})"
+        rationale = (
+            f"{sym} broke below Previous Month Low (${pml:.2f}) inside the quarterly range, "
+            f"targeting Previous Quarter Low (${pql:.2f}) and ${t2:.2f}."
+        )
+    elif price >= pq_mid:
+        outcome_label = "Upper Quarterly Regime (Above PQ Mid) Targeting PMH & PQH"
+        action = "BUY CALLS"
+        bias = "Bullish — Holding Above Quarterly Midpoint"
+        strike = _suggest_option_strike(sym, price, "CALLS")
+        entry = price
+        stop = round(min(pml, pq_mid) - buf * 0.5, 2)
+        t1 = round(pmh if pmh > entry + atr * 0.5 else pqh, 2)
+        t2 = round(max(pqh, t1 + atr * 1.8), 2)
+        trigger = f"Holding above Quarterly Midpoint (${pq_mid:.2f}) at ${price:.2f}"
+        invalidation = f"Break below PML / Quarterly Midpoint stop (${stop:.2f})"
+        rationale = (
+            f"{sym} is positioned in the upper half of the quarterly range above PQ Mid (${pq_mid:.2f}), "
+            f"favoring upside toward PMH (${pmh:.2f}) and PQH (${pqh:.2f})."
+        )
+    else:
+        outcome_label = "Lower Quarterly Regime (Below PQ Mid) Targeting PML & PQL"
+        action = "BUY PUTS"
+        bias = "Bearish — Below Quarterly Midpoint"
+        strike = _suggest_option_strike(sym, price, "PUTS")
+        entry = price
+        stop = round(max(pmh, pq_mid) + buf * 0.5, 2)
+        t1 = round(pml if pml < entry - atr * 0.5 else pql, 2)
+        t2 = round(min(pql, t1 - atr * 1.8), 2)
+        trigger = f"Trading below Quarterly Midpoint (${pq_mid:.2f}) at ${price:.2f}"
+        invalidation = f"Reclaim above PMH / Quarterly Midpoint stop (${stop:.2f})"
+        rationale = (
+            f"{sym} is positioned in the lower half of the quarterly range below PQ Mid (${pq_mid:.2f}), "
+            f"favoring downside toward PML (${pml:.2f}) and PQL (${pql:.2f})."
+        )
+
+    # Directional safety guard
+    if "PUTS" in action:
+        if t1 >= entry - atr * 0.4:
+            t1 = round(entry - atr * 1.5, 2)
+        if t2 >= t1 - atr * 0.4:
+            t2 = round(t1 - atr * 1.5, 2)
+        if stop <= entry:
+            stop = round(entry + atr * 1.2, 2)
+    else:
+        if t1 <= entry + atr * 0.4:
+            t1 = round(entry + atr * 1.5, 2)
+        if t2 <= t1 + atr * 0.4:
+            t2 = round(t1 + atr * 1.5, 2)
+        if stop >= entry:
+            stop = round(entry - atr * 1.2, 2)
+
+    risk = abs(entry - stop) if entry != stop else 1.0
+    rr = round(abs(t1 - entry) / risk, 2)
+
+    # Forward multi-week backtest across up to 60 trading days after scan_date
+    future_daily = daily[[d > scan_date for d in idx_dates]].head(60)
+    backtest = _simulate_trade_backtest(
+        future_daily,
+        entry=entry,
+        stop=stop,
+        t1=t1,
+        t2=t2,
+        action=action,
+        timeframe_label=f"Multi-Week Earnings/Quarterly Backtest (Up to 60 Trading Days After {scan_date.isoformat()})",
+    )
+
+    return {
+        "strategy_name": "Earning Pulse (Quarterly & Monthly High/Low Engine)",
+        "ticker": sym,
+        "scan_date": scan_date.isoformat(),
+        "requested_date": req_date.isoformat() if req_date else None,
+        "price": price,
+        "session_open": open_px,
+        "session_high": high_px,
+        "session_low": low_px,
+        "valid_outcome": outcome_label,
+        "trade_idea": {
+            "action": action,
+            "bias": bias,
+            "suggested_contract": f"{strike} (45–90 DTE)",
+            "expiry_type": "45–90 DTE Quarterly / Post-Earnings Options (Delta 0.45 - 0.60)",
+            "entry_level": entry,
+            "stop_loss": stop,
+            "target_1": t1,
+            "target_2": t2,
+            "reward_risk": f"{rr}x",
+            "trigger_condition": trigger,
+            "invalidation_rule": invalidation,
+            "rationale": rationale,
+            "execution_strategy": "Scale 50% at Target 1, move stop to breakeven, and hold runner for quarterly Target 2.",
+        },
+        "key_levels": {
+            "pqh": pqh,
+            "pql": pql,
+            "pq_mid": pq_mid,
+            "pq_range": pq_range,
+            "pmh": pmh,
+            "pml": pml,
+            "pm_mid": pm_mid,
+            "pm_range": pm_range,
+            "atr_14d": atr,
+        },
+        "backtest": backtest,
+        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT"),
+    }
+
+
+def get_all_pulses(ticker: str = "SPY", target_date: Optional[str] = None) -> dict:
+    """
+    Returns all 3 Pulse strategies for `ticker` (optionally on/backtested from `target_date`):
+    1. `pulse` (Day Trading Pulse — Daily PDH/PDL & Weekly PWH/PWL + 8:35 AM 5m Opening Candle)
+    2. `long_term_pulse` (Long Term Pulse — Monthly PMH/PML & Daily PDH/PDL)
+    3. `earning_pulse` (Earning Pulse — Quarterly PQH/PQL & Monthly PMH/PML)
+    """
+    return {
+        "ticker": (ticker or "SPY").strip().upper(),
+        "target_date": target_date,
+        "pulse": get_valid_outcome_and_trade_idea(ticker=ticker, target_date=target_date),
+        "long_term_pulse": get_long_term_pulse(ticker=ticker, target_date=target_date),
+        "earning_pulse": get_earning_pulse(ticker=ticker, target_date=target_date),
     }
 
 
@@ -893,4 +1797,6 @@ if __name__ == "__main__":
     import sys
 
     symbol = sys.argv[1] if len(sys.argv) > 1 else "SPY"
-    print(json.dumps(analyze(symbol), indent=2, default=str))
+    dt = sys.argv[2] if len(sys.argv) > 2 else None
+    print(json.dumps(get_all_pulses(symbol, dt), indent=2, default=str))
+

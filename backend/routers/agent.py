@@ -64,10 +64,28 @@ Your Response Guidelines:
   3. **Plain-English Pros, Cons & Earnings Quality**: Bullet list of `pros`, `cons`, `red_flags`, and `earnings_quality_checks` (e.g. cash flow backing net income), plus `insider_and_institutional` activity if available.
   4. **Key Financial Multiples**: Market Cap, Trailing/Forward P/E, Revenue Growth, Profit Margin, Short Float, and Wall St Analyst target.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers (including StockVerdicts.com insights). If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
-- Day Trading V4 (8:35 AM Opening Candle Playbook) vs. Intraday CPR Plan:
-  You receive BOTH `day_trading_v4` (locked to the 8:30–8:35 AM CT opening 5-minute candle vs PDH/PDL/PWH/PWL) AND `intraday_cpr_plan` (live multi-timeframe 10m/30m/4H bias, Central Pivot Range TC/P/BC, and ATR intraday stops/targets).
-  - When the user asks for **V4** (e.g. 'TSLA v4', 'SPY v4', '8:35 AM valid outcome'), present the `day_trading_v4` 8:35 AM opening-candle validation, PDH/PDL/PWH/PWL levels, and V4 options trade idea. If current live price has since crossed the V4 invalidation stop, explicitly note that the 8:35 AM setup was stopped out/invalidated later in the session.
-  - When the user asks for **Intraday** (e.g. 'TSLA intraday plan', 'intraday setup'), present the `intraday_cpr_plan` (Direction, Option Strike, Entry, Intra Stop, Intra T1/T2, CPR TC/P/BC, and 10m/30m/4H bias alignment), and optionally contrast it with the 8:35 AM V4 outcome.
+- The 3 StockPulse "Pulse" Strategies & Historical Date Backtesting:
+  You receive all 3 live & backtestable Pulse strategies in every ticker's context block:
+  1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
+     - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle**.
+     - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
+     - Recommends `0DTE or Next Expiry` Calls vs. Puts with Entry, Stop-Loss, Target 1, Target 2, and R:R.
+  2. **Long Term Pulse (`long_term_pulse`) — Month & Day High/Low Engine**:
+     - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)**.
+     - Triggered when the user asks for `'long term pulse'` (e.g., `'tsla long term pulse'`, `'what is tesla long term pulse on 09/15/2026?'`, `'backtest nvda long term pulse on 10/01/2026'`).
+     - Recommends `30–60 DTE Monthly Options or Swing Shares` with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
+  3. **Earning Pulse (`earning_pulse`) — Quarterly & Monthly High/Low Engine**:
+     - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)**.
+     - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
+     - Recommends `45–90 DTE Quarterly / Post-Earnings Options` with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
+  4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
+     - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks how today's Pulse performed after 8:35 AM:
+     - Present the **Key Levels as of `scan_date`**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Contract`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
+       - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`)
+       - **Execution Timeline**: Exact timestamp/date when `T1`, `T2`, or `Stop` was hit, Post-Entry High & Low, and End/Close Price
+       - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
+  5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
+     - When the user asks specifically for the **Intraday Plan** (`'TSLA intraday'`), present the live multi-timeframe `10m/30m/4H` bias, Central Pivot Range (`CPR TC/P/BC`), and ATR intraday stops/targets.
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Use bold key levels, clean markdown tables, and concise, high-conviction institutional summaries.
 """
@@ -109,6 +127,21 @@ AGENT_TOOLS = [
 ]
 
 TICKER_ALIASES = {
+    "TESLA": "TSLA",
+    "APPLE": "AAPL",
+    "NVIDIA": "NVDA",
+    "MICROSOFT": "MSFT",
+    "AMAZON": "AMZN",
+    "NETFLIX": "NFLX",
+    "PALANTIR": "PLTR",
+    "BROADCOM": "AVGO",
+    "SUPERMICRO": "SMCI",
+    "COINBASE": "COIN",
+    "ROBINHOOD": "HOOD",
+    "MICRON": "MU",
+    "ORACLE": "ORCL",
+    "SALESFORCE": "CRM",
+    "ALPHABET": "GOOGL",
     "TSMC": "TSM",
     "GOOGLE": "GOOGL",
     "FACEBOOK": "META",
@@ -485,7 +518,7 @@ def get_configured_providers(headers: Optional[Dict[str, str]] = None) -> List[D
     return chain
 
 
-async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
+async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> Dict[str, Any]:
     ticker = ticker.upper().strip()
     ticker = TICKER_ALIASES.get(ticker, ticker)
     raw = await get_stock_analysis(ticker)
@@ -520,6 +553,7 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
         "industry": f.get("industry") or "N/A",
         "price": raw.get("current_price"),
         "verdict": raw.get("verdict"),
+        "requested_date": target_date,
         "final_judgement": {
             "title": fj.get("verdict_title"),
             "badge": fj.get("badge"),
@@ -598,17 +632,32 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     }
 
     try:
-        from day_trading.v4 import get_valid_outcome_and_trade_idea
-        v4_res = await asyncio.to_thread(get_valid_outcome_and_trade_idea, ticker)
-        ret["day_trading_v4"] = v4_res
-        if ticker in {"SPY", "SPXW", "SPX"}:
-            ret["spy_day_trading_v4"] = v4_res
+        from day_trading.v4 import (
+            get_valid_outcome_and_trade_idea,
+            get_long_term_pulse,
+            get_earning_pulse,
+        )
+        v4_res, lt_res, ep_res = await asyncio.gather(
+            asyncio.to_thread(get_valid_outcome_and_trade_idea, ticker, None, target_date),
+            asyncio.to_thread(get_long_term_pulse, ticker, target_date),
+            asyncio.to_thread(get_earning_pulse, ticker, target_date),
+            return_exceptions=True,
+        )
+        if not isinstance(v4_res, Exception):
+            ret["pulse"] = v4_res
+            ret["day_trading_v4"] = v4_res
+            if ticker in {"SPY", "SPXW", "SPX"}:
+                ret["spy_day_trading_v4"] = v4_res
+        if not isinstance(lt_res, Exception):
+            ret["long_term_pulse"] = lt_res
+        if not isinstance(ep_res, Exception):
+            ret["earning_pulse"] = ep_res
     except Exception as se:
-        logger.warning(f"Error computing V4 valid outcome for {ticker}: {se}")
+        logger.warning(f"Error computing Pulse strategies for {ticker}: {se}")
 
     try:
         from backend.services.plan_service import generate_intraday_plan
-        intra_res = await asyncio.to_thread(generate_intraday_plan, [ticker])
+        intra_res = await asyncio.to_thread(generate_intraday_plan, [ticker], target_date)
         rows = (intra_res or {}).get("rows") or []
         if rows:
             ret["intraday_cpr_plan"] = rows[0]
@@ -902,18 +951,38 @@ async def get_agent_status(request: Request):
 
 @router.get("/spy-outcome")
 @router.get("/v4-outcome")
-async def get_spy_outcome_endpoint(ticker: str = "SPY"):
+@router.get("/pulse-outcome")
+async def get_spy_outcome_endpoint(
+    ticker: str = "SPY",
+    date: Optional[str] = None,
+    mode: str = "pulse",
+):
     """
-    Returns the live 5-minute post-open valid outcome, key levels,
-    and actionable CALLS vs PUTS trade plan directly from the V4 engine for any ticker (SPY, SPXW, QQQ, etc.).
+    Returns the live or historical/backtested Pulse outcome, key levels,
+    and actionable CALLS vs PUTS trade plan + backtest verification for any ticker:
+    - mode='pulse' (default): Day Trading Pulse (PDH/PDL & PWH/PWL + 8:35 AM 5m opening candle)
+    - mode='long_term': Long Term Pulse (Month PMH/PML & Day PDH/PDL)
+    - mode='earning': Earning Pulse (Quarterly PQH/PQL & Monthly PMH/PML)
+    - mode='all': All 3 Pulse engines at once
     """
     try:
-        from day_trading.v4 import get_valid_outcome_and_trade_idea
-        sym = (ticker or "SPY").strip().upper()
-        res = await asyncio.to_thread(get_valid_outcome_and_trade_idea, sym)
-        return res
+        from day_trading.v4 import (
+            get_valid_outcome_and_trade_idea,
+            get_long_term_pulse,
+            get_earning_pulse,
+            get_all_pulses,
+        )
+        sym = TICKER_ALIASES.get((ticker or "SPY").strip().upper(), (ticker or "SPY").strip().upper())
+        m = (mode or "pulse").strip().lower()
+        if m in {"long_term", "long-term", "longterm", "lt"}:
+            return await asyncio.to_thread(get_long_term_pulse, sym, date)
+        if m in {"earning", "earnings", "ep"}:
+            return await asyncio.to_thread(get_earning_pulse, sym, date)
+        if m == "all":
+            return await asyncio.to_thread(get_all_pulses, sym, date)
+        return await asyncio.to_thread(get_valid_outcome_and_trade_idea, sym, None, date)
     except Exception as e:
-        logger.error(f"Error fetching V4 outcome for {ticker}: {e}")
+        logger.error(f"Error fetching Pulse outcome for {ticker}: {e}")
         return {"error": str(e)}
 
 
@@ -959,19 +1028,23 @@ async def update_v4_tickers_agent(payload: Dict[str, Any]):
     }
 
 
-
 @router.post("/chat")
 async def chat_with_agent(req: ChatRequest, request: Request):
     """
     Streaming chat endpoint with 5-provider automatic fallback:
     Gemini 3.5 Flash -> Groq -> Cerebras -> OpenRouter -> Local Ollama
     """
+    from day_trading.v4 import parse_pulse_date
+
     headers_dict = dict(request.headers)
     chain = get_configured_providers(headers_dict)
 
     # Determine intent: Market Overview, Universe query, General/Meta query, or Ticker-specific query
     last_user_text = req.messages[-1].content if req.messages else ""
     user_lower = last_user_text.lower().strip()
+
+    requested_date_obj = parse_pulse_date(last_user_text)
+    target_date_str = requested_date_obj.isoformat() if requested_date_obj else None
 
     is_market_query = any(k in user_lower for k in [
         "how is market", "how is the market", "how's market", "how's the market",
@@ -982,7 +1055,13 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "state of the market", "broad market", "market breadth"
     ]) or user_lower in ["market", "markets", "macro", "indices", "how is market today", "how is market today?"]
 
-    is_general_query = not is_market_query and (any(user_lower.startswith(w) for w in [
+    has_stock_feature_keyword = bool(target_date_str) or any(k in user_lower for k in [
+        "pulse", "v4", "backtest", "intraday", "fundamental", "fundamentals",
+        "fair value", "stockverdicts", "verdict", "earning", "earnings",
+        "calls", "puts", "pdh", "pdl", "pmh", "pml", "pqh", "pql"
+    ])
+
+    is_general_query = not is_market_query and not has_stock_feature_keyword and (any(user_lower.startswith(w) for w in [
         "hello", "hi", "hey", "who are you", "what is", "how do", "explain",
         "help", "why is chat", "what can you do", "tell me about", "what are"
     ]) or "only aaoi" in user_lower or "general chat" in user_lower)
@@ -1018,7 +1097,7 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "MORE", "LESS", "MUCH", "MANY", "SOME", "ANY", "ALL", "NONE",
         "WITH", "FROM", "INTO", "OVER", "UNDER", "ABOVE", "BELOW",
         "THIS", "THAT", "THESE", "THOSE", "THEIR", "THERE", "HERE",
-        "THE", "AND", "OR", "BUT", "FOR", "NOR", "YET", "SO",
+        "THE", "AND", "OR", "BUT", "FOR", "NOR", "YET", "SO", "ON", "AT", "IN", "TO", "OF", "BY",
         "CAN", "COULD", "WILL", "WOULD", "SHALL", "SHOULD", "MAY", "MIGHT", "MUST",
         "HAVE", "HAS", "HAD", "BEEN", "BEING", "WERE", "WAS", "ARE", "IS", "AM",
         "GIVE", "SHOW", "TELL", "FIND", "LOOK", "SEEK", "WANT", "NEED", "BUILD",
@@ -1033,9 +1112,15 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "ALERT", "ALERTS", "POST", "MIN", "MINS", "MINUTE", "MINUTES",
         "CST", "EST", "EDT", "CDT", "CT", "ET", "PM", "DTE", "ATM", "OTM", "ITM",
         "DELTA", "GAMMA", "GEX", "PDH", "PDL", "PWH", "PWL", "MID", "ATR",
+        "PMH", "PML", "PQH", "PQL", "CPR",
         "FUND", "FUNDS", "FAIR", "VALUE", "GROWTH", "AVOID", "PROS", "CONS",
         "TRUST", "SCORE", "SCORES", "PEER", "PEERS", "RED", "FLAG", "FLAGS",
-        "CASH", "FLOW", "DEBT", "PEG", "ROE", "EPS", "PE", "YOY", "TTM", "COM"
+        "CASH", "FLOW", "DEBT", "PEG", "ROE", "EPS", "PE", "YOY", "TTM", "COM",
+        "PULSE", "PULSES", "BACKTEST", "BACK", "TERM", "EARNING", "EARNINGS",
+        "MONTH", "MONTHLY", "QUARTER", "QUARTERLY", "DAY", "DAILY", "WEEK", "WEEKLY",
+        "HIGHS", "LOWS", "DATE", "INTRADAY", "COMPARE",
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "SEPT", "OCT", "NOV", "DEC",
+        "JANUARY", "FEBRUARY", "MARCH", "APRIL", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
     }
 
     explicit_ticker = None
@@ -1046,13 +1131,27 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         if dollar_tickers:
             explicit_ticker = dollar_tickers[0].upper()
 
+        # Stage 1.5: Direct match against company names in TICKER_ALIASES (e.g. "tesla", "apple", "nvidia")
+        if not explicit_ticker:
+            word_tokens = re.findall(r"\b[A-Za-z]{2,12}\b", last_user_text)
+            for wt in word_tokens:
+                up_wt = wt.upper()
+                if up_wt in TICKER_ALIASES:
+                    explicit_ticker = TICKER_ALIASES[up_wt]
+                    break
+
         # Stage 2: Phrases like "for AAOI", "on NVDA", "about TSLA", "ticker MDT"
         if not explicit_ticker:
             phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
             if phrase_matches:
-                cand = phrase_matches[0].upper()
-                if cand not in ticker_stop_words:
-                    explicit_ticker = cand
+                for cand_raw in phrase_matches:
+                    cand = cand_raw.upper()
+                    if cand in TICKER_ALIASES:
+                        explicit_ticker = TICKER_ALIASES[cand]
+                        break
+                    if cand not in ticker_stop_words:
+                        explicit_ticker = cand
+                        break
 
         # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA) - skipping stop words
         if not explicit_ticker:
@@ -1061,11 +1160,14 @@ async def chat_with_agent(req: ChatRequest, request: Request):
             if caps_tokens:
                 explicit_ticker = caps_tokens[-1]
 
-        # Stage 4: Fallback for short queries (e.g. "tsla v4", "aaoi setup", "analyze tsla")
+        # Stage 4: Fallback for short queries (e.g. "tsla pulse 10/12/2026", "what is tsla pulse today")
         if not explicit_ticker and not is_general_query:
             raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
             for t in raw_tokens:
                 up = t.upper()
+                if up in TICKER_ALIASES:
+                    explicit_ticker = TICKER_ALIASES[up]
+                    break
                 if up not in ticker_stop_words and len(up) >= 2:
                     explicit_ticker = up
                     break
@@ -1121,16 +1223,21 @@ async def chat_with_agent(req: ChatRequest, request: Request):
             yield f"data: {json.dumps({'type': 'tool_done', 'ticker': 'Default 50 Universe', 'summary': f'Retrieved {t_cnt} tickers and top setups'})}\n\n"
 
         elif active_ticker:
-            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_stock_analysis', 'ticker': active_ticker})}\n\n"
+            lbl_tkr = f"{active_ticker} ({target_date_str})" if target_date_str else active_ticker
+            yield f"data: {json.dumps({'type': 'tool_start', 'tool': 'get_stock_analysis', 'ticker': lbl_tkr})}\n\n"
             try:
-                tool_data = await execute_stock_tool(active_ticker)
+                tool_data = await execute_stock_tool(active_ticker, target_date=target_date_str)
                 if req.entry_price:
                     tool_data["user_entry_price"] = req.entry_price
                     diff = tool_data["price"] - req.entry_price
                     diff_pct = (diff / req.entry_price) * 100
                     tool_data["user_unrealized_pnl"] = f"{diff:+.2f} ({diff_pct:+.2f}%)"
 
-                yield f"data: {json.dumps({'type': 'tool_done', 'ticker': active_ticker, 'summary': tool_data.get('final_judgement', {}).get('summary')})}\n\n"
+                summary_txt = tool_data.get("final_judgement", {}).get("summary")
+                if target_date_str and tool_data.get("pulse", {}).get("backtest"):
+                    bt_badge = tool_data["pulse"]["backtest"].get("result_badge", "")
+                    summary_txt = f"Backtest ({target_date_str}): {bt_badge} | {tool_data['pulse'].get('valid_outcome', '')}"
+                yield f"data: {json.dumps({'type': 'tool_done', 'ticker': lbl_tkr, 'summary': summary_txt})}\n\n"
             except Exception as e:
                 logger.error(f"Error executing stock tool for {active_ticker}: {e}")
                 tool_data = {"error": f"Failed to retrieve data for {active_ticker}: {str(e)}"}
