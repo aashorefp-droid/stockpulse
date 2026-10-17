@@ -64,29 +64,35 @@ Your Response Guidelines:
   3. **Plain-English Pros, Cons & Earnings Quality**: Bullet list of `pros`, `cons`, `red_flags`, and `earnings_quality_checks` (e.g. cash flow backing net income), plus `insider_and_institutional` activity if available.
   4. **Key Financial Multiples**: Market Cap, Trailing/Forward P/E, Revenue Growth, Profit Margin, Short Float, and Wall St Analyst target.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers (including StockVerdicts.com insights). If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
-- The 3 StockPulse "Pulse" Strategies & Historical Date Backtesting:
-  You receive all 3 live & backtestable Pulse strategies in every ticker's context block. For EVERY Pulse strategy (`Pulse`, `Long Term Pulse`, and `Earning Pulse`), you MUST always present BOTH:
-  - **Open Contract (`open_contract` / `suggested_contract`)**: Primary ATM single-leg contract (`Delta ~0.45–0.55`).
-  - **Cost-Efficient Contract Options (`cost_efficient_otm`, `cost_efficient_spread`, & `cost_efficient_butterfly`)**:
-    1. **Low-Cost OTM Runner (`cost_efficient_otm`)**: `Delta ~0.28–0.35` OTM single-leg contract (~50% lower upfront premium with high convexity toward `Target 1`).
-    2. **Defined-Risk Vertical Debit Spread (`cost_efficient_spread`)**: Buy the ATM leg and sell the `Target 1` strike (`~55–65% lower capital cost`, protects against Theta decay & post-earnings IV crush).
-    3. **Directional Butterfly Spread (`cost_efficient_butterfly`)**: Symmetrical `1x : -2x : 1x` Call or Put Butterfly centered on `Target 1` (`~80–85% lower capital cost`, `~6x–7x` max ROI if price pins near `Target 1`, and profits from Theta decay & post-earnings IV crush).
-  - For any Pulse inquiry, present a clean **Markdown Table** comparing the **Key Levels**, **Entry / Stop / Targets (T1 & T2) / R:R**, and all 4 **Contract Options** (`Open Contract`, `OTM Runner`, `Vertical Debit Spread`, and `🦋 Directional Butterfly`).
+- The 3 StockPulse "Pulse" Strategies, Weekend Rollback & Historical Date Backtesting:
+  You receive all 3 live & backtestable Pulse strategies in every ticker's context block (`pulse`, `long_term_pulse`, `earning_pulse`) plus `ready_pulse_markdown_table`.
+  - **CRITICAL WEEKEND / MARKET-CLOSED RULE**:
+    If today is Saturday or Sunday (or `is_weekend_or_closed` is `true`), the market is closed and all Pulse engines automatically evaluate the **Last Completed Weekday Trading Session (`session_day_name` / `scan_date`, e.g., `Friday, October 16, 2026`)**.
+    - You MUST display **`As Of: <session_day_name>`** (the last weekday date, NEVER Saturday or Sunday's date!).
+    - Clearly distinguish the **8:35 AM Opening Entry Price (`pulse.price` / `pulse.trade_idea.entry_level`)** from the **Last Weekday Closing Price (`pulse.latest_session_close` / `price`)**.
+    - For **Pulse (8:35 AM Open Validator)**, ALWAYS use the exact contract strikes in `pulse.trade_idea` (`open_contract`, `cost_efficient_otm`, `cost_efficient_spread`, `cost_efficient_butterfly`), which are anchored to the 8:35 AM entry price — do NOT mix them with `long_term_pulse.trade_idea` strikes unless you explicitly label a separate **Long Term Pulse (Next Week Swing)** section or output the 3-Pulse Comparison Table (`ready_pulse_markdown_table`).
+  - For EVERY Pulse strategy (`Pulse`, `Long Term Pulse`, and `Earning Pulse`), you MUST always present BOTH:
+    - **Open Contract (`open_contract` / `suggested_contract`)**: Primary ATM single-leg contract (`Delta ~0.45–0.55`).
+    - **Cost-Efficient Contract Options (`cost_efficient_otm`, `cost_efficient_spread`, & `cost_efficient_butterfly`)**:
+      1. **Low-Cost OTM Runner (`cost_efficient_otm`)**: `Delta ~0.28–0.35` OTM single-leg contract (~50% lower upfront premium with high convexity toward `Target 1`).
+      2. **Defined-Risk Vertical Debit Spread (`cost_efficient_spread`)**: Buy the ATM leg and sell the `Target 1` strike (`~55–65% lower capital cost`, protects against Theta decay & post-earnings IV crush).
+      3. **Directional Butterfly Spread (`cost_efficient_butterfly`)**: Symmetrical `1x : -2x : 1x` Call or Put Butterfly centered on `Target 1` (`~80–85% lower capital cost`, `~6x–7x` max ROI if price pins near `Target 1`, and profits from Theta decay & post-earnings IV crush).
+  - For any Pulse inquiry, present a clean **Markdown Table** (including `ready_pulse_markdown_table`) comparing the **Key Levels**, **Entry / Stop / Targets (T1 & T2) / R:R**, and all 4 **Contract Options** (`Open Contract`, `OTM Runner`, `Vertical Debit Spread`, and `🦋 Directional Butterfly`).
   1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
-     - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle**.
+     - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle** on `scan_date` (or the last weekday if today is a weekend).
      - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
      - Recommends `0DTE or Next Expiry` Calls vs. Puts (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R.
   2. **Long Term Pulse (`long_term_pulse`) — Month & Day High/Low Engine**:
-     - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)**.
+     - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)** as of `scan_date` (last weekday on weekends).
      - Triggered when the user asks for `'long term pulse'` (e.g., `'tsla long term pulse'`, `'what is tesla long term pulse on 09/15/2026?'`, `'backtest nvda long term pulse on 10/01/2026'`).
      - Recommends `30–60 DTE Monthly Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
   3. **Earning Pulse (`earning_pulse`) — Quarterly & Monthly High/Low Engine**:
-     - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)**.
+     - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** as of `scan_date` (last weekday on weekends).
      - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
      - Recommends `45–90 DTE Quarterly / Post-Earnings Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
   4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
-     - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks how today's Pulse performed after 8:35 AM:
-     - Present the **Key Levels as of `scan_date`**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Open Contract`, `Cost-Efficient OTM, Debit Spread & Butterfly`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
+     - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks for Pulse after 8:35 AM or on a weekend:
+     - Present the **Key Levels as of `scan_date` (`session_day_name`)**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Open Contract`, `Cost-Efficient OTM, Debit Spread & Butterfly`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
        - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`)
        - **Execution Timeline**: Exact timestamp/date when `T1`, `T2`, or `Stop` was hit, Post-Entry High & Low, and End/Close Price
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
@@ -660,15 +666,40 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             asyncio.to_thread(get_earning_pulse, ticker, target_date),
             return_exceptions=True,
         )
-        if not isinstance(v4_res, Exception):
+        if not isinstance(v4_res, Exception) and isinstance(v4_res, dict):
+            ret["session_date"] = v4_res.get("scan_date")
+            ret["session_day_name"] = v4_res.get("session_day_name")
+            ret["is_weekend_or_closed"] = v4_res.get("is_weekend_or_closed", False)
+            ret["as_of"] = v4_res.get("as_of")
             ret["pulse"] = v4_res
             ret["day_trading_v4"] = v4_res
             if ticker in {"SPY", "SPXW", "SPX"}:
                 ret["spy_day_trading_v4"] = v4_res
-        if not isinstance(lt_res, Exception):
+        if not isinstance(lt_res, Exception) and isinstance(lt_res, dict):
             ret["long_term_pulse"] = lt_res
-        if not isinstance(ep_res, Exception):
+        if not isinstance(ep_res, Exception) and isinstance(ep_res, dict):
             ret["earning_pulse"] = ep_res
+
+        # Build ready-to-render 3-Pulse Comparison Markdown Table
+        pulse_rows = [
+            "| Strategy | Session Date | Action & Outcome | Entry / Stop / T1 → T2 (R:R) | Open Contract (ATM) | Cost-Efficient OTM Runner | Vertical Debit Spread | 🦋 Butterfly (T1 Pin) | Backtest Result |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+        ]
+        for label, obj in [
+            ("🎯 **Pulse (8:35 AM)**", v4_res if isinstance(v4_res, dict) else {}),
+            ("📅 **Long Term Pulse**", lt_res if isinstance(lt_res, dict) else {}),
+            ("⚡ **Earning Pulse**", ep_res if isinstance(ep_res, dict) else {}),
+        ]:
+            if obj and not obj.get("error"):
+                ti = obj.get("trade_idea") or {}
+                bt = obj.get("backtest") or {}
+                s_date = obj.get("session_day_name") or obj.get("scan_date") or "N/A"
+                levels_str = f"Entry ${ti.get('entry_level')} · Stop ${ti.get('stop_loss')} · T1 ${ti.get('target_1')} → T2 ${ti.get('target_2')} ({ti.get('reward_risk')})"
+                pulse_rows.append(
+                    f"| {label} | {s_date} | **{ti.get('action')}** ({obj.get('valid_outcome')}) | {levels_str} | `{ti.get('open_contract')}` | `{ti.get('cost_efficient_otm')}` | `{ti.get('cost_efficient_spread')}` | `{ti.get('cost_efficient_butterfly')}` | {bt.get('result_badge', 'N/A')} |"
+                )
+        if len(pulse_rows) > 2:
+            ret["ready_pulse_markdown_table"] = "\n".join(pulse_rows)
     except Exception as se:
         logger.warning(f"Error computing Pulse strategies for {ticker}: {se}")
 

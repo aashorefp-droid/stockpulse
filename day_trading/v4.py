@@ -782,11 +782,42 @@ def _build_pulse_contract_options(
     }
 
 
+def _roll_to_last_weekday(d: date) -> date:
+    """If `d` falls on Saturday (5) or Sunday (6), roll back to Friday (last weekday)."""
+    from datetime import timedelta
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def _format_session_as_of(scan_date: date, req_date: Optional[date] = None) -> tuple[str, str, bool]:
+    """
+    Returns (as_of_label, session_day_name, is_weekend_rolled) so weekend queries
+    always report the Last Weekday Trading Session instead of Saturday/Sunday.
+    """
+    today = date.today()
+    is_weekend = today.weekday() >= 5 or (req_date is not None and req_date.weekday() >= 5)
+    day_full = scan_date.strftime("%A, %B %d, %Y")
+    day_short = scan_date.strftime("%a, %b %d, %Y")
+    if is_weekend and (req_date is None or req_date >= scan_date):
+        as_of = f"{day_short} ({scan_date.isoformat()} · Last Weekday Session — Weekend Market Closed)"
+        session_label = f"{day_full} ({scan_date.isoformat()} · Last Completed Weekday)"
+    elif req_date and req_date != today:
+        as_of = f"{day_short} ({scan_date.isoformat()} · Historical Session Backtest)"
+        session_label = f"{day_full} ({scan_date.isoformat()})"
+    else:
+        as_of = f"{day_short} ({scan_date.isoformat()} · {datetime.now().strftime('%I:%M %p CT')})"
+        session_label = f"{day_full} ({scan_date.isoformat()})"
+    return as_of, session_label, is_weekend
+
+
 def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
     """
     Extracts a target date from a date string or natural-language query such as:
     '10/12/2026', '2026-10-12', '10-12-2026', '10/12', 'Oct 12, 2026',
     'what is tesla pulse on 10/12/2026?'
+    If the extracted date (or 'today' on a weekend) falls on Saturday/Sunday,
+    automatically rolls back to the last weekday (Friday).
     """
     if not raw_text:
         return None
@@ -796,17 +827,17 @@ def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
     s = str(raw_text).strip()
     lower = s.lower()
     today = date.today()
-    if "yesterday" in lower:
-        d = today - timedelta(days=1)
-        while d.weekday() >= 5:
-            d -= timedelta(days=1)
-        return d
+    if "yesterday" in lower or "last weekday" in lower or "last trading day" in lower:
+        d = today - timedelta(days=1) if "yesterday" in lower else today
+        return _roll_to_last_weekday(d)
 
     # 1. YYYY-MM-DD or YYYY/MM/DD
     m_iso = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", s)
     if m_iso:
         try:
-            return date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+            return _roll_to_last_weekday(
+                date(int(m_iso.group(1)), int(m_iso.group(2)), int(m_iso.group(3)))
+            )
         except ValueError:
             pass
 
@@ -817,7 +848,7 @@ def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
             yr = int(m_mdy.group(3))
             if yr < 100:
                 yr += 2000
-            return date(yr, int(m_mdy.group(1)), int(m_mdy.group(2)))
+            return _roll_to_last_weekday(date(yr, int(m_mdy.group(1)), int(m_mdy.group(2))))
         except ValueError:
             pass
 
@@ -837,7 +868,7 @@ def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
             mo = month_map[m_named.group(1)]
             dy = int(m_named.group(2))
             yr = int(m_named.group(3)) if m_named.group(3) else today.year
-            return date(yr, mo, dy)
+            return _roll_to_last_weekday(date(yr, mo, dy))
         except ValueError:
             pass
 
@@ -845,7 +876,9 @@ def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
     m_short = re.search(r"(?:on|for|date|pulse|v4)\s+(\d{1,2})/(\d{1,2})\b", lower)
     if m_short:
         try:
-            return date(today.year, int(m_short.group(1)), int(m_short.group(2)))
+            return _roll_to_last_weekday(
+                date(today.year, int(m_short.group(1)), int(m_short.group(2)))
+            )
         except ValueError:
             pass
 
@@ -854,15 +887,16 @@ def parse_pulse_date(raw_text: Optional[str]) -> Optional[date]:
 
 def _resolve_trading_session(daily_df: pd.DataFrame, requested_date: date) -> tuple[date, pd.DataFrame, Optional[pd.Series]]:
     """
-    Finds the exact or nearest prior trading session in daily_df for requested_date,
+    Finds the exact or nearest prior weekday trading session in daily_df for requested_date,
     returning (resolved_date, completed_before_date, session_row).
     """
+    target_weekday = _roll_to_last_weekday(requested_date)
     daily = _norm_daily(daily_df)
     if daily.empty:
-        return requested_date, pd.DataFrame(), None
+        return target_weekday, pd.DataFrame(), None
     idx_dates = [_idx_date(i) for i in daily.index]
-    # If requested_date is on or after first available bar, find exact match or latest trading date <= requested_date
-    valid_dates = [d for d in idx_dates if d <= requested_date]
+    # Find exact match or latest weekday trading date <= target_weekday
+    valid_dates = [d for d in idx_dates if d <= target_weekday and d.weekday() < 5]
     resolved = valid_dates[-1] if valid_dates else idx_dates[-1]
     completed = daily[[d < resolved for d in idx_dates]]
     session_rows = daily[[d == resolved for d in idx_dates]]
@@ -1120,7 +1154,8 @@ def get_valid_outcome_and_trade_idea(
         scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
     else:
         idx_dates = [_idx_date(i) for i in daily.index]
-        scan_date = idx_dates[-1]
+        weekday_dates = [d for d in idx_dates if d.weekday() < 5]
+        scan_date = weekday_dates[-1] if weekday_dates else _roll_to_last_weekday(idx_dates[-1])
         completed, session_row = _split_session(daily, scan_date)
 
     if len(completed) < 5:
@@ -1382,11 +1417,15 @@ def get_valid_outcome_and_trade_idea(
         horizon="pulse",
     )
 
+    as_of_str, session_day_name, is_weekend = _format_session_as_of(scan_date, req_date)
+
     return {
         "strategy_name": "Pulse (Day Trading 8:35 AM Open Validator)",
         "ticker": sym,
         "yf_symbol": yf_sym,
         "scan_date": scan_date.isoformat(),
+        "session_day_name": session_day_name,
+        "is_weekend_or_closed": is_weekend,
         "requested_date": req_date.isoformat() if req_date else None,
         "candle_source": candle_source,
         "price": price,
@@ -1425,7 +1464,7 @@ def get_valid_outcome_and_trade_idea(
         },
         "backtest": backtest,
         "morning_signal": v4_data.get("signal", {}),
-        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT")
+        "as_of": as_of_str,
     }
 
 
@@ -1451,7 +1490,8 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
     if req_date:
         scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
     else:
-        scan_date = idx_dates[-1]
+        weekday_dates = [d for d in idx_dates if d.weekday() < 5]
+        scan_date = weekday_dates[-1] if weekday_dates else _roll_to_last_weekday(idx_dates[-1])
         completed, session_row = _split_session(daily, scan_date)
 
     if len(completed) < 22:
@@ -1651,10 +1691,14 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         horizon="long_term",
     )
 
+    lt_as_of, lt_day_name, lt_weekend = _format_session_as_of(scan_date, req_date)
+
     return {
         "strategy_name": "Long Term Pulse (Month & Day High/Low Engine)",
         "ticker": sym,
         "scan_date": scan_date.isoformat(),
+        "session_day_name": lt_day_name,
+        "is_weekend_or_closed": lt_weekend,
         "requested_date": req_date.isoformat() if req_date else None,
         "price": price,
         "session_open": open_px,
@@ -1693,7 +1737,7 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
             "atr_14d": atr,
         },
         "backtest": backtest,
-        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT"),
+        "as_of": lt_as_of,
     }
 
 
@@ -1719,7 +1763,8 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
     if req_date:
         scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
     else:
-        scan_date = idx_dates[-1]
+        weekday_dates = [d for d in idx_dates if d.weekday() < 5]
+        scan_date = weekday_dates[-1] if weekday_dates else _roll_to_last_weekday(idx_dates[-1])
         completed, session_row = _split_session(daily, scan_date)
 
     if len(completed) < 63:
@@ -1926,10 +1971,14 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         horizon="earning",
     )
 
+    ep_as_of, ep_day_name, ep_weekend = _format_session_as_of(scan_date, req_date)
+
     return {
         "strategy_name": "Earning Pulse (Quarterly & Monthly High/Low Engine)",
         "ticker": sym,
         "scan_date": scan_date.isoformat(),
+        "session_day_name": ep_day_name,
+        "is_weekend_or_closed": ep_weekend,
         "requested_date": req_date.isoformat() if req_date else None,
         "price": price,
         "session_open": open_px,
@@ -1969,7 +2018,7 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "atr_14d": atr,
         },
         "backtest": backtest,
-        "as_of": datetime.now().strftime("%Y-%m-%d %I:%M %p CT"),
+        "as_of": ep_as_of,
     }
 
 

@@ -1004,7 +1004,11 @@ export default function ChatPage() {
                         : pulseMode === "earning"
                         ? "Earning Pulse"
                         : "8:35 AM Pulse"}{" "}
-                      {spyOutcome.scan_date ? `(${spyOutcome.scan_date})` : ""}
+                      {spyOutcome.session_day_name
+                        ? `· ${spyOutcome.session_day_name}`
+                        : spyOutcome.scan_date
+                        ? `(${spyOutcome.scan_date})`
+                        : ""}
                     </span>
                     <span
                       className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-semibold border ${
