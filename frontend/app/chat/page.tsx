@@ -54,7 +54,10 @@ export default function ChatPage() {
   const [v4CustomInput, setV4CustomInput] = useState<string>("");
   const [v4Saving, setV4Saving] = useState<boolean>(false);
   const [v4SaveStatus, setV4SaveStatus] = useState<string>("");
+  const [showLeftMenu, setShowLeftMenu] = useState<boolean>(true);
+  const [menuTickerInput, setMenuTickerInput] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const isGemPrefix = (k: string) => k.startsWith("AIza") || k.startsWith("AQ.");
 
@@ -209,9 +212,53 @@ export default function ChatPage() {
     fetchV4Tickers();
   }, []);
 
+  const insertPromptIntoChat = (template: string) => {
+    const cleanTicker = menuTickerInput.trim().toUpperCase();
+    const finalTemplate = cleanTicker ? template.replace(/<ticker>/gi, cleanTicker) : template;
+    setInput(finalTemplate);
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const idx = finalTemplate.indexOf("<ticker>");
+      if (idx !== -1) {
+        el.setSelectionRange(idx, idx + "<ticker>".length);
+      } else {
+        el.setSelectionRange(finalTemplate.length, finalTemplate.length);
+      }
+    }, 25);
+  };
+
+  const applyTickerToInput = (sym: string) => {
+    const clean = sym.trim().toUpperCase();
+    if (!clean) return;
+    setMenuTickerInput(clean);
+    if (POPULAR_TICKERS.includes(clean)) {
+      setTicker(clean);
+    } else {
+      setTicker("CUSTOM");
+      setCustomTicker(clean);
+    }
+    if (input.includes("<ticker>")) {
+      const updated = input.replace(/<ticker>/gi, clean);
+      setInput(updated);
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 25);
+    }
+  };
+
   const handleSend = async (customPrompt?: string) => {
-    const textToSend = (customPrompt || input).trim();
-    if (!textToSend || isStreaming) return;
+    const fallbackSym =
+      menuTickerInput.trim().toUpperCase() ||
+      (ticker === "CUSTOM"
+        ? customTicker.toUpperCase() || "TSLA"
+        : ticker === "GENERAL"
+        ? "TSLA"
+        : ticker);
+    const rawText = (customPrompt || input).trim();
+    if (!rawText || isStreaming) return;
+    const textToSend = rawText.replace(/<ticker>/gi, fallbackSym);
 
     const userMessage: Message = { role: "user", content: textToSend };
     const nextMessages = [...messages, userMessage];
@@ -459,11 +506,126 @@ export default function ChatPage() {
         },
       ];
 
+  const leftMenuGroups = [
+    {
+      group: "🎯 Pulse Strategy Suite",
+      items: [
+        {
+          label: "🎯 Pulse Today (<ticker>)",
+          badge: "0DTE / Next",
+          template:
+            "What is <ticker> pulse today? Provide the 8:35 AM validated outcome, key levels (PDH/PDL/PWH/PWL), and Open Contract + OTM Runner + Vertical Debit Spread + Butterfly options.",
+        },
+        {
+          label: "📅 Long Term Pulse (<ticker>)",
+          badge: "Month & Day",
+          template:
+            "What is <ticker> long term pulse today? Check Month (PMH/PML) and Day (PDH/PDL) Highs & Lows, trade plan, and Open + OTM + Debit Spread + Butterfly options.",
+        },
+        {
+          label: "⚡ Earning Pulse (<ticker>)",
+          badge: "Quarter & Month",
+          template:
+            "What is <ticker> earning pulse today? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, 45–90 DTE Open + OTM + Debit Spread + Butterfly options.",
+        },
+        {
+          label: "🦋 Compare All 3 Pulses (<ticker>)",
+          badge: "Table",
+          template:
+            "Compare <ticker> Pulse, Long Term Pulse, and Earning Pulse in a table with Key Levels, Entry/Stop/T1/T2, Open Contract, OTM Runner, Debit Spread, and Butterfly options.",
+        },
+      ],
+    },
+    {
+      group: "⏪ Historical Backtest",
+      items: [
+        {
+          label: "⏪ Backtest Pulse (<ticker>)",
+          badge: pulseDate || "10/12/2026",
+          template: `Backtest <ticker> pulse on ${pulseDate || "10/12/2026"}`,
+        },
+        {
+          label: "⏪ Backtest Long Term Pulse",
+          badge: pulseDate || "09/15/2026",
+          template: `Backtest <ticker> long term pulse on ${pulseDate || "09/15/2026"}`,
+        },
+        {
+          label: "⏪ Backtest Earning Pulse",
+          badge: pulseDate || "08/15/2026",
+          template: `Backtest <ticker> earning pulse on ${pulseDate || "08/15/2026"}`,
+        },
+      ],
+    },
+    {
+      group: "📈 Fundamentals & Technicals",
+      items: [
+        {
+          label: "📈 StockVerdicts Fundamentals",
+          badge: "Fair Value",
+          template:
+            "Analyze <ticker> fundamentals and fair value from StockVerdicts.com: Verdict (Growth/Value/Avoid), Fair-Value Price Ladder (Heavy Buy / Buy / Fair / Exit), Factor Scores, Earnings Quality, and Pros & Cons.",
+        },
+        {
+          label: "📐 Intraday CPR & Multi-TF",
+          badge: "10m/30m/4H",
+          template:
+            "<ticker> intraday plan with 10m/30m/4H bias, Central Pivot Range (CPR), and ATR targets.",
+        },
+        {
+          label: "🏛️ Volume Profile & 52W Fibs",
+          badge: "POC/VAL/VAH",
+          template:
+            "Analyze <ticker> setup today: Volume Profile (POC/VAL/VAH), 52W Fibonacci levels, fundamentals, and systematic trade plan.",
+        },
+        {
+          label: "🛡️ Entry & Stop-Loss Check",
+          badge: "Risk Plan",
+          template:
+            "I'm looking at entering <ticker>. Where is the exact line-in-the-sand stop-loss and take-profit targets?",
+        },
+      ],
+    },
+    {
+      group: "🗓️ Market & Earnings Calendar",
+      items: [
+        {
+          label: "📊 Next Week Earnings Analysis",
+          badge: "EarningsHub",
+          template: "Next week earnings analysis",
+        },
+        {
+          label: "🌐 Market Overview Today",
+          badge: "Macro / VIX",
+          template:
+            "How is market today? Provide a comprehensive institutional breakdown of major indices (SPY, QQQ, IWM), VIX, sector rotations, and key levels.",
+        },
+        {
+          label: "🏆 Default 50 Best Swing Pick",
+          badge: "Top Setups",
+          template:
+            "From Default 50 stocks, what is the best swing trade ticker today with Entry, Stop-Loss, and Targets in a table?",
+        },
+      ],
+    },
+  ];
+
   return (
-    <div className="max-w-5xl mx-auto space-y-4">
+    <div className="max-w-7xl mx-auto space-y-4">
       {/* ── TOP CONTROL BAR ─────────────────────────────────────── */}
       <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowLeftMenu(!showLeftMenu)}
+            className={`px-2.5 py-2 rounded-xl border text-xs font-mono font-semibold transition-all flex items-center gap-1.5 ${
+              showLeftMenu
+                ? "bg-[#4d9fff]/15 border-[#4d9fff]/40 text-[#4d9fff]"
+                : "bg-[#151824] border-slate-800 text-slate-400 hover:text-white"
+            }`}
+            title="Toggle Left Prompt & Strategy Menu"
+          >
+            <span>☰</span>
+            <span className="hidden sm:inline">Menu</span>
+          </button>
           <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-xl shadow-lg shadow-emerald-500/10">
             🤖
           </div>
@@ -517,7 +679,12 @@ export default function ChatPage() {
             {POPULAR_TICKERS.map((t) => (
               <button
                 key={t}
-                onClick={() => setTicker(t)}
+                onClick={() => {
+                  setTicker(t);
+                  if (t !== "GENERAL" && t !== "CUSTOM") {
+                    applyTickerToInput(t);
+                  }
+                }}
                 className={`px-2.5 py-1 text-xs font-mono font-semibold rounded-md transition-all ${
                   ticker === t
                     ? "bg-[#4d9fff] text-black shadow-sm"
@@ -544,7 +711,11 @@ export default function ChatPage() {
               type="text"
               placeholder="TICKER"
               value={customTicker}
-              onChange={(e) => setCustomTicker(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const v = e.target.value.toUpperCase();
+                setCustomTicker(v);
+                setMenuTickerInput(v);
+              }}
               className="w-24 bg-[#151824] border border-slate-700 text-white font-mono text-xs px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-[#4d9fff]"
             />
           )}
@@ -618,8 +789,138 @@ export default function ChatPage() {
         </div>
       </div>
 
+      {/* ── MAIN WORKSPACE: LEFT STRATEGY MENU + CHAT WORKSTATION ─────── */}
+      <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+        {showLeftMenu && (
+          <aside className="w-full lg:w-72 xl:w-80 shrink-0 bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-auto lg:h-[calc(100vh-130px)] lg:min-h-[600px] shadow-2xl overflow-hidden">
+            {/* Left Menu Header & <ticker> Quick-Fill */}
+            <div className="p-3.5 bg-[#0d111d] border-b border-[#1f273d] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">📋</span>
+                  <h2 className="text-xs font-bold text-white uppercase tracking-wider font-mono">
+                    Command Menu
+                  </h2>
+                </div>
+                <span className="text-[10px] font-mono text-cyan-400 bg-cyan-500/10 border border-cyan-500/30 px-1.5 py-0.5 rounded">
+                  Click → Chat
+                </span>
+              </div>
+
+              {/* Optional <ticker> Quick Fill or Keep <ticker> Placeholder */}
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={menuTickerInput}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase().replace(/[^A-Z0-9.^$-]/g, "");
+                      setMenuTickerInput(val);
+                      if (val && input.includes("<ticker>")) {
+                        setInput(input.replace(/<ticker>/gi, val));
+                      }
+                    }}
+                    placeholder="Leave blank for <ticker> or type e.g. TSLA"
+                    className="flex-1 bg-[#121626] border border-slate-700/80 rounded-lg px-2.5 py-1 text-[11px] font-mono text-white placeholder-slate-500 focus:outline-none focus:border-[#4d9fff]"
+                  />
+                  {menuTickerInput && (
+                    <button
+                      onClick={() => setMenuTickerInput("")}
+                      className="text-[10px] font-mono text-amber-300 hover:text-amber-200 px-2 py-1 rounded bg-amber-500/10 border border-amber-500/30"
+                      title="Reset to <ticker> placeholder"
+                    >
+                      Use &lt;ticker&gt;
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setMenuTickerInput("")}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                      !menuTickerInput
+                        ? "bg-amber-500/20 border-amber-500/50 text-amber-300 font-bold"
+                        : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    &lt;ticker&gt;
+                  </button>
+                  {["SPY", "SPXW", "QQQ", "TSLA", "NVDA", "META", "AAPL", "AMD"].map((sym) => (
+                    <button
+                      key={sym}
+                      type="button"
+                      onClick={() => applyTickerToInput(sym)}
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                        menuTickerInput === sym
+                          ? "bg-[#4d9fff] border-[#4d9fff] text-black font-bold"
+                          : "bg-[#121626] border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
+                      }`}
+                    >
+                      {sym}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable Command Groups */}
+            <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
+              {leftMenuGroups.map((grp, gIdx) => (
+                <div key={gIdx} className="space-y-1">
+                  <div className="px-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    {grp.group}
+                  </div>
+                  <div className="space-y-1">
+                    {grp.items.map((item, iIdx) => {
+                      const displayLabel = menuTickerInput
+                        ? item.label.replace(/<ticker>/gi, menuTickerInput)
+                        : item.label;
+                      return (
+                        <div
+                          key={iIdx}
+                          className="group flex items-center gap-1 bg-[#111522] hover:bg-[#171d30] border border-[#1c2338] hover:border-[#4d9fff]/50 rounded-lg p-1.5 transition-all"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => insertPromptIntoChat(item.template)}
+                            className="flex-1 text-left px-1.5 py-0.5 flex flex-col gap-0.5 min-w-0"
+                            title="Click to insert into chat input with <ticker>"
+                          >
+                            <div className="flex items-center justify-between gap-1.5">
+                              <span className="text-xs font-semibold text-slate-200 group-hover:text-white truncate">
+                                {displayLabel}
+                              </span>
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-800/90 text-cyan-300 border border-slate-700/60 shrink-0">
+                                {item.badge}
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-400 truncate">
+                              {menuTickerInput
+                                ? item.template.replace(/<ticker>/gi, menuTickerInput)
+                                : item.template}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isStreaming}
+                            onClick={() => handleSend(item.template)}
+                            className="px-2 py-1.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono font-bold shrink-0 transition-colors disabled:opacity-40"
+                            title="Send immediately"
+                          >
+                            ▶
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </aside>
+        )}
+
       {/* ── CHAT WORKSTATION ─────────────────────────────────────────── */}
-      <div className="bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
+      <div className="flex-1 min-w-0 bg-[#0a0c13] border border-[#1a1d2e] rounded-xl flex flex-col h-[calc(100vh-130px)] min-h-[600px] shadow-2xl relative overflow-hidden">
         {/* Pulse Strategy Suite Banner: Pulse (8:35 Day/Week) | Long Term Pulse (Month & Day) | Earning Pulse (Quarter & Month) + Backtest */}
         {isV4Ticker && (
           <div className="bg-[#0d111d] border-b border-[#1f273d] p-3 sm:p-4 px-4 sm:px-6 transition-all">
@@ -941,15 +1242,35 @@ export default function ChatPage() {
         )}
 
         {/* Input Bar */}
-        <div className="p-3 sm:p-4 bg-[#0d0f17] border-t border-[#1a1d2e]">
+        <div className="p-3 sm:p-4 bg-[#0d0f17] border-t border-[#1a1d2e] space-y-2">
+          {input.includes("<ticker>") && (
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-1.5 text-[11px] font-mono">
+              <span className="text-amber-300 font-semibold">
+                🎯 Type ticker to replace <code className="bg-black/40 px-1 py-0.5 rounded">&lt;ticker&gt;</code> or click a symbol:
+              </span>
+              <div className="flex flex-wrap items-center gap-1">
+                {["SPY", "SPXW", "QQQ", "TSLA", "NVDA", "META", "AAPL", "AMD"].map((sym) => (
+                  <button
+                    key={sym}
+                    type="button"
+                    onClick={() => applyTickerToInput(sym)}
+                    className="px-2 py-0.5 rounded bg-[#151b2e] hover:bg-[#4d9fff] text-cyan-300 hover:text-black border border-cyan-500/30 font-bold text-[10px] transition-colors"
+                  >
+                    {sym}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             <textarea
+              ref={inputRef}
               rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={isStreaming}
-              placeholder={`Ask AI about ${currentActiveTicker} setup, risk management, Fib levels, or general questions (Press Enter to send)...`}
+              placeholder={`Click any command in the Left Menu (inserts <ticker>) or ask AI about ${currentActiveTicker} setup (Press Enter to send)...`}
               className="flex-1 bg-[#151824] border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#4d9fff] resize-none disabled:opacity-50"
             />
             <button
@@ -969,6 +1290,7 @@ export default function ChatPage() {
             <span>Shift + Enter for new line</span>
           </div>
         </div>
+      </div>
       </div>
 
       {/* ── API KEY CONFIG MODAL ────────────────────────────────────────── */}
