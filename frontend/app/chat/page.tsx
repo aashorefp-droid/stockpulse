@@ -38,6 +38,8 @@ export default function ChatPage() {
     "SPY",
     "SPXW",
     "QQQ",
+    "TQQQ",
+    "SQQQ",
     "IWM",
     "DIA",
     "NVDA",

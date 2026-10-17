@@ -1437,7 +1437,7 @@ def macro_hourly_checkin_job():
 _V4_TICKERS_PATH = os.path.join(
     os.path.dirname(__file__), "..", "db", "v4_alert_tickers.json",
 )
-V4_POPULAR_OPTIONS = ["SPY", "SPXW", "QQQ", "IWM", "DIA", "NVDA", "TSLA", "AAPL", "META", "AMD"]
+V4_POPULAR_OPTIONS = ["SPY", "SPXW", "QQQ", "TQQQ", "SQQQ", "IWM", "DIA", "NVDA", "TSLA", "AAPL", "META", "AMD"]
 
 
 def get_v4_alert_tickers() -> list[str]:
