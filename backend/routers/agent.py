@@ -57,12 +57,26 @@ Your Response Guidelines:
   | Ticker | Direction | Verdict | Current Price | Entry Trigger | Stop-Loss | Target 1 | Target 2 | R:R |
   Followed by high-conviction institutional battle plans for the top 3 setups explaining the technical catalyst, Volume Profile support/resistance (POC/VAL/VAH), and risk management.
   CRITICAL: NEVER claim live prices were not attached or provide abstract algebraic formulas when actual institutional setup prices are provided in your context block. Use the exact numbers provided in the INSTITUTIONAL UNIVERSE DATA block!
-- Fundamentals, Valuation & StockVerdicts.com Inquiries:
-  When the user asks about a stock's fundamentals, valuation, fair value, earnings quality, pros & cons, or StockVerdicts (`stockverdicts.com`), present a comprehensive breakdown combining `stockverdicts_fundamentals` and `fundamentals_and_valuation`:
-  1. **StockVerdicts.com Verdict & Signal**: Verdict badge (`Growth` / `Value` / `Avoid`), signal, and Factor Scores (`Fundamental`, `Value`, `Growth`, `Quality`, `Trust Score`).
-  2. **Fair-Value Price Ladder**: Exact `Heavy Buy`, `Buy`, `Fair Value`, and `Exit` price levels vs. current price.
-  3. **Plain-English Pros, Cons & Earnings Quality**: Bullet list of `pros`, `cons`, `red_flags`, and `earnings_quality_checks` (e.g. cash flow backing net income), plus `insider_and_institutional` activity if available.
-  4. **Key Financial Multiples**: Market Cap, Trailing/Forward P/E, Revenue Growth, Profit Margin, Short Float, and Wall St Analyst target.
+- Fundamentals, Valuation, StockVerdicts, Finviz Insider Activity, Congress Trades & AlphaSpread Intrinsic Value:
+  When the user asks about a stock's fundamentals, valuation, fair value, insider trading, congressman/politician buys, or intrinsic value:
+  Present a comprehensive institutional breakdown integrating all available fundamental engines:
+  1. **AlphaSpread DCF Intrinsic Valuation (`alphaspread_intrinsic_value` / `ready_fundamentals_extras_markdown`)**:
+     - Present the 3 DCF valuation scenarios in a clean Markdown table:
+       - **Bear Case**: Intrinsic DCF value, upside/overvaluation %, and key assumptions (Revenue growth, Net margin target, Discount rate, Terminal growth).
+       - **Base Case**: Intrinsic DCF value, upside/overvaluation %, and key assumptions.
+       - **Bull Case**: Intrinsic DCF value, upside/overvaluation %, and key assumptions.
+     - State the overall valuation posture (`OVERVALUED in all 3 cases`, `UNDERVALUED in all 3 cases`, or `MIXED`).
+  2. **Finviz Corporate Insider Trading (`finviz_insider_trading` / `ready_fundamentals_extras_markdown`)**:
+     - Report 90-day and 180-day net insider buying/selling sentiment and dollar values (e.g., `NET INSIDER SELLING (-$938K)`).
+     - Present recent C-suite/Director Form 4 transactions (Date, Insider, Title, Buy/Sale/Option, Shares, Dollar Value).
+  3. **Congressional / Politician Trades (`congress_trades` / `ready_fundamentals_extras_markdown`)**:
+     - Clearly state: Finviz tracks corporate Form 4 insider filings; Congressional stock trades under the STOCK Act are tracked via Quiver Quantitative.
+     - Report 90-day Congress sentiment (`CONGRESS NET BUYING` or `CONGRESS NET SELLING`).
+     - List recent House & Senate transactions with politician names, chamber, political party (D/R), transaction type (Purchase vs. Sale), date, and reported dollar range.
+  4. **StockVerdicts.com Fair-Value Ladder & Financial Multiples**:
+     - Verdict (`Growth` / `Value` / `Avoid`), signal, and Factor Scores.
+     - Fair-Value Price Ladder: `Heavy Buy`, `Buy`, `Fair Value`, and `Exit` threshold.
+     - Financial Multiples: Market Cap, Trailing/Forward P/E, EPS, Revenue Growth, Profit Margin, Short Float.
 - Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers (including StockVerdicts.com insights). If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
 - The 3 StockPulse "Pulse" Strategies, Weekend Rollback & Historical Date Backtesting:
   You receive all 3 live & backtestable Pulse strategies in every ticker's context block (`pulse`, `long_term_pulse`, `earning_pulse`) plus `ready_pulse_markdown_table`.
@@ -718,6 +732,93 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             ret["stockverdicts_fundamentals"] = sv_res
     except Exception as sve:
         logger.warning(f"Error fetching StockVerdicts.com data for {ticker}: {sve}")
+
+    try:
+        from backend.services.fundamentals_extras import (
+            fetch_finviz_insider,
+            fetch_congress_trades,
+            fetch_alphaspread_intrinsic,
+        )
+        fv_res, cg_res, al_res = await asyncio.gather(
+            asyncio.to_thread(fetch_finviz_insider, ticker),
+            asyncio.to_thread(fetch_congress_trades, ticker),
+            asyncio.to_thread(fetch_alphaspread_intrinsic, ticker),
+            return_exceptions=True,
+        )
+        if isinstance(fv_res, dict) and not fv_res.get("error"):
+            ret["finviz_insider_trading"] = fv_res
+        if isinstance(cg_res, dict) and not cg_res.get("error"):
+            ret["congress_trades"] = cg_res
+        if isinstance(al_res, dict) and not al_res.get("error"):
+            ret["alphaspread_intrinsic_value"] = al_res
+
+        # Build ready-to-render Fundamentals Extras Markdown Tables
+        extra_tables = []
+        if isinstance(al_res, dict) and not al_res.get("error"):
+            sc = al_res.get("scenarios") or {}
+            al_rows = [
+                "### 🎯 AlphaSpread DCF Intrinsic Valuation (Bear / Base / Bull Cases)",
+                f"**Overall Valuation Posture:** {al_res.get('overall_read', 'N/A')} · **DCF Range:** {al_res.get('intrinsic_value_range', 'N/A')}",
+                "",
+                "| Scenario | DCF Intrinsic Value | Current Price | Upside / (Overvaluation) | AlphaSpread Verdict | Revenue Growth | Target Net Margin | Discount Rate | Terminal Growth |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ]
+            for sc_name, sc_label in [("bear", "🐻 **Bear Case**"), ("base", "⚖️ **Base Case**"), ("bull", "🐂 **Bull Case**")]:
+                c_data = sc.get(sc_name) or {}
+                if c_data:
+                    asm = c_data.get("assumptions") or {}
+                    dcf_val = f"${c_data.get('intrinsic_value'):.2f}" if c_data.get('intrinsic_value') is not None else "N/A"
+                    cur_px = f"${al_res.get('current_price'):.2f}" if al_res.get('current_price') else "N/A"
+                    up_pct = f"{c_data.get('upside_vs_price_pct'):+.1f}%" if c_data.get('upside_vs_price_pct') is not None else "N/A"
+                    verd = f"**{c_data.get('verdict', 'N/A')}**"
+                    rg = f"{asm.get('revenue_growth_pct')}%" if asm.get('revenue_growth_pct') is not None else "N/A"
+                    nm = f"{asm.get('net_margin_end_pct')}%" if asm.get('net_margin_end_pct') is not None else "N/A"
+                    dr = f"{asm.get('discount_rate_pct')}%" if asm.get('discount_rate_pct') is not None else "N/A"
+                    tg = f"{asm.get('terminal_growth_pct')}%" if asm.get('terminal_growth_pct') is not None else "N/A"
+                    al_rows.append(f"| {sc_label} | {dcf_val} | {cur_px} | {up_pct} | {verd} | {rg} | {nm} | {dr} | {tg} |")
+            extra_tables.append("\n".join(al_rows))
+
+        if isinstance(fv_res, dict) and not fv_res.get("error"):
+            w90 = fv_res.get("last_90_days") or {}
+            fv_rows = [
+                "### 💼 Finviz Corporate Insider Activity (SEC Form 4 Filings)",
+                f"**90-Day Insider Sentiment:** {w90.get('net_signal', 'N/A')} (Buys: {w90.get('open_market_buys', 0)} [{w90.get('buy_value', '$0')}] · Sells: {w90.get('open_market_sells', 0)} [{w90.get('sell_value', '$0')}] · Net: {w90.get('net_value', '$0')})",
+                "",
+                "| Date | Insider | Relationship / Title | Transaction | Price / Cost | Shares | Value ($) | Total Shares Held |",
+                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            ]
+            for tx in (fv_res.get("recent_transactions") or [])[:8]:
+                cost_s = f"${tx.get('cost'):.2f}" if tx.get('cost') is not None else "-"
+                shares_s = f"{tx.get('shares'):,}" if isinstance(tx.get('shares'), (int, float)) else str(tx.get('shares') or "-")
+                tot_s = f"{tx.get('shares_total'):,}" if isinstance(tx.get('shares_total'), (int, float)) else str(tx.get('shares_total') or "-")
+                val_s = tx.get("value") or "-"
+                fv_rows.append(
+                    f"| {tx.get('date')} | **{tx.get('insider')}** | {tx.get('relationship')} | {tx.get('transaction')} | {cost_s} | {shares_s} | {val_s} | {tot_s} |"
+                )
+            extra_tables.append("\n".join(fv_rows))
+
+        if isinstance(cg_res, dict) and not cg_res.get("error"):
+            w90_cg = cg_res.get("last_90_days") or {}
+            cg_rows = [
+                "### 🏛️ Congressional / Politician Trades (STOCK Act Disclosures via Quiver Quantitative)",
+                f"**90-Day Congress Sentiment:** {w90_cg.get('net_signal', 'N/A')} (Purchases: {w90_cg.get('purchases', 0)} · Sales: {w90_cg.get('sales', 0)})",
+                "",
+                "| Traded Date | Politician | Chamber & Party | Transaction | Reported Amount Range |",
+                "| :--- | :--- | :--- | :--- | :--- |",
+            ]
+            for ct in (cg_res.get("recent_trades") or [])[:8]:
+                pol_str = f"**{ct.get('politician')}**"
+                cham = f"{ct.get('chamber', '')} / {ct.get('party', '')}".strip(" /")
+                tx_badge = f"🟢 **Purchase**" if ct.get('transaction') == 'Purchase' else f"🔴 **Sale**"
+                cg_rows.append(
+                    f"| {ct.get('traded')} | {pol_str} | {cham} | {tx_badge} | {ct.get('amount_range') or 'N/A'} |"
+                )
+            extra_tables.append("\n".join(cg_rows))
+
+        if extra_tables:
+            ret["ready_fundamentals_extras_markdown"] = "\n\n".join(extra_tables)
+    except Exception as fe:
+        logger.warning(f"Error fetching fundamentals extras for {ticker}: {fe}")
 
     return ret
 

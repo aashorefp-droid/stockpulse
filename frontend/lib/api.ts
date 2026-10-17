@@ -77,7 +77,11 @@ export interface StockAnalysis {
   };
   fundamentals:  Fundamentals;
   stock_verdict?: StockVerdict | null;
+  finviz_insider?: FinvizInsiderData | null;
+  congress_trades?: CongressTradesData | null;
+  alphaspread_intrinsic?: AlphaSpreadIntrinsicData | null;
 }
+
 
 export interface EarningsPredictionData {
   ticker: string;
@@ -231,4 +235,130 @@ export async function fetchStockVerdict(ticker: string): Promise<StockVerdict | 
     return null;
   }
 }
+
+export interface FinvizInsiderData {
+  source?: string;
+  page_url?: string;
+  ticker?: string;
+  ownership_snapshot?: {
+    insider_own?: string | null;
+    insider_trans_6m?: string | null;
+    institutional_own?: string | null;
+    institutional_trans?: string | null;
+    short_float?: string | null;
+  };
+  last_90_days?: {
+    open_market_buys: number;
+    open_market_sells: number;
+    buy_value: string;
+    sell_value: string;
+    net_value: string;
+    net_signal: string;
+  };
+  last_180_days?: {
+    open_market_buys: number;
+    open_market_sells: number;
+    buy_value: string;
+    sell_value: string;
+    net_value: string;
+    net_signal: string;
+  };
+  recent_transactions?: Array<{
+    insider: string;
+    relationship: string;
+    date: string;
+    transaction: string;
+    cost?: number | null;
+    shares?: number | null;
+    value?: string;
+    shares_total?: number | null;
+  }>;
+  error?: string;
+}
+
+export interface CongressTradesData {
+  source?: string;
+  page_url?: string;
+  ticker?: string;
+  total_trades?: number;
+  last_90_days?: {
+    purchases: number;
+    sales: number;
+    buyers: string[];
+    sellers: string[];
+    net_signal: string;
+  };
+  last_180_days?: {
+    purchases: number;
+    sales: number;
+    buyers: string[];
+    sellers: string[];
+    net_signal: string;
+  };
+  recent_trades?: Array<{
+    politician: string;
+    chamber?: string | null;
+    party?: string | null;
+    transaction: string;
+    amount_range?: string | null;
+    traded: string;
+  }>;
+  note?: string;
+  error?: string;
+}
+
+export interface AlphaSpreadDcfScenario {
+  intrinsic_value?: number | null;
+  upside_vs_price_pct?: number | null;
+  verdict?: string;
+  assumptions?: {
+    revenue_growth_pct?: number | null;
+    net_margin_start_pct?: number | null;
+    net_margin_end_pct?: number | null;
+    cash_flow_conversion_pct?: number | null;
+    discount_rate_pct?: number | null;
+    terminal_growth_pct?: number | null;
+    forecast_years?: number | null;
+  };
+}
+
+export interface AlphaSpreadIntrinsicData {
+  source?: string;
+  page_url?: string;
+  ticker?: string;
+  company?: string;
+  current_price?: number;
+  currency?: string;
+  scenarios?: {
+    bear?: AlphaSpreadDcfScenario;
+    base?: AlphaSpreadDcfScenario;
+    bull?: AlphaSpreadDcfScenario;
+  };
+  multiples_based_relative_value?: number | null;
+  intrinsic_value_range?: string | null;
+  overall_read?: string | null;
+  note?: string;
+  error?: string;
+}
+
+export interface FundamentalsExtrasResponse {
+  ticker: string;
+  finviz_insider?: FinvizInsiderData | null;
+  congress_trades?: CongressTradesData | null;
+  alphaspread_intrinsic?: AlphaSpreadIntrinsicData | null;
+  error?: string;
+}
+
+export async function fetchFundamentalsExtras(ticker: string): Promise<FundamentalsExtrasResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/analysis/fundamentals-extras/${ticker}`, {
+      next: { revalidate: 1800 },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
 

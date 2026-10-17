@@ -570,6 +570,18 @@ export default function ChatPage() {
             "Analyze <ticker> fundamentals and fair value from StockVerdicts.com: Verdict (Growth/Value/Avoid), Fair-Value Price Ladder (Heavy Buy / Buy / Fair / Exit), Factor Scores, Earnings Quality, and Pros & Cons.",
         },
         {
+          label: "🎯 AlphaSpread Intrinsic Value",
+          badge: "Bear/Base/Bull",
+          template:
+            "What is <ticker> intrinsic value from AlphaSpread under the Bear Case, Base Case, and Bull Case? Show DCF price targets, upside/overvaluation %, and key assumptions (revenue growth, margins, discount rate, terminal growth).",
+        },
+        {
+          label: "💼 Insider & Congress Trades",
+          badge: "Form 4 & STOCK Act",
+          template:
+            "Analyze <ticker> insider trading activity (Finviz SEC Form 4) and Congressional stock purchases/sales (STOCK Act disclosures): net 90-day buy/sell sentiment, C-suite transactions, and House/Senate members trading the stock.",
+        },
+        {
           label: "📐 Intraday CPR & Multi-TF",
           badge: "10m/30m/4H",
           template:

@@ -444,8 +444,60 @@ async def get_stock_analysis(ticker: str, as_of: Optional[str] = Query(None)):
             "is_exceptional": is_exceptional,
         },
     })
+
+    # Enrich with Finviz insider activity, Congress trades, and AlphaSpread intrinsic value
+    try:
+        from backend.services.fundamentals_extras import (
+            fetch_finviz_insider,
+            fetch_congress_trades,
+            fetch_alphaspread_intrinsic,
+        )
+        fv_res, cg_res, al_res = await asyncio.gather(
+            asyncio.to_thread(fetch_finviz_insider, ticker),
+            asyncio.to_thread(fetch_congress_trades, ticker),
+            asyncio.to_thread(fetch_alphaspread_intrinsic, ticker),
+            return_exceptions=True,
+        )
+        if isinstance(fv_res, dict) and not fv_res.get("error"):
+            res["finviz_insider"] = fv_res
+        if isinstance(cg_res, dict) and not cg_res.get("error"):
+            res["congress_trades"] = cg_res
+        if isinstance(al_res, dict) and not al_res.get("error"):
+            res["alphaspread_intrinsic"] = al_res
+    except Exception:
+        pass
+
     _ANALYSIS_CACHE[cache_key] = {"time": now, "data": res}
     return res
+
+
+@router.get("/fundamentals-extras/{ticker}")
+async def get_fundamentals_extras(ticker: str):
+    """
+    Returns live Finviz insider trading (Form 4), Congress/politician stock purchases/sales
+    (STOCK Act disclosures), and AlphaSpread DCF intrinsic value (Bear, Base, Bull cases).
+    """
+    sym = ticker.upper().strip()
+    try:
+        from backend.services.fundamentals_extras import (
+            fetch_finviz_insider,
+            fetch_congress_trades,
+            fetch_alphaspread_intrinsic,
+        )
+        fv, cg, al = await asyncio.gather(
+            asyncio.to_thread(fetch_finviz_insider, sym),
+            asyncio.to_thread(fetch_congress_trades, sym),
+            asyncio.to_thread(fetch_alphaspread_intrinsic, sym),
+            return_exceptions=True,
+        )
+        return {
+            "ticker": sym,
+            "finviz_insider": fv if isinstance(fv, dict) else {"error": str(fv)},
+            "congress_trades": cg if isinstance(cg, dict) else {"error": str(cg)},
+            "alphaspread_intrinsic": al if isinstance(al, dict) else {"error": str(al)},
+        }
+    except Exception as e:
+        return {"ticker": sym, "error": str(e)}
 
 
 @router.get("/verdict/{ticker}")
