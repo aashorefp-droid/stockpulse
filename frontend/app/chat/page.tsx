@@ -412,12 +412,12 @@ export default function ChatPage() {
           prompt: `What is the valid outcome for ${currentActiveTicker} based on today's price action and the 8:00 AM playbook? Provide a concrete trade idea for ${currentActiveTicker} Calls vs Puts with exact entry, stop-loss, targets, and contract recommendation.`,
         },
         {
-          title: "⏱️ 5-Min Post-Open Outcome",
-          prompt: `Evaluate ${currentActiveTicker} 5 minutes after open: Which scenario from the 8:00 AM playbook is valid (PDH hold/breakout, PDL reclaim/breakdown, or sweep)? What are the exact trade levels?`,
+          title: `📈 ${currentActiveTicker} Fundamentals (StockVerdicts)`,
+          prompt: `Analyze ${currentActiveTicker} fundamentals and fair value from StockVerdicts.com: Verdict (Growth/Value/Avoid), Fair-Value Price Ladder (Heavy Buy / Buy / Fair / Exit), Factor Scores, Earnings Quality checks, Insider/Institutional activity, and Pros & Cons.`,
         },
         {
-          title: `📊 ${currentActiveTicker} V4 Levels (PDH/PDL)`,
-          prompt: `Break down ${currentActiveTicker} Day Trading V4 key levels today: PDH, PDL, PWH, PWL, Midpoint, ATR, and the 4 possible execution scenarios.`,
+          title: `📊 ${currentActiveTicker} V4 vs Intraday Plan`,
+          prompt: `Compare ${currentActiveTicker} Day Trading V4 (8:35 AM opening candle playbook vs PDH/PDL) with the live Intraday CPR Plan (10m/30m/4H bias, CPR TC/P/BC, and Intra Stop/Targets).`,
         },
         {
           title: "🏛️ Macro & Gamma Alignment",

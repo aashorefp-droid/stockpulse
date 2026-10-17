@@ -35,7 +35,15 @@ AGENT_SYSTEM_PROMPT = """You are StockPulse AI, an institutional-grade swing tra
 You have access to StockPulse's comprehensive multi-module data engine:
 1. Technical Framework: Wyckoff Volume Profile (Point of Control / POC, Value Area High / VAH, Value Area Low / VAL), 52-Week Fibonacci Retracements (61.8% Golden Ratio, 50%, 38.2%), and Stage 2 trend momentum.
 2. Systematic Risk Modeling: Beta vs SPY (systematic volatility scaling), Relative Strength line (RS 1-month trajectory), and ATR-based volatility targets.
-3. Corporate Fundamentals & Valuation: Market Capitalization, Trailing & Forward P/E multiples, Trailing EPS, Profit Margins, YoY Revenue Growth, Short Interest (% of float & short ratio / days to cover), and Wall Street Analyst consensus & price targets.
+3. Corporate Fundamentals, Valuation & StockVerdicts.com (`stockverdicts_fundamentals`):
+   - Live corporate fundamentals (Market Cap, Trailing & Forward P/E, EPS, Profit Margins, YoY Revenue Growth, Short Interest, Wall St Analyst targets).
+   - Live **StockVerdicts.com** (`https://stockverdicts.com/stock/{ticker}`) fundamental & fair-value engine:
+     - Overall Verdict (`Growth`, `Value`, or `Avoid`) & Signal (`Strong Buy`, `Fundamentals below bar`, `Overvalued (≥ exit)`, etc.)
+     - Fair-Value Price Ladder: `Heavy Buy`, `Buy`, `Fair Value`, and `Exit` (overvalued threshold)
+     - Factor Scores (0–100): `Fundamental`, `Value`, `Growth`, `Quality`, `Technical`, and `Trust Score`
+     - Plain-English `Pros`, `Cons`, and `Red Flags`
+     - `Earnings Quality` accounting checks (e.g. Operating Cash Flow vs. Net Income)
+     - `Insider (90D)` & `Institutional (>5%)` SEC Form 4 / 13G activity and `Sector Peers` comparison.
 4. Core Universe / Default 50 Watchlist: StockPulse's curated 50 high-liquidity stocks and ETFs (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, AMD, NFLX, CRM, COIN, etc.).
 5. Broad-Market Macro & Sector Barometer: Major US indices (SPY, QQQ, DIA, IWM), VIX volatility, commodity & bond benchmarks (GLD, TLT, USO, BTC), 11 S&P sector ETFs (XLK, XLF, XLE, etc.), SPY GEX (Gamma levels), Buy-The-Dip indicator, and high-impact economic calendar events.
 
@@ -49,7 +57,13 @@ Your Response Guidelines:
   | Ticker | Direction | Verdict | Current Price | Entry Trigger | Stop-Loss | Target 1 | Target 2 | R:R |
   Followed by high-conviction institutional battle plans for the top 3 setups explaining the technical catalyst, Volume Profile support/resistance (POC/VAL/VAH), and risk management.
   CRITICAL: NEVER claim live prices were not attached or provide abstract algebraic formulas when actual institutional setup prices are provided in your context block. Use the exact numbers provided in the INSTITUTIONAL UNIVERSE DATA block!
-- Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers. If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
+- Fundamentals, Valuation & StockVerdicts.com Inquiries:
+  When the user asks about a stock's fundamentals, valuation, fair value, earnings quality, pros & cons, or StockVerdicts (`stockverdicts.com`), present a comprehensive breakdown combining `stockverdicts_fundamentals` and `fundamentals_and_valuation`:
+  1. **StockVerdicts.com Verdict & Signal**: Verdict badge (`Growth` / `Value` / `Avoid`), signal, and Factor Scores (`Fundamental`, `Value`, `Growth`, `Quality`, `Trust Score`).
+  2. **Fair-Value Price Ladder**: Exact `Heavy Buy`, `Buy`, `Fair Value`, and `Exit` price levels vs. current price.
+  3. **Plain-English Pros, Cons & Earnings Quality**: Bullet list of `pros`, `cons`, `red_flags`, and `earnings_quality_checks` (e.g. cash flow backing net income), plus `insider_and_institutional` activity if available.
+  4. **Key Financial Multiples**: Market Cap, Trailing/Forward P/E, Revenue Growth, Profit Margin, Short Float, and Wall St Analyst target.
+- Ticker-Specific Trade Plans: When provided with a stock ticker's data, synthesize BOTH its technical volume profile levels and its fundamental valuation/growth drivers (including StockVerdicts.com insights). If the user provides an entry price, calculate their unrealized P&L%, distance to POC/VAL/VAH and Fib supports, and give a structured 2-step battle plan (Bounce Target & Invalidation Stop).
 - Day Trading V4 (8:35 AM Opening Candle Playbook) vs. Intraday CPR Plan:
   You receive BOTH `day_trading_v4` (locked to the 8:30–8:35 AM CT opening 5-minute candle vs PDH/PDL/PWH/PWL) AND `intraday_cpr_plan` (live multi-timeframe 10m/30m/4H bias, Central Pivot Range TC/P/BC, and ATR intraday stops/targets).
   - When the user asks for **V4** (e.g. 'TSLA v4', 'SPY v4', '8:35 AM valid outcome'), present the `day_trading_v4` 8:35 AM opening-candle validation, PDH/PDL/PWH/PWL levels, and V4 options trade idea. If current live price has since crossed the V4 invalidation stop, explicitly note that the 8:35 AM setup was stopped out/invalidated later in the session.
@@ -601,7 +615,100 @@ async def execute_stock_tool(ticker: str) -> Dict[str, Any]:
     except Exception as ie:
         logger.warning(f"Error computing Intraday CPR plan for {ticker}: {ie}")
 
+    try:
+        sv_res = await fetch_stockverdicts_data(ticker)
+        if sv_res and not sv_res.get("error"):
+            ret["stockverdicts_fundamentals"] = sv_res
+    except Exception as sve:
+        logger.warning(f"Error fetching StockVerdicts.com data for {ticker}: {sve}")
+
     return ret
+
+
+async def fetch_stockverdicts_data(ticker: str) -> Dict[str, Any]:
+    """
+    Fetches live fundamental verdict, fair-value price ladder (Heavy Buy / Buy / Fair / Exit),
+    factor scores (Value / Growth / Quality / Fundamental / Trust), plain-English Pros & Cons,
+    Earnings Quality accounting checks, and Insider/Institutional activity from stockverdicts.com.
+    """
+    import html as html_lib
+    sym = (ticker or "").strip().upper()
+    if not sym:
+        return {"error": "Empty ticker"}
+
+    api_url = f"https://stockverdicts.com/api/v1/stock/{sym}"
+    page_url = f"https://stockverdicts.com/stock/{sym}"
+    result: Dict[str, Any] = {
+        "source": "stockverdicts.com",
+        "ticker": sym,
+        "page_url": page_url,
+    }
+
+    headers = {
+        "User-Agent": "StockPulseAI/2.0 (+https://stockverdicts.com)",
+        "Accept": "application/json, text/html",
+    }
+
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True, headers=headers) as client:
+        api_task = client.get(api_url)
+        html_task = client.get(page_url)
+        responses = await asyncio.gather(api_task, html_task, return_exceptions=True)
+
+        api_resp, html_resp = responses[0], responses[1]
+
+        if not isinstance(api_resp, Exception) and api_resp.status_code == 200:
+            try:
+                j = api_resp.json()
+                if isinstance(j, dict) and not j.get("error"):
+                    result.update({
+                        "company": j.get("company"),
+                        "sector": j.get("sector"),
+                        "as_of": j.get("as_of"),
+                        "verdict": j.get("verdict"),
+                        "signal": j.get("signal"),
+                        "style": j.get("style"),
+                        "price": j.get("price"),
+                        "fair_value_price_ladder": j.get("price_levels") or {},
+                        "factor_scores": j.get("scores") or {},
+                        "pros": j.get("pros") or [],
+                        "cons": j.get("cons") or [],
+                        "red_flags": j.get("red_flags") or [],
+                    })
+            except Exception:
+                pass
+
+        if not isinstance(html_resp, Exception) and html_resp.status_code == 200:
+            text = html_resp.text or ""
+
+            def _clean_html(raw_html: str) -> str:
+                stripped = re.sub(r"<[^>]+>", " ", raw_html)
+                unescaped = html_lib.unescape(stripped)
+                return re.sub(r"\s+", " ", unescaped).strip()
+
+            # Extract Earnings Quality checks (.eq-row)
+            eq_matches = re.findall(r'<div class="eq-row[^"]*">(.*?)</div>', text, re.S)
+            if eq_matches:
+                result["earnings_quality_checks"] = [_clean_html(m) for m in eq_matches if _clean_html(m)]
+
+            # Extract Technical summary line (.an-tech)
+            tech_m = re.search(r'<div class="an-tech">(.*?)</div>', text, re.S)
+            if tech_m:
+                result["technical_readout"] = _clean_html(tech_m.group(1))
+
+            # Extract Insider & Institutional activity (.ii-box)
+            ii_matches = re.findall(r'<div class="ii-box">(.*?)</div>\s*(?=<div class="ii-box">|</div>)', text, re.S)
+            if ii_matches:
+                result["insider_and_institutional"] = [_clean_html(m) for m in ii_matches if _clean_html(m)]
+
+            # Extract Sector Peers (.peer)
+            peer_matches = re.findall(r'<a class="peer"[^>]*>(.*?)</a>', text, re.S)
+            if peer_matches:
+                result["sector_peers"] = [_clean_html(m) for m in peer_matches if _clean_html(m)]
+
+    if not result.get("verdict") and not result.get("pros"):
+        return {"error": f"No StockVerdicts data found for {sym}"}
+
+    return result
 
 
 def get_universe_tool(watchlist_name: str = "default") -> Dict[str, Any]:
@@ -925,7 +1032,10 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "VALID", "OUTCOME", "OUTCOMES", "PLAYBOOK", "AFTER", "BEFORE", "MORNING",
         "ALERT", "ALERTS", "POST", "MIN", "MINS", "MINUTE", "MINUTES",
         "CST", "EST", "EDT", "CDT", "CT", "ET", "PM", "DTE", "ATM", "OTM", "ITM",
-        "DELTA", "GAMMA", "GEX", "PDH", "PDL", "PWH", "PWL", "MID", "ATR"
+        "DELTA", "GAMMA", "GEX", "PDH", "PDL", "PWH", "PWL", "MID", "ATR",
+        "FUND", "FUNDS", "FAIR", "VALUE", "GROWTH", "AVOID", "PROS", "CONS",
+        "TRUST", "SCORE", "SCORES", "PEER", "PEERS", "RED", "FLAG", "FLAGS",
+        "CASH", "FLOW", "DEBT", "PEG", "ROE", "EPS", "PE", "YOY", "TTM", "COM"
     }
 
     explicit_ticker = None
