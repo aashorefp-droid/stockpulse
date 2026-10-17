@@ -1674,11 +1674,11 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         bias = "Bullish — Holding Above Quarterly Midpoint"
         strike = _suggest_option_strike(sym, price, "CALLS")
         entry = price
-        stop = round(min(pml, pq_mid) - buf * 0.5, 2)
+        stop = round(max(pq_mid - buf * 0.5, entry - atr * 1.5), 2)
         t1 = round(pmh if pmh > entry + atr * 0.5 else pqh, 2)
         t2 = round(max(pqh, t1 + atr * 1.8), 2)
         trigger = f"Holding above Quarterly Midpoint (${pq_mid:.2f}) at ${price:.2f}"
-        invalidation = f"Break below PML / Quarterly Midpoint stop (${stop:.2f})"
+        invalidation = f"Break below Quarterly Midpoint stop (${stop:.2f})"
         rationale = (
             f"{sym} is positioned in the upper half of the quarterly range above PQ Mid (${pq_mid:.2f}), "
             f"favoring upside toward PMH (${pmh:.2f}) and PQH (${pqh:.2f})."
@@ -1689,11 +1689,11 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         bias = "Bearish — Below Quarterly Midpoint"
         strike = _suggest_option_strike(sym, price, "PUTS")
         entry = price
-        stop = round(max(pmh, pq_mid) + buf * 0.5, 2)
+        stop = round(min(pq_mid + buf * 0.5, entry + atr * 1.5), 2)
         t1 = round(pml if pml < entry - atr * 0.5 else pql, 2)
         t2 = round(min(pql, t1 - atr * 1.8), 2)
         trigger = f"Trading below Quarterly Midpoint (${pq_mid:.2f}) at ${price:.2f}"
-        invalidation = f"Reclaim above PMH / Quarterly Midpoint stop (${stop:.2f})"
+        invalidation = f"Reclaim above Quarterly Midpoint stop (${stop:.2f})"
         rationale = (
             f"{sym} is positioned in the lower half of the quarterly range below PQ Mid (${pq_mid:.2f}), "
             f"favoring downside toward PML (${pml:.2f}) and PQL (${pql:.2f})."
