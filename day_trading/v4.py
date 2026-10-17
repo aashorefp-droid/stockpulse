@@ -656,9 +656,10 @@ def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optiona
     session_high = float(v4_data.get("session_high") or price)
     session_low = float(v4_data.get("session_low") or price)
 
-    # Inspect intraday 5-minute bars to capture the 8:30 AM CT (09:30 ET) opening candle
+    # Inspect intraday 5-minute bars to capture the 8:30–8:35 AM CT (09:30–09:35 ET) opening candle
     open_5m = price
     close_5m = price
+    latest_price = price
     try:
         intraday = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
         if not intraday.empty:
@@ -668,11 +669,17 @@ def get_valid_outcome_and_trade_idea(ticker: str = "SPY", current_price: Optiona
                 first_bar = today_bars.iloc[0]
                 last_bar = today_bars.iloc[-1]
                 open_5m = float(first_bar["Open"])
-                close_5m = float(last_bar["Close"])
+                close_5m = float(first_bar["Close"])
+                high_5m = float(first_bar["High"])
+                low_5m = float(first_bar["Low"])
+                latest_price = round(float(last_bar["Close"]), 2)
                 if current_price is None or current_price <= 0:
                     price = round(close_5m, 2)
-                session_high = max(session_high, float(today_bars["High"].max()))
-                session_low = min(session_low, float(today_bars["Low"].min()))
+                    session_high = round(high_5m, 2)
+                    session_low = round(low_5m, 2)
+                else:
+                    session_high = max(session_high, float(today_bars["High"].max()))
+                    session_low = min(session_low, float(today_bars["Low"].min()))
     except Exception:
         pass
 
