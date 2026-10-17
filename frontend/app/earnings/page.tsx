@@ -94,6 +94,9 @@ interface Revisions {
   down_30d?: number;
   net_30d?: number;
   rev_growth_est?: number;
+  eps_prior_year?: number | null;
+  rev_est_current?: string | null;
+  rev_prior_year?: string | null;
   analyst_count?: number;
 }
 
