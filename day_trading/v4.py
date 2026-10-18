@@ -1335,6 +1335,11 @@ def get_valid_outcome_and_trade_idea(
 
     candle_bullish = close_5m >= open_5m
 
+    # Daily Market Structure (D: LL LH HH HL) comparing session high/low vs Previous Day High/Low
+    eval_high = max(daily_high, session_high)
+    eval_low = min(daily_low, session_low) if session_low > 0 else (daily_low if daily_low > 0 else session_low)
+    d_tag, d_detail = _compute_market_structure(eval_high, eval_low, pdh, pdl, prefix="D")
+
     # 1. Sweep & Reject PDH -> Single Decisive Outcome: BUY PUTS
     if session_high > pdh and pdl < price < pdh:
         outcome_label = "Sweep & Reject PDH (Bearish Rejection Confirmed)"
@@ -1501,7 +1506,10 @@ def get_valid_outcome_and_trade_idea(
         fallback_high=daily_high,
         fallback_low=daily_low,
         fallback_close=daily_close,
+        structure_tag=d_tag,
     )
+    backtest["daily_structure"] = d_tag
+    backtest["daily_structure_detail"] = d_detail
 
     contract_opts = _build_pulse_contract_options(
         ticker=sym,
@@ -1528,10 +1536,17 @@ def get_valid_outcome_and_trade_idea(
         "latest_session_close": round(latest_price, 2),
         "session_high": round(session_high, 2),
         "session_low": round(session_low, 2),
-        "valid_outcome": outcome_label,
+        "valid_outcome": f"[{d_tag}] {outcome_label}",
+        "raw_outcome": outcome_label,
+        "structure_tag": d_tag,
+        "daily_structure": d_tag,
+        "daily_structure_detail": d_detail,
         "trade_idea": {
             "action": action,
-            "bias": bias,
+            "bias": f"{bias} · {d_tag}",
+            "structure_tag": d_tag,
+            "daily_structure": d_tag,
+            "daily_structure_detail": d_detail,
             "suggested_contract": suggested_strike,
             "open_contract": contract_opts["open_contract"],
             "cost_efficient_otm": contract_opts["cost_efficient_otm"],
@@ -1547,7 +1562,7 @@ def get_valid_outcome_and_trade_idea(
             "reward_risk": f"{rr}x",
             "trigger_condition": trigger,
             "invalidation_rule": invalidation,
-            "rationale": rationale,
+            "rationale": f"[{d_tag}] {rationale}",
             "execution_strategy": "Scale 50% profit at Target 1, immediately move stop to breakeven, and let runner trail for Target 2."
         },
         "key_levels": {
@@ -1557,6 +1572,9 @@ def get_valid_outcome_and_trade_idea(
             "pwl": round(pwl, 2),
             "pd_mid": round(pd_mid, 2),
             "atr": round(atr, 2),
+            "structure_tag": d_tag,
+            "daily_structure": d_tag,
+            "daily_structure_detail": d_detail,
         },
         "backtest": backtest,
         "morning_signal": v4_data.get("signal", {}),

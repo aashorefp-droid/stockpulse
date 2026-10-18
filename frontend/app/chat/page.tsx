@@ -1303,6 +1303,12 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                       </>
                     ) : (
                       <>
+                        {spyOutcome.key_levels?.daily_structure && (
+                          <>
+                            <span>·</span>
+                            <span>Structure: <b className="text-cyan-300">{spyOutcome.key_levels.daily_structure}</b></span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>PDH: <b>${spyOutcome.key_levels?.pdh?.toFixed(2)}</b></span>
                         <span>·</span>
