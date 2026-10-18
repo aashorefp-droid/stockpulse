@@ -904,6 +904,96 @@ def _resolve_trading_session(daily_df: pd.DataFrame, requested_date: date) -> tu
     return resolved, completed, session
 
 
+def _compute_market_structure(
+    curr_high: float,
+    curr_low: float,
+    prev_high: float,
+    prev_low: float,
+    prefix: str = "D",
+) -> tuple[str, str]:
+    """
+    Computes price action market structure comparing current period to previous period.
+    prefix: 'D' for Daily, 'W' for Weekly.
+    Returns: (structure_tag, structure_detail)
+    Possible tags: 'D: HH HL', 'D: LH LL', 'D: HH LL', 'D: LH HL' (or 'W: ...')
+    """
+    # High comparison
+    if curr_high > prev_high:
+        h_tag = "HH"
+        h_desc = "Higher High"
+    elif curr_high < prev_high:
+        h_tag = "LH"
+        h_desc = "Lower High"
+    else:
+        h_tag = "EQH"
+        h_desc = "Equal High"
+
+    # Low comparison
+    if curr_low < prev_low:
+        l_tag = "LL"
+        l_desc = "Lower Low"
+    elif curr_low > prev_low:
+        l_tag = "HL"
+        l_desc = "Higher Low"
+    else:
+        l_tag = "EQL"
+        l_desc = "Equal Low"
+
+    tag = f"{prefix}: {h_tag} {l_tag}"
+    p_name = "Daily" if prefix == "D" else ("Weekly" if prefix == "W" else prefix)
+
+    if h_tag == "HH" and l_tag == "HL":
+        detail = f"{p_name} Higher High & Higher Low ({h_tag}/{l_tag} · Bullish Trend Expansion)"
+    elif h_tag == "LH" and l_tag == "LL":
+        detail = f"{p_name} Lower High & Lower Low ({h_tag}/{l_tag} · Bearish Trend Breakdown)"
+    elif h_tag == "HH" and l_tag == "LL":
+        detail = f"{p_name} Higher High & Lower Low ({h_tag}/{l_tag} · Outside Bar / Volatility Sweep)"
+    elif h_tag == "LH" and l_tag == "HL":
+        detail = f"{p_name} Lower High & Higher Low ({h_tag}/{l_tag} · Inside Bar / Consolidation)"
+    else:
+        detail = f"{p_name} {h_desc} & {l_desc} ({h_tag}/{l_tag})"
+
+    return tag, detail
+
+
+def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date) -> tuple[str, str, dict]:
+    """
+    Computes weekly market structure (W: HH HL, W: LH LL, etc.) for scan_date vs previous calendar week.
+    Returns: (weekly_tag, weekly_detail, weekly_stats_dict)
+    """
+    idx_dates = [_idx_date(i) for i in daily_df.index]
+    hist_daily = daily_df[[d <= scan_date for d in idx_dates]].copy()
+    if len(hist_daily) < 10:
+        return "W: N/A", "Insufficient bars for weekly structure", {}
+
+    hist_dates = [_idx_date(i) for i in hist_daily.index]
+    hist_daily["year_week"] = [d.isocalendar()[:2] for d in hist_dates]
+
+    unique_weeks = hist_daily["year_week"].drop_duplicates().tolist()
+    if len(unique_weeks) < 2:
+        curr_week_df = hist_daily.tail(5)
+        prev_week_df = hist_daily.iloc[-10:-5]
+    else:
+        curr_week_df = hist_daily[hist_daily["year_week"] == unique_weeks[-1]]
+        prev_week_df = hist_daily[hist_daily["year_week"] == unique_weeks[-2]]
+
+    curr_high = round(float(curr_week_df["high"].max()), 2)
+    curr_low = round(float(curr_week_df["low"].min()), 2)
+    prev_high = round(float(prev_week_df["high"].max()), 2)
+    prev_low = round(float(prev_week_df["low"].min()), 2)
+
+    w_tag, w_detail = _compute_market_structure(curr_high, curr_low, prev_high, prev_low, prefix="W")
+    w_stats = {
+        "curr_week_high": curr_high,
+        "curr_week_low": curr_low,
+        "prev_week_high": prev_high,
+        "prev_week_low": prev_low,
+        "weekly_structure": w_tag,
+        "weekly_structure_detail": w_detail,
+    }
+    return w_tag, w_detail, w_stats
+
+
 def _simulate_trade_backtest(
     bars_df: pd.DataFrame,
     entry: float,
@@ -916,6 +1006,7 @@ def _simulate_trade_backtest(
     fallback_high: Optional[float] = None,
     fallback_low: Optional[float] = None,
     fallback_close: Optional[float] = None,
+    structure_tag: Optional[str] = None,
 ) -> dict:
     """
     Simulates trade execution chronologically across `bars_df` (5m/1h intraday bars or subsequent daily bars).
@@ -1089,8 +1180,13 @@ def _simulate_trade_backtest(
         status = "No subsequent bars after entry yet"
         summary = "Entry triggered on the latest bar; awaiting forward price bars for backtest resolution."
 
+    if structure_tag:
+        badge = f"{badge} · [{structure_tag}]"
+        summary = f"[{structure_tag}] {summary}"
+
     return {
         "timeframe": timeframe_label,
+        "structure_tag": structure_tag,
         "bars_evaluated": bars_evaluated,
         "status": status,
         "result_badge": badge,
@@ -1528,6 +1624,9 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         low_px = pdl
         price = pd_close
 
+    # Daily Market Structure (D: LL LH HH HL) comparing session vs Previous Day High/Low
+    d_tag, d_detail = _compute_market_structure(high_px, low_px, pdh, pdl, prefix="D")
+
     # Determine Long Term Pulse Validated Outcome from Month (PMH/PML) + Day (PDH/PDL) Highs & Lows
     if high_px > pmh and price < pmh:
         outcome_label = "Monthly High Sweep & Daily Rejection Below PMH (Bearish Multi-Week Reversal)"
@@ -1679,7 +1778,10 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         t2=t2,
         action=action,
         timeframe_label=f"Multi-Day Forward Backtest (Up to 30 Trading Days After {scan_date.isoformat()})",
+        structure_tag=d_tag,
     )
+    backtest["daily_structure"] = d_tag
+    backtest["daily_structure_detail"] = d_detail
 
     lt_contracts = _build_pulse_contract_options(
         ticker=sym,
@@ -1704,10 +1806,17 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         "session_open": open_px,
         "session_high": high_px,
         "session_low": low_px,
-        "valid_outcome": outcome_label,
+        "valid_outcome": f"[{d_tag}] {outcome_label}",
+        "raw_outcome": outcome_label,
+        "structure_tag": d_tag,
+        "daily_structure": d_tag,
+        "daily_structure_detail": d_detail,
         "trade_idea": {
             "action": action,
-            "bias": bias,
+            "bias": f"{bias} · {d_tag}",
+            "structure_tag": d_tag,
+            "daily_structure": d_tag,
+            "daily_structure_detail": d_detail,
             "suggested_contract": f"{strike} (30–60 DTE)",
             "open_contract": lt_contracts["open_contract"],
             "cost_efficient_otm": lt_contracts["cost_efficient_otm"],
@@ -1723,7 +1832,7 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
             "reward_risk": f"{rr}x",
             "trigger_condition": trigger,
             "invalidation_rule": invalidation,
-            "rationale": rationale,
+            "rationale": f"[{d_tag}] {rationale}",
             "execution_strategy": "Scale 50% at Target 1, move stop to breakeven, and trail runner toward Target 2.",
         },
         "key_levels": {
@@ -1735,6 +1844,9 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
             "pdl": pdl,
             "pd_mid": pd_mid,
             "atr_14d": atr,
+            "structure_tag": d_tag,
+            "daily_structure": d_tag,
+            "daily_structure_detail": d_detail,
         },
         "backtest": backtest,
         "as_of": lt_as_of,
@@ -1807,6 +1919,9 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         high_px = round(float(prev_day["high"]), 2)
         low_px = round(float(prev_day["low"]), 2)
         price = round(float(prev_day["close"]), 2)
+
+    # Weekly Market Structure (W: LL LH HH HL) comparing current week vs previous calendar week
+    w_tag, w_detail, w_stats = _compute_weekly_structure(daily, scan_date)
 
     # Determine Earning Pulse Validated Outcome from Quarterly (PQH/PQL) + Monthly (PMH/PML) Highs & Lows
     if high_px > pqh and price < pqh:
@@ -1959,7 +2074,10 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         t2=t2,
         action=action,
         timeframe_label=f"Multi-Week Earnings/Quarterly Backtest (Up to 60 Trading Days After {scan_date.isoformat()})",
+        structure_tag=w_tag,
     )
+    backtest["weekly_structure"] = w_tag
+    backtest["weekly_structure_detail"] = w_detail
 
     ep_contracts = _build_pulse_contract_options(
         ticker=sym,
@@ -1984,10 +2102,17 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
         "session_open": open_px,
         "session_high": high_px,
         "session_low": low_px,
-        "valid_outcome": outcome_label,
+        "valid_outcome": f"[{w_tag}] {outcome_label}",
+        "raw_outcome": outcome_label,
+        "structure_tag": w_tag,
+        "weekly_structure": w_tag,
+        "weekly_structure_detail": w_detail,
         "trade_idea": {
             "action": action,
-            "bias": bias,
+            "bias": f"{bias} · {w_tag}",
+            "structure_tag": w_tag,
+            "weekly_structure": w_tag,
+            "weekly_structure_detail": w_detail,
             "suggested_contract": f"{strike} (45–90 DTE)",
             "open_contract": ep_contracts["open_contract"],
             "cost_efficient_otm": ep_contracts["cost_efficient_otm"],
@@ -2003,7 +2128,7 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "reward_risk": f"{rr}x",
             "trigger_condition": trigger,
             "invalidation_rule": invalidation,
-            "rationale": rationale,
+            "rationale": f"[{w_tag}] {rationale}",
             "execution_strategy": "Scale 50% at Target 1, move stop to breakeven, and hold runner for quarterly Target 2.",
         },
         "key_levels": {
@@ -2016,6 +2141,13 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "pm_mid": pm_mid,
             "pm_range": pm_range,
             "atr_14d": atr,
+            "structure_tag": w_tag,
+            "weekly_structure": w_tag,
+            "weekly_structure_detail": w_detail,
+            "curr_week_high": w_stats.get("curr_week_high"),
+            "curr_week_low": w_stats.get("curr_week_low"),
+            "prev_week_high": w_stats.get("prev_week_high"),
+            "prev_week_low": w_stats.get("prev_week_low"),
         },
         "backtest": backtest,
         "as_of": ep_as_of,

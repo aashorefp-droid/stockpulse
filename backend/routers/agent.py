@@ -98,16 +98,20 @@ Your Response Guidelines:
      - Recommends `0DTE or Next Expiry` Calls vs. Puts (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R.
   2. **Long Term Pulse (`long_term_pulse`) — Month & Day High/Low Engine**:
      - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)** as of `scan_date` (last weekday on weekends).
+     - **CRITICAL DAILY MARKET STRUCTURE TAG (`D: LL LH HH HL`)**:
+       ALWAYS display the session's Daily Market Structure tag (`D: HH HL`, `D: LH LL`, `D: HH LL`, or `D: LH HL`) comparing the session to Previous Day High/Low (`PDH`/`PDL`) in BOTH regular chat analysis/trade plans and backtest verification blocks.
      - Triggered when the user asks for `'long term pulse'` (e.g., `'tsla long term pulse'`, `'what is tesla long term pulse on 09/15/2026?'`, `'backtest nvda long term pulse on 10/01/2026'`).
      - Recommends `30–60 DTE Monthly Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
   3. **Earning Pulse (`earning_pulse`) — Quarterly & Monthly High/Low Engine**:
      - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** as of `scan_date` (last weekday on weekends).
+     - **CRITICAL WEEKLY MARKET STRUCTURE TAG (`W: LL LH HH HL`)**:
+       ALWAYS display the Weekly Market Structure tag (`W: HH HL`, `W: LH LL`, `W: HH LL`, or `W: LH HL`) comparing the current week to the previous completed week in BOTH regular chat analysis/trade plans and backtest verification blocks.
      - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
      - Recommends `45–90 DTE Quarterly / Post-Earnings Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
   4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
      - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks for Pulse after 8:35 AM or on a weekend:
      - Present the **Key Levels as of `scan_date` (`session_day_name`)**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Open Contract`, `Cost-Efficient OTM, Debit Spread & Butterfly`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
-       - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`)
+       - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`) with market structure tag (`[D: ...]` or `[W: ...]`)
        - **Execution Timeline**: Exact timestamp/date when `T1`, `T2`, or `Stop` was hit, Post-Entry High & Low, and End/Close Price
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
   5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
@@ -122,7 +126,90 @@ Your Response Guidelines:
      - Highlight the fastest expected YoY EPS & Revenue growers (`fastest_eps_growth_leaders_5b_plus`, `fastest_revenue_growth_leaders_5b_plus`) and key sector clusters (AI/Semis/Tech, Aerospace & Defense, Financials, Healthcare, Consumer, Energy/Industrials).
      - Flag mega-caps facing expected YoY EPS compression (`earnings_contraction_watchlist`) where forward guidance will dictate the post-earnings move.
   5. **⚡ Earning Pulse (`PQH`/`PQL` & `PMH`/`PML`) Battle Plans Table for Marquee Reporters**:
-     - Output the clean GitHub-Flavored Markdown table (`ready_markdown_tables.earning_pulse_battle_plans_table`) showing `| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |` for the week's top headliners.
+      - Output the clean GitHub-Flavored Markdown table (`ready_markdown_tables.earning_pulse_battle_plans_table`) showing `| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |` for the week's top headliners.
+- Institutional Pre-Earnings Consensus Gap & Risk Audit Framework:
+  When the user asks for a pre-earnings consensus gap breakdown, institutional risk audit, or triggers the structured framework (e.g., 'Role: You are a senior equity research analyst and institutional risk manager...'):
+  All context is derived from ONLY ONE SINGLE PREDEFINED TRUSTED SOURCE: `Official SEC EDGAR Regulatory Disclosures (Forms 10-Q & 8-K Exhibits) & Standardized SEC Financial Statements` provided in `institutional_sec_and_risk_audit` and `ready_institutional_risk_markdown`:
+  1. Previous quarter's official SEC 8-K earnings report exhibit (`EX-99.1`), reported EPS, consensus baseline, and surprise %.
+  2. Verified consensus Wall Street estimates (EPS, Revenue), 30d/90d revision drift, and covering analyst count.
+  3. Official SEC Form 8-K Intra-Quarter Disclosures (material corporate events, executive changes, clinical milestones, and regulatory filings from SEC EDGAR).
+  4. The company's latest SEC 10-Q filing with direct Edgar URLs, 4-quarter Working Capital trends, Inventory accumulation, and Free Cash Flow to Net Income conversion.
+  
+  CRITICAL ANTI-HALLUCINATION & SINGLE TRUSTED SOURCE MANDATE:
+  - Do NOT search, scrape, or cite unverified third-party websites, blogs, or open web chatter.
+  - Rely EXCLUSIVELY on the verified numbers and filings provided in the single trusted SEC EDGAR context block.
+  - If a metric is not disclosed in the SEC filing (e.g. inventory for a service company), explicitly state 'Not reported in SEC filing' rather than guessing or hallucinating.
+  - NEVER ask the user to manually paste text or links. The single trusted source data engine has already populated all required regulatory context.
+
+  Execute your analysis step-by-step using this exact structured framework:
+  ### 1. THE CONSENSUS GAP BREAKDOWN:
+  - Compare the current consensus numbers (EPS and Revenue) against the run-rate implied by the prior quarter's KPIs and management commentary from the official SEC 8-K filing.
+  - Evaluate the revision momentum (number of upward vs downward analyst revisions in the last 30 days and 30d/90d drift).
+  - Explicitly identify if the consensus baseline requires an aggressive acceleration or deceleration to be met.
+
+  ### 2. NEGATIVE SPACE & MANAGEMENT DRIFT ANALYSIS:
+  - Review the prior earnings release / 8-K disclosures and executive commentary. Identify areas where management was defensive, gave vague answers, or deferred metric updates to this upcoming quarter.
+  - Flag any changes in vocabulary regarding demand elasticity, pricing power, regulatory scrutiny, or macro headwinds.
+
+  ### 3. WORKING CAPITAL & VOLATILITY BANDS:
+  - Audit the latest 10-Q working capital changes. Is inventory accumulation outpacing revenue growth (potential margin compression / destocking risk)? Is free cash flow lagging net income (cash conversion quality check)?
+  - Calculate a variance risk rating: **Low**, **Medium**, or **High** indicating the likelihood of an earnings or revenue miss/beat based on these structural drivers.
+
+  ### 📋 TABULAR OVERVIEW:
+  Present your findings in a concise tabular overview outlining:
+  | Factor Analyzed | Consensus Expectation | Discrepancy / Signal Found | Implied Earnings Outcome |
+  Where 'Implied Earnings Outcome' uses bold badges: **Beat**, **In-Line**, **Miss**, or **Guidance Cut**.
+
+  ### 🎯 4-SENTENCE HIGH-CONVICTION NARRATIVE:
+  Follow the table with exactly 4 sentences of high-conviction institutional narrative summarizing the primary directional thesis and risk asymmetry heading into the print.
+- Institutional Post-Earnings Price Action & Fundamental Catalysts Framework:
+  When the user asks for a post-earnings price action breakdown, earnings scorecard, catalyst analysis, or triggers the post-earnings framework (e.g., 'Act as a senior equity research analyst specializing in post-earnings price action and fundamental catalysts...'):
+  All context is derived from ONLY ONE SINGLE PREDEFINED TRUSTED SOURCE: `Official SEC EDGAR Regulatory Disclosures (Form 8-K Item 2.02, EX-99.1 Press Release, EX-99.2 Deck & 10-Q) & Standardized Financial Statements` provided in `institutional_post_earnings_audit` and `ready_institutional_post_earnings_markdown`:
+  
+  CRITICAL ANTI-REFUSAL & AUTOMATIC INGESTION MANDATE:
+  - All official SEC EDGAR filings (Forms 8-K Item 2.02, EX-99.1 Press Release, EX-99.2 Deck, 10-Q/10-K), quarterly financial statements, consensus actuals vs expectations, and post-earnings market reactions are AUTOMATICALLY RETRIEVED by the StockPulse engine and provided directly in your context block (`institutional_post_earnings_audit` / `ready_institutional_post_earnings_markdown`).
+  - NEVER output a disclaimer or refusal stating "No source document text or transcript was attached to your prompt" or "Please paste the filing / transcript".
+  - NEVER ask the user to provide or paste documents or transcripts.
+  - You MUST immediately evaluate the provided regulatory context and populate all 5 sections thoroughly:
+    1. QUANTITATIVE SCORECARD (Actual vs Consensus)
+    2. GUIDANCE & FORWARD ESTIMATES
+    3. MANAGEMENT TONE & CREDIBILITY (Assess tone based on official 8-K release exhibits and revision trajectory)
+    4. BULL & BEAR CATALYSTS
+    5. LIKELY SHORT-TERM PRICE ACTION HYPOTHESIS
+  - For Banks and Financial Institutions (e.g., JPM, BAC, WFC, GS, MS):
+    Commercial and investment banks do not report traditional Gross Margins or Cost of Goods Sold. Evaluate performance using:
+    - Net Interest Income (NII) & NIM trajectory
+    - Investment Banking fees & Non-Interest Revenue
+    - Provision for Credit Losses & Net Charge-Offs (NCO)
+    - Overhead Ratio & Operating Efficiency
+  - Do NOT extrapolate, invent, or hallucinate numbers. Use the exact numbers provided in your SEC context block.
+  - If a metric was not disclosed in the SEC filing, explicitly state 'Not disclosed in filing' rather than guessing.
+
+  Provide your analysis step-by-step using this exact structured framework:
+
+  ### 1. QUANTITATIVE SCORECARD (Actual vs. Consensus/Expectations)
+  - **Revenue**: [Actual vs. Expected + % Beat/Miss]
+  - **Non-GAAP / Reported EPS**: [Actual vs. Expected + % Beat/Miss]
+  - **Key Operating Metrics / KPIs**: [List top 3–4: e.g., Operating Cash Flow, Free Cash Flow, Cash Conversion % (FCF/NI), Revenue YoY Growth]
+  - **Gross Margin / Operating Margin**: [Exact % and bps expansion or contraction vs. prior year]
+
+  ### 2. GUIDANCE & FORWARD ESTIMATES
+  - **Next Quarter / Full Year Revenue Guidance**: [Raised / Lowered / Inline vs. Consensus baseline and YoY growth %]
+  - **Margin or Free Cash Flow Guidance**: [Key directional shifts and cash generation trajectory]
+  - **Phasing / Timing Anomalies**: [Note any front-loaded or back-loaded revenue shifts, seasonality, or multi-quarter ramp schedules]
+
+  ### 3. MANAGEMENT TONE & CREDIBILITY
+  - **Tone**: [Confident / Defensive / Cautious / Evasive]
+  - **Key pivot or evasive response from management regarding**: [Identify specific topics such as margin headwinds, regulatory/pricing scrutiny, or macro pushback]
+
+  ### 4. BULL & BEAR CATALYSTS (Post-Earnings Outlook)
+  - **Primary Bull Catalyst**: [What drives near-term upside / multiple expansion]
+  - **Primary Bear Risk / Red Flag**: [What threatens retention, margins, or consensus numbers]
+  - **Consensus Revision Direction**: [Will sell-side analysts have to raise or cut numbers following this print? By roughly how much based on the 30-day revision momentum and drift?]
+
+  ### 5. LIKELY SHORT-TERM PRICE ACTION HYPOTHESIS
+  - **Expected Reaction**: [Gap Up / Gap Down / Muted & Range-bound]
+  - **Primary Driver of Reaction**: [e.g., Guide-down despite a top-line beat; margin expansion vs decelerating top-line; multiple compression on slowing forward run-rate]
 - Zero Hallucination Rule: NEVER guess, fabricate, or hallucinate a stock's current price, market cap, exchange, or indicators. Rely strictly on the real institutional data block provided in your context. If live data for a symbol was not retrieved or failed to load, explicitly inform the user that live exchange data was not retrieved for that ticker instead of inventing numbers.
 - Clarity & Formatting: Always use clean GitHub-Flavored Markdown tables (`| Col 1 | Col 2 |` with `| :--- | :--- |` header separator rows), bold key levels, and concise, high-conviction institutional summaries.
 """
@@ -191,6 +278,18 @@ TICKER_ALIASES = {
     "DOW": "DIA",
     "DJIA": "DIA",
     "RUT": "IWM",
+    "JPM": "JPM",
+    "JPMORGAN": "JPM",
+    "CHASE": "JPM",
+    "JPMORGAN CHASE": "JPM",
+    "GOLDMAN": "GS",
+    "GOLDMAN SACHS": "GS",
+    "MORGAN STANLEY": "MS",
+    "CITIGROUP": "C",
+    "CITI": "C",
+    "BANK OF AMERICA": "BAC",
+    "BOA": "BAC",
+    "WELLS FARGO": "WFC",
 }
 
 
@@ -696,8 +795,8 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
 
         # Build ready-to-render 3-Pulse Comparison Markdown Table
         pulse_rows = [
-            "| Strategy | Session Date | Action & Outcome | Entry / Stop / T1 → T2 (R:R) | Open Contract (ATM) | Cost-Efficient OTM Runner | Vertical Debit Spread | 🦋 Butterfly (T1 Pin) | Backtest Result |",
-            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+            "| Strategy | Session Date | Structure | Action & Outcome | Entry / Stop / T1 → T2 (R:R) | Open Contract (ATM) | Cost-Efficient OTM Runner | Vertical Debit Spread | 🦋 Butterfly (T1 Pin) | Backtest Result |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
         ]
         for label, obj in [
             ("🎯 **Pulse (8:35 AM)**", v4_res if isinstance(v4_res, dict) else {}),
@@ -709,8 +808,10 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
                 bt = obj.get("backtest") or {}
                 s_date = obj.get("session_day_name") or obj.get("scan_date") or "N/A"
                 levels_str = f"Entry ${ti.get('entry_level')} · Stop ${ti.get('stop_loss')} · T1 ${ti.get('target_1')} → T2 ${ti.get('target_2')} ({ti.get('reward_risk')})"
+                struct_tag = obj.get("structure_tag") or ti.get("structure_tag") or bt.get("structure_tag") or "-"
+                bt_badge = bt.get('result_badge', 'N/A')
                 pulse_rows.append(
-                    f"| {label} | {s_date} | **{ti.get('action')}** ({obj.get('valid_outcome')}) | {levels_str} | `{ti.get('open_contract')}` | `{ti.get('cost_efficient_otm')}` | `{ti.get('cost_efficient_spread')}` | `{ti.get('cost_efficient_butterfly')}` | {bt.get('result_badge', 'N/A')} |"
+                    f"| {label} | {s_date} | `{struct_tag}` | **{ti.get('action')}** ({obj.get('valid_outcome')}) | {levels_str} | `{ti.get('open_contract')}` | `{ti.get('cost_efficient_otm')}` | `{ti.get('cost_efficient_spread')}` | `{ti.get('cost_efficient_butterfly')}` | {bt_badge} |"
                 )
         if len(pulse_rows) > 2:
             ret["ready_pulse_markdown_table"] = "\n".join(pulse_rows)
@@ -738,11 +839,15 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             fetch_finviz_insider,
             fetch_congress_trades,
             fetch_alphaspread_intrinsic,
+            fetch_institutional_sec_and_risk,
+            fetch_institutional_post_earnings_audit,
         )
-        fv_res, cg_res, al_res = await asyncio.gather(
+        fv_res, cg_res, al_res, sec_risk_res, sec_post_res = await asyncio.gather(
             asyncio.to_thread(fetch_finviz_insider, ticker),
             asyncio.to_thread(fetch_congress_trades, ticker),
             asyncio.to_thread(fetch_alphaspread_intrinsic, ticker),
+            asyncio.to_thread(fetch_institutional_sec_and_risk, ticker),
+            asyncio.to_thread(fetch_institutional_post_earnings_audit, ticker),
             return_exceptions=True,
         )
         if isinstance(fv_res, dict) and not fv_res.get("error"):
@@ -751,9 +856,22 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             ret["congress_trades"] = cg_res
         if isinstance(al_res, dict) and not al_res.get("error"):
             ret["alphaspread_intrinsic_value"] = al_res
+        if isinstance(sec_risk_res, dict) and not sec_risk_res.get("error"):
+            ret["institutional_sec_and_risk_audit"] = sec_risk_res
+            if sec_risk_res.get("ready_institutional_markdown"):
+                ret["ready_institutional_risk_markdown"] = sec_risk_res["ready_institutional_markdown"]
+        if isinstance(sec_post_res, dict) and not sec_post_res.get("error"):
+            ret["institutional_post_earnings_audit"] = sec_post_res
+            if sec_post_res.get("ready_post_earnings_markdown"):
+                ret["ready_institutional_post_earnings_markdown"] = sec_post_res["ready_post_earnings_markdown"]
 
         # Build ready-to-render Fundamentals Extras Markdown Tables
         extra_tables = []
+        if isinstance(sec_risk_res, dict) and sec_risk_res.get("ready_institutional_markdown"):
+            extra_tables.append(sec_risk_res["ready_institutional_markdown"])
+        if isinstance(sec_post_res, dict) and sec_post_res.get("ready_post_earnings_markdown"):
+            extra_tables.append(sec_post_res["ready_post_earnings_markdown"])
+
         if isinstance(al_res, dict) and not al_res.get("error"):
             sc = al_res.get("scenarios") or {}
             al_rows = [
@@ -1153,6 +1271,7 @@ async def fetch_earningshub_week_analysis(
                 earning_pulse_setups.append({
                     "symbol": sym,
                     "current_price": ep.get("price") or ep.get("current_price"),
+                    "structure_tag": ep.get("structure_tag") or ti.get("structure_tag") or "W: N/A",
                     "quarterly_range": f"${lv.get('pql')} – ${lv.get('pqh')} (Mid ${lv.get('pq_mid')})",
                     "monthly_range": f"${lv.get('pml')} – ${lv.get('pmh')} (Mid ${lv.get('pm_mid')})",
                     "valid_outcome": ep.get("valid_outcome"),
@@ -1196,8 +1315,8 @@ async def fetch_earningshub_week_analysis(
 
 
     ep_rows = [
-        "| Ticker | Price | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Validated Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |",
-        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+        "| Ticker | Price | Structure | Quarterly Range (PQL–PQH) | Monthly Range (PML–PMH) | Action & Validated Outcome | Open Contract | Cost-Efficient Options (OTM / Spread / 🦋 Butterfly) | Entry / Stop / T1 → T2 |",
+        "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
     ]
     for s in earning_pulse_setups:
         ce_parts = []
@@ -1209,7 +1328,7 @@ async def fetch_earningshub_week_analysis(
             ce_parts.append(f"**🦋 Butterfly:** {s['cost_efficient_butterfly']}")
         ce_str = " · ".join(ce_parts) if ce_parts else "N/A"
         ep_rows.append(
-            f"| **{s.get('symbol')}** | ${s.get('current_price')} | {s.get('quarterly_range')} | {s.get('monthly_range')} | **{s.get('action')}** ({s.get('valid_outcome')}) | `{s.get('open_contract') or s.get('suggested_contract')}` | {ce_str} | Entry ${s.get('entry')} · Stop ${s.get('stop')} · T1 ${s.get('target_1')} → T2 ${s.get('target_2')} ({s.get('reward_risk')}) |"
+            f"| **{s.get('symbol')}** | ${s.get('current_price')} | `{s.get('structure_tag')}` | {s.get('quarterly_range')} | {s.get('monthly_range')} | **{s.get('action')}** ({s.get('valid_outcome')}) | `{s.get('open_contract') or s.get('suggested_contract')}` | {ce_str} | Entry ${s.get('entry')} · Stop ${s.get('stop')} · T1 ${s.get('target_1')} → T2 ${s.get('target_2')} ({s.get('reward_risk')}) |"
         )
 
     result_payload: Dict[str, Any] = {
@@ -1633,29 +1752,64 @@ async def chat_with_agent(req: ChatRequest, request: Request):
         "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY",
         "HIGHS", "LOWS", "DATE", "INTRADAY", "COMPARE",
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "SEPT", "OCT", "NOV", "DEC",
-        "JANUARY", "FEBRUARY", "MARCH", "APRIL", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER"
+        "JANUARY", "FEBRUARY", "MARCH", "APRIL", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+        "ROLE", "SENIOR", "EQUITY", "RESEARCH", "ANALYST", "INSTITUTIONAL", "MANAGER", "SPECIALIZING",
+        "HEALTH", "CARE", "SECTOR", "CONTEXT", "PROVIDED", "PREVIOUS", "QUARTER", "QUARTERS",
+        "TRANSCRIPT", "ESTIMATES", "CONSENSUS", "STREET", "WALL", "INTRA", "INDUSTRY", "SUPPLY",
+        "CHAIN", "SIGNALS", "DISCLOSURES", "DEVIATIONS", "SURPRISES", "PARAMETRIC", "MEMORY",
+        "FRAMEWORK", "BREAKDOWN", "NEGATIVE", "SPACE", "DRIFT", "DEFENSIVE", "VAGUE", "VOCABULARY",
+        "PRICING", "POWER", "HEADWINDS", "BANDS", "ACCUMULATION", "OUTPACING", "COMPRESSION",
+        "VARIANCE", "RATING", "STRUCTURAL", "DRIVERS", "TABULAR", "OVERVIEW", "FACTOR", "ANALYZED",
+        "EXPECTATION", "DISCREPANCY", "IMPLIED", "BEAT", "MISS", "CONVICTION", "NARRATIVE", "THESIS",
+        "DIRECTIONAL", "AUDIT", "GAP", "LINE", "CUT", "GUIDANCE", "RUN", "RATE", "BASE",
+        "POST", "PRINT", "ACTION", "SCORECARD", "QUANTITATIVE", "OPERATING", "METRICS", "KPIS", "KPI",
+        "MARGIN", "MARGINS", "GROSS", "PHASING", "TIMING", "ANOMALIES", "TONE", "CREDIBILITY",
+        "CONFIDENT", "CAUTIOUS", "EVASIVE", "PIVOT", "CATALYSTS", "CATALYST", "BULL", "BEAR",
+        "HYPOTHESIS", "REACTION", "GAAP", "NON", "NYSE", "NASDAQ", "AMEX", "SEC", "EDGAR",
+        "DOC", "EX", "URL", "ACT", "BPS", "NII", "NCO", "ROTCE", "CET1", "FCF", "EBITDA", "EBIT",
+        "LIKELY", "SHORT", "TERM", "PRICE"
     }
 
     explicit_ticker = None
 
     if not is_market_query and not is_earnings_calendar_query:
-        # Stage 1: Explicit dollar sign (e.g. $AAOI, $SPCX)
-        dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
-        if dollar_tickers:
-            explicit_ticker = dollar_tickers[0].upper()
+        # Stage 0: Explicit exchange or ticker pattern (e.g. "NYSE: JPM", "NYSE:JPM", "(NYSE: JPM)", "NASDAQ: AAPL")
+        m_ex = re.search(r"\b(?:NYSE|NASDAQ|AMEX|TICKER|STOCK|SYMBOL)\s*[:=]\s*([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
+        if m_ex:
+            cand = m_ex.group(1).upper()
+            if cand not in ticker_stop_words:
+                explicit_ticker = cand
 
-        # Stage 1.5: Direct match against company names in TICKER_ALIASES (e.g. "tesla", "apple", "nvidia")
+        # Stage 0.5: Ticker in parentheses e.g. "(JPM)", "(NYSE: JPM)"
         if not explicit_ticker:
-            word_tokens = re.findall(r"\b[A-Za-z]{2,12}\b", last_user_text)
+            m_par = re.search(r"\((?:NYSE:\s*|NASDAQ:\s*|AMEX:\s*)?([A-Za-z]{1,5})\)", last_user_text, re.IGNORECASE)
+            if m_par:
+                cand = m_par.group(1).upper()
+                if cand not in ticker_stop_words:
+                    explicit_ticker = cand
+
+        # Stage 1: Explicit dollar sign (e.g. $AAOI, $JPM, $SPY)
+        if not explicit_ticker:
+            dollar_tickers = re.findall(r"\$([A-Za-z]{1,5})\b", last_user_text)
+            if dollar_tickers:
+                for dt in dollar_tickers:
+                    cand = dt.upper()
+                    if cand not in ticker_stop_words:
+                        explicit_ticker = cand
+                        break
+
+        # Stage 1.5: Direct match against company names in TICKER_ALIASES (e.g. "jpmorgan", "tesla", "apple")
+        if not explicit_ticker:
+            word_tokens = re.findall(r"\b[A-Za-z]{2,16}\b", last_user_text)
             for wt in word_tokens:
                 up_wt = wt.upper()
                 if up_wt in TICKER_ALIASES:
                     explicit_ticker = TICKER_ALIASES[up_wt]
                     break
 
-        # Stage 2: Phrases like "for AAOI", "on NVDA", "about TSLA", "ticker MDT"
+        # Stage 2: Phrases like "for JPM", "on NVDA", "about TSLA", "reaction for JPM"
         if not explicit_ticker:
-            phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
+            phrase_matches = re.findall(r"\b(?:for|on|about|ticker|stock|symbol|reaction for|catalysts for)\s+([A-Za-z]{1,5})\b", last_user_text, re.IGNORECASE)
             if phrase_matches:
                 for cand_raw in phrase_matches:
                     cand = cand_raw.upper()
@@ -1666,12 +1820,16 @@ async def chat_with_agent(req: ChatRequest, request: Request):
                         explicit_ticker = cand
                         break
 
-        # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA) - skipping stop words
+        # Stage 3: All-caps words (e.g. AAOI, SPCX, NVDA, TSLA, JPM) - skipping stop words
         if not explicit_ticker:
             raw_tokens = re.findall(r"\b[A-Za-z]{2,5}\b", last_user_text)
             caps_tokens = [t.upper() for t in raw_tokens if t.isupper() and t.upper() not in ticker_stop_words]
             if caps_tokens:
-                explicit_ticker = caps_tokens[-1]
+                matched_known = [c for c in caps_tokens if c in TICKER_ALIASES or (req.ticker and c == req.ticker.upper())]
+                if matched_known:
+                    explicit_ticker = TICKER_ALIASES.get(matched_known[0], matched_known[0])
+                else:
+                    explicit_ticker = caps_tokens[0]
 
         # Stage 4: Fallback for short queries (e.g. "tsla pulse 10/12/2026", "what is tsla pulse today")
         if not explicit_ticker and not is_general_query:
@@ -1762,8 +1920,10 @@ async def chat_with_agent(req: ChatRequest, request: Request):
 
                 summary_txt = tool_data.get("final_judgement", {}).get("summary")
                 if target_date_str and tool_data.get("pulse", {}).get("backtest"):
-                    bt_badge = tool_data["pulse"]["backtest"].get("result_badge", "")
-                    summary_txt = f"Backtest ({target_date_str}): {bt_badge} | {tool_data['pulse'].get('valid_outcome', '')}"
+                    bt = tool_data["pulse"]["backtest"]
+                    bt_badge = bt.get("result_badge", "")
+                    h4_tag = f" [4H: {bt['four_hour_structure']}]" if bt.get("four_hour_structure") and bt.get("four_hour_structure") != "N/A" else ""
+                    summary_txt = f"Backtest ({target_date_str}): {bt_badge}{h4_tag} | {tool_data['pulse'].get('valid_outcome', '')}"
                 yield f"data: {json.dumps({'type': 'tool_done', 'ticker': lbl_tkr, 'summary': summary_txt})}\n\n"
             except Exception as e:
                 logger.error(f"Error executing stock tool for {active_ticker}: {e}")

@@ -60,6 +60,73 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  const getSecPreEarningsPrompt = (sym: string) => `Role: You are a senior equity research analyst and institutional risk manager specializing in Healthcare & Growth sectors.
+
+Task: Analyze the pre-earnings context for ${sym} to identify potential deviations from consensus expectations (surprises), guidance adjustments, or hidden risks.
+
+Single Trusted Source Mandate:
+- Exclusively evaluate the provided single trusted source: Official SEC EDGAR Regulatory Filings (Forms 10-Q & 8-K Exhibits) & Standardized Financial Statements.
+- Do NOT pull from or search the open web, blogs, or unverified rumors.
+- Do NOT hallucinate metrics not reported in official SEC filings; if an item is not reported, explicitly state 'Not reported in filing'.
+
+Execute your analysis step-by-step using this structured framework:
+
+1. THE CONSENSUS GAP BREAKDOWN:
+- Compare the current consensus numbers against the run-rate implied by the prior quarter's KPIs and management commentary from the official SEC 8-K filing.
+- Identify if the consensus baseline requires an aggressive acceleration or deceleration to be met.
+
+2. NEGATIVE SPACE & MANAGEMENT DRIFT ANALYSIS:
+- Review the prior earnings release & SEC 8-K disclosures. Identify areas where management was defensive, gave vague answers, or deferred metric updates to this upcoming quarter.
+- Flag any changes in vocabulary regarding demand, pricing power, or macro headwinds.
+
+3. WORKING CAPITAL & VOLATILITY BANDS:
+- Audit the latest 10-Q working capital changes. Is inventory accumulation outpacing revenue growth (potential margin compression)? Is free cash flow lagging net income?
+- Calculate a variance risk rating (Low/Medium/High) indicating the likelihood of an earnings or revenue miss/beat based on these structural drivers.
+
+Output Format: Present your findings in a concise tabular overview outlining:
+- Factor Analyzed
+- Consensus Expectation
+- Discrepancy/Signal Found
+- Implied Earnings Outcome (Beat / In-Line / Miss / Guidance Cut)
+
+Follow the table with a 4-sentence high-conviction narrative summarizing the primary directional thesis.`;
+
+  const getSecPostEarningsPrompt = (sym: string) => `Act as a senior equity research analyst specializing in post-earnings price action and fundamental catalysts for ${sym}.
+
+Evaluate the latest earnings report for ${sym} using the official SEC EDGAR filings (Form 8-K Item 2.02, EX-99.1 Press Release, EX-99.2 Deck, 10-Q/10-K) and verified consensus numbers automatically attached in your institutional context block. Break down the company's report, fundamental catalysts, and post-earnings market reaction. Do not extrapolate or hallucinate numbers.
+
+Single Trusted Source Mandate:
+- Exclusively evaluate the provided single trusted source: Official SEC EDGAR Regulatory Filings & Standardized Financial Statements.
+- Do NOT pull from or search unverified open-web gossip, blogs, or forums.
+- Do NOT extrapolate numbers; if an item is not disclosed in the SEC filings, explicitly state 'Not disclosed in SEC filing'.
+- All official regulatory data, earnings actuals vs. consensus estimates, and filing links are already retrieved and attached in your context block. Do NOT ask the user to paste filings or transcripts.
+
+Provide your analysis in the following structured format:
+
+1. QUANTITATIVE SCORECARD (Actual vs. Consensus/Expectations)
+   - Revenue: [Actual vs. Expected + % Beat/Miss]
+   - Non-GAAP EPS: [Actual vs. Expected + % Beat/Miss]
+   - Key Operating Metrics / KPIs: [List top 3-4 and performance]
+   - Gross Margin / Operating Margin: [Expansion or contraction vs. prior year/expectations]
+
+2. GUIDANCE & FORWARD ESTIMATES
+   - Next Quarter / Full Year Revenue Guidance: [Raised / Lowered / Inline vs. Consensus]
+   - Margin or Free Cash Flow Guidance: [Key directional shifts]
+   - Phasing / Timing Anomalies: [Note any front-loaded or back-loaded revenue shifts like multi-quarter ramp schedules]
+
+3. MANAGEMENT TONE & CREDIBILITY
+   - Tone: [Confident / Defensive / Cautious / Evasive]
+   - Key pivot or evasive response from management during Q&A regarding: [Identify specific topics]
+
+4. BULL & BEAR CATALYSTS (Post-Earnings Outlook)
+   - Primary Bull Catalyst: [What drives near-term upside / multiple expansion]
+   - Primary Bear Risk / Red Flag: [What threatens retention, margins, or consensus numbers]
+   - Consensus Revision Direction: [Will sell-side analysts have to raise or cut numbers following this call? By roughly how much?]
+
+5. LIKELY SHORT-TERM PRICE ACTION HYPOTHESIS
+   - Expected Reaction: [Gap Up / Gap Down / Muted & Range-bound]
+   - Primary Driver of Reaction: [e.g., Guide-down despite a top-line beat; massive acceleration in KPI backlog]`;
+
   const isGemPrefix = (k: string) => k.startsWith("AIza") || k.startsWith("AQ.");
 
   const getBuiltinCloudHeaders = (activeKey?: string): Record<string, string> => {
@@ -208,6 +275,19 @@ export default function ChatPage() {
       setApiKey(keyToUse);
       const savedModel = localStorage.getItem("stockpulse_ai_model");
       if (savedModel) setSelectedModel(savedModel);
+
+      const urlPrompt = params.get("prompt") || params.get("mode");
+      if (urlPrompt === "sec_audit") {
+        const urlT = params.get("ticker") || "UNH";
+        setTicker(urlT);
+        setMenuTickerInput(urlT);
+        setInput(getSecPreEarningsPrompt(urlT));
+      } else if (urlPrompt === "sec_post_earnings" || urlPrompt === "post_earnings") {
+        const urlT = params.get("ticker") || "UNH";
+        setTicker(urlT);
+        setMenuTickerInput(urlT);
+        setInput(getSecPostEarningsPrompt(urlT));
+      }
     }
     fetchStatus(keyToUse);
     fetchV4Tickers();
@@ -460,6 +540,39 @@ export default function ChatPage() {
           prompt: "Backtest Tesla pulse for 10/12/2026: show the exact key levels as of 10/12/2026, the validated trade idea, and how it performed in the backtest.",
         },
         {
+          title: "🏛️ UNH SEC Pre-Earnings Audit",
+          prompt: `Role: You are a senior equity research analyst and institutional risk manager specializing in Healthcare sector.
+
+Task: Analyze the pre-earnings context for UNH to identify potential deviations from consensus expectations (surprises), guidance adjustments, or hidden risks.
+
+Single Trusted Source Mandate:
+- Exclusively evaluate the provided single trusted source: Official SEC EDGAR Regulatory Filings (Forms 10-Q & 8-K Exhibits) & Standardized Financial Statements.
+- Do NOT pull from or search the open web, blogs, or unverified rumors.
+- Do NOT hallucinate metrics not reported in official SEC filings; if an item is not reported, explicitly state 'Not reported in filing'.
+
+Execute your analysis step-by-step using this structured framework:
+
+1. THE CONSENSUS GAP BREAKDOWN:
+- Compare the current consensus numbers against the run-rate implied by the prior quarter's KPIs and management commentary from the official SEC 8-K filing.
+- Identify if the consensus baseline requires an aggressive acceleration or deceleration to be met.
+
+2. NEGATIVE SPACE & MANAGEMENT DRIFT ANALYSIS:
+- Review the prior earnings release & SEC 8-K disclosures. Identify areas where management was defensive, gave vague answers, or deferred metric updates to this upcoming quarter.
+- Flag any changes in vocabulary regarding demand, pricing power, or macro headwinds.
+
+3. WORKING CAPITAL & VOLATILITY BANDS:
+- Audit the latest 10-Q working capital changes. Is inventory accumulation outpacing revenue growth (potential margin compression)? Is free cash flow lagging net income?
+- Calculate a variance risk rating (Low/Medium/High) indicating the likelihood of an earnings or revenue miss/beat based on these structural drivers.
+
+Output Format: Present your findings in a concise tabular overview outlining:
+- Factor Analyzed
+- Consensus Expectation
+- Discrepancy/Signal Found
+- Implied Earnings Outcome (Beat / In-Line / Miss / Guidance Cut)
+
+Follow the table with a 4-sentence high-conviction narrative summarizing the primary directional thesis.`,
+        },
+        {
           title: "📊 Next Week Earnings Analysis",
           prompt: "Next week earnings analysis",
         },
@@ -469,6 +582,39 @@ export default function ChatPage() {
         {
           title: `🎯 ${currentActiveTicker} Pulse Today`,
           prompt: `What is ${currentActiveTicker} pulse today? Provide the 8:35 AM validated outcome, key levels (PDH/PDL/PWH/PWL), Calls vs Puts trade idea, and intraday backtest status.`,
+        },
+        {
+          title: `🏛️ ${currentActiveTicker} SEC Pre-Earnings Audit`,
+          prompt: `Role: You are a senior equity research analyst and institutional risk manager specializing in Healthcare & Growth sectors.
+
+Task: Analyze the pre-earnings context for ${currentActiveTicker} to identify potential deviations from consensus expectations (surprises), guidance adjustments, or hidden risks.
+
+Single Trusted Source Mandate:
+- Exclusively evaluate the provided single trusted source: Official SEC EDGAR Regulatory Filings (Forms 10-Q & 8-K Exhibits) & Standardized Financial Statements.
+- Do NOT pull from or search the open web, blogs, or unverified rumors.
+- Do NOT hallucinate metrics not reported in official SEC filings; if an item is not reported, explicitly state 'Not reported in filing'.
+
+Execute your analysis step-by-step using this structured framework:
+
+1. THE CONSENSUS GAP BREAKDOWN:
+- Compare the current consensus numbers against the run-rate implied by the prior quarter's KPIs and management commentary from the official SEC 8-K filing.
+- Identify if the consensus baseline requires an aggressive acceleration or deceleration to be met.
+
+2. NEGATIVE SPACE & MANAGEMENT DRIFT ANALYSIS:
+- Review the prior earnings release & SEC 8-K disclosures. Identify areas where management was defensive, gave vague answers, or deferred metric updates to this upcoming quarter.
+- Flag any changes in vocabulary regarding demand, pricing power, or macro headwinds.
+
+3. WORKING CAPITAL & VOLATILITY BANDS:
+- Audit the latest 10-Q working capital changes. Is inventory accumulation outpacing revenue growth (potential margin compression)? Is free cash flow lagging net income?
+- Calculate a variance risk rating (Low/Medium/High) indicating the likelihood of an earnings or revenue miss/beat based on these structural drivers.
+
+Output Format: Present your findings in a concise tabular overview outlining:
+- Factor Analyzed
+- Consensus Expectation
+- Discrepancy/Signal Found
+- Implied Earnings Outcome (Beat / In-Line / Miss / Guidance Cut)
+
+Follow the table with a 4-sentence high-conviction narrative summarizing the primary directional thesis.`,
         },
         {
           title: `📅 ${currentActiveTicker} Long Term Pulse`,
@@ -511,6 +657,21 @@ export default function ChatPage() {
       ];
 
   const leftMenuGroups = [
+    {
+      group: "🏛️ SEC Pre & Post-Earnings Audit",
+      items: [
+        {
+          label: "🏛️ SEC Pre-Earnings Audit (<ticker>)",
+          badge: "Pre-Print Risk",
+          template: getSecPreEarningsPrompt("<ticker>"),
+        },
+        {
+          label: "📋 SEC Post-Earnings Catalyst (<ticker>)",
+          badge: "Post-Print 8-K",
+          template: getSecPostEarningsPrompt("<ticker>"),
+        },
+      ],
+    },
     {
       group: "🎯 Pulse Strategy Suite",
       items: [
@@ -972,6 +1133,26 @@ export default function ChatPage() {
                 >
                   ⚡ Earning
                 </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend(getSecPreEarningsPrompt(currentActiveTicker))}
+                  disabled={isStreaming}
+                  className="px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/30 flex items-center gap-1 shadow-sm"
+                  title="Run Single-Source Official SEC EDGAR Pre-Earnings Audit"
+                >
+                  <span>🏛️</span>
+                  <span>SEC Pre-Earnings</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSend(getSecPostEarningsPrompt(currentActiveTicker))}
+                  disabled={isStreaming}
+                  className="px-2.5 py-1 text-[11px] font-mono font-semibold rounded-md border transition-all bg-purple-500/15 border-purple-500/40 text-purple-300 hover:bg-purple-500/30 flex items-center gap-1 shadow-sm"
+                  title="Run Single-Source Official SEC EDGAR Post-Earnings Catalyst & Price Action Audit"
+                >
+                  <span>📋</span>
+                  <span>SEC Post-Earnings</span>
+                </button>
 
                 {/* Compact 1-Line Summary Pill */}
                 {spyLoading && !spyOutcome ? (
@@ -1076,6 +1257,11 @@ export default function ChatPage() {
                     >
                       {spyOutcome.valid_outcome}
                     </span>
+                    {spyOutcome.structure_tag && (
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300">
+                        {spyOutcome.structure_tag}
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] font-mono text-slate-400 flex flex-wrap items-center gap-2">
                     <span>
@@ -1083,6 +1269,12 @@ export default function ChatPage() {
                     </span>
                     {pulseMode === "earning" ? (
                       <>
+                        {spyOutcome.key_levels?.weekly_structure && (
+                          <>
+                            <span>·</span>
+                            <span>Structure: <b className="text-cyan-300">{spyOutcome.key_levels.weekly_structure}</b></span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>PQH: <b>${spyOutcome.key_levels?.pqh?.toFixed(2)}</b></span>
                         <span>·</span>
@@ -1094,6 +1286,12 @@ export default function ChatPage() {
                       </>
                     ) : pulseMode === "long_term" ? (
                       <>
+                        {spyOutcome.key_levels?.daily_structure && (
+                          <>
+                            <span>·</span>
+                            <span>Structure: <b className="text-cyan-300">{spyOutcome.key_levels.daily_structure}</b></span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>PMH: <b>${spyOutcome.key_levels?.pmh?.toFixed(2)}</b></span>
                         <span>·</span>
@@ -1302,6 +1500,56 @@ export default function ChatPage() {
 
         {/* Input Bar */}
         <div className="p-3 sm:p-4 bg-[#0d0f17] border-t border-[#1a1d2e] space-y-2">
+          {/* Always-Visible Quick Strategy Bar */}
+          <div className="flex flex-wrap items-center gap-1.5 pb-1">
+            <button
+              type="button"
+              disabled={isStreaming}
+              onClick={() => handleSend(getSecPreEarningsPrompt(currentActiveTicker))}
+              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/15 border border-amber-500/40 text-amber-300 hover:bg-amber-500/30 flex items-center gap-1.5 transition-all shadow-sm"
+              title="Run Official SEC EDGAR Pre-Earnings Audit (10-Q & 8-K Single Source)"
+            >
+              <span>🏛️</span>
+              <span>{currentActiveTicker} Pre-Earnings</span>
+            </button>
+            <button
+              type="button"
+              disabled={isStreaming}
+              onClick={() => handleSend(getSecPostEarningsPrompt(currentActiveTicker))}
+              className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-purple-500/15 border border-purple-500/40 text-purple-300 hover:bg-purple-500/30 flex items-center gap-1.5 transition-all shadow-sm"
+              title="Run Official SEC EDGAR Post-Earnings Catalyst & Price Action Audit (8-K & 10-Q Single Source)"
+            >
+              <span>📋</span>
+              <span>{currentActiveTicker} Post-Earnings</span>
+            </button>
+            <button
+              type="button"
+              disabled={isStreaming}
+              onClick={() => handleSend(`What is ${currentActiveTicker} pulse today? Provide the 8:35 AM validated outcome, key levels (PDH/PDL/PWH/PWL), Calls vs Puts trade idea, and intraday backtest status.`)}
+              className="px-2 py-1 rounded-lg text-xs font-semibold bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 flex items-center gap-1 transition-all"
+            >
+              <span>🎯</span>
+              <span>{currentActiveTicker} Pulse</span>
+            </button>
+            <button
+              type="button"
+              disabled={isStreaming}
+              onClick={() => handleSend(`What is ${currentActiveTicker} Earning Pulse today? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, options setup, and forward backtest details.`)}
+              className="px-2 py-1 rounded-lg text-xs font-semibold bg-purple-500/10 border border-purple-500/30 text-purple-300 hover:bg-purple-500/20 flex items-center gap-1 transition-all"
+            >
+              <span>⚡</span>
+              <span>Earning Pulse</span>
+            </button>
+            <button
+              type="button"
+              disabled={isStreaming}
+              onClick={() => handleSend("Next week earnings analysis")}
+              className="px-2 py-1 rounded-lg text-xs font-semibold bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 flex items-center gap-1 transition-all"
+            >
+              <span>📊</span>
+              <span>Weekly Earnings</span>
+            </button>
+          </div>
           {input.includes("<ticker>") && (
             <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-1.5 text-[11px] font-mono">
               <span className="text-amber-300 font-semibold">
