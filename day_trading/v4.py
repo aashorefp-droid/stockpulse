@@ -909,56 +909,71 @@ def _compute_market_structure(
     curr_low: float,
     prev_high: float,
     prev_low: float,
-    prefix: str = "D",
+    prefix: str = "4H",
+    action: str = "",
+    outcome: str = "",
 ) -> tuple[str, str]:
     """
-    Computes price action market structure comparing current period to previous period.
-    prefix: 'D' for Daily, 'W' for Weekly.
-    Returns: (structure_tag, structure_detail)
-    Possible tags: 'D: HH HL', 'D: LH LL', 'D: HH LL', 'D: LH HL' (or 'W: ...')
+    Computes price action market structure returning exactly ONE dominant swing tag:
+    - For 4H (Pulse): '4H: LH', '4H: LL', '4H: HH', or '4H: HL'
+    - For D (Long Term Pulse): 'D: LH', 'D: LL', 'D: HH', or 'D: HL'
+    - For W (Earning Pulse): 'W: LH', 'W: LL', 'W: HH', or 'W: HL'
     """
-    # High comparison
-    if curr_high > prev_high:
-        h_tag = "HH"
-        h_desc = "Higher High"
-    elif curr_high < prev_high:
-        h_tag = "LH"
-        h_desc = "Lower High"
+    act = (action or "").upper()
+    out = (outcome or "").lower()
+    is_puts = "PUT" in act or "SHORT" in act or "BEAR" in act
+    is_calls = "CALL" in act or "LONG" in act or "BULL" in act
+
+    if is_puts:
+        # Bearish: choose between Lower High (LH - rejection/sweep) or Lower Low (LL - breakdown/continuation)
+        if any(w in out for w in ["breakdown", "below pdl", "below pml", "below pql", "lower low", "undercut", "distribution"]):
+            tag = "LL"
+            desc = "Lower Low Breakdown"
+        elif any(w in out for w in ["sweep", "reject", "resistance", "failed breakout", "lower high", "fade", "exhaustion"]):
+            tag = "LH"
+            desc = "Lower High Rejection"
+        elif curr_low < prev_low and curr_high <= prev_high:
+            tag = "LL"
+            desc = "Lower Low Breakdown"
+        else:
+            tag = "LH"
+            desc = "Lower High Rejection"
+    elif is_calls:
+        # Bullish: choose between Higher High (HH - breakout/expansion) or Higher Low (HL - support hold/reclaim)
+        if any(w in out for w in ["breakout", "above pdh", "above pmh", "above pqh", "higher high", "expansion", "momentum"]):
+            tag = "HH"
+            desc = "Higher High Expansion"
+        elif any(w in out for w in ["reclaim", "support", "bounce", "trap", "higher low", "hold", "rebound"]):
+            tag = "HL"
+            desc = "Higher Low Support Hold"
+        elif curr_high > prev_high and curr_low >= prev_low:
+            tag = "HH"
+            desc = "Higher High Expansion"
+        else:
+            tag = "HL"
+            desc = "Higher Low Support Hold"
     else:
-        h_tag = "EQH"
-        h_desc = "Equal High"
+        # Neutral / fallback
+        if curr_high > prev_high and curr_low >= prev_low:
+            tag = "HH"
+            desc = "Higher High Expansion"
+        elif curr_high <= prev_high and curr_low < prev_low:
+            tag = "LL"
+            desc = "Lower Low Breakdown"
+        elif curr_high > prev_high and curr_low < prev_low:
+            tag = "LH"
+            desc = "Lower High Rejection"
+        else:
+            tag = "HL"
+            desc = "Higher Low Support Hold"
 
-    # Low comparison
-    if curr_low < prev_low:
-        l_tag = "LL"
-        l_desc = "Lower Low"
-    elif curr_low > prev_low:
-        l_tag = "HL"
-        l_desc = "Higher Low"
-    else:
-        l_tag = "EQL"
-        l_desc = "Equal Low"
-
-    tag = f"{prefix}: {h_tag} {l_tag}"
-    p_name = "Daily" if prefix == "D" else ("Weekly" if prefix == "W" else prefix)
-
-    if h_tag == "HH" and l_tag == "HL":
-        detail = f"{p_name} Higher High & Higher Low ({h_tag}/{l_tag} · Bullish Trend Expansion)"
-    elif h_tag == "LH" and l_tag == "LL":
-        detail = f"{p_name} Lower High & Lower Low ({h_tag}/{l_tag} · Bearish Trend Breakdown)"
-    elif h_tag == "HH" and l_tag == "LL":
-        detail = f"{p_name} Higher High & Lower Low ({h_tag}/{l_tag} · Outside Bar / Volatility Sweep)"
-    elif h_tag == "LH" and l_tag == "HL":
-        detail = f"{p_name} Lower High & Higher Low ({h_tag}/{l_tag} · Inside Bar / Consolidation)"
-    else:
-        detail = f"{p_name} {h_desc} & {l_desc} ({h_tag}/{l_tag})"
-
-    return tag, detail
+    p_name = "4-Hour" if prefix == "4H" else ("Daily" if prefix == "D" else ("Weekly" if prefix == "W" else prefix))
+    return f"{prefix}: {tag}", f"{p_name} {desc} ({tag})"
 
 
-def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date) -> tuple[str, str, dict]:
+def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date, action: str = "", outcome: str = "") -> tuple[str, str, dict]:
     """
-    Computes weekly market structure (W: HH HL, W: LH LL, etc.) for scan_date vs previous calendar week.
+    Computes weekly market structure (W: LH, W: LL, W: HH, W: HL) for scan_date vs previous calendar week.
     Returns: (weekly_tag, weekly_detail, weekly_stats_dict)
     """
     idx_dates = [_idx_date(i) for i in daily_df.index]
@@ -982,7 +997,7 @@ def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date) -> tuple[
     prev_high = round(float(prev_week_df["high"].max()), 2)
     prev_low = round(float(prev_week_df["low"].min()), 2)
 
-    w_tag, w_detail = _compute_market_structure(curr_high, curr_low, prev_high, prev_low, prefix="W")
+    w_tag, w_detail = _compute_market_structure(curr_high, curr_low, prev_high, prev_low, prefix="W", action=action, outcome=outcome)
     w_stats = {
         "curr_week_high": curr_high,
         "curr_week_low": curr_low,
@@ -1335,10 +1350,9 @@ def get_valid_outcome_and_trade_idea(
 
     candle_bullish = close_5m >= open_5m
 
-    # Daily Market Structure (D: LL LH HH HL) comparing session high/low vs Previous Day High/Low
+    # 4-Hour Market Structure (4H: LL LH HH HL) comparing session high/low vs Previous Day High/Low
     eval_high = max(daily_high, session_high)
     eval_low = min(daily_low, session_low) if session_low > 0 else (daily_low if daily_low > 0 else session_low)
-    d_tag, d_detail = _compute_market_structure(eval_high, eval_low, pdh, pdl, prefix="D")
 
     # 1. Sweep & Reject PDH -> Single Decisive Outcome: BUY PUTS
     if session_high > pdh and pdl < price < pdh:
@@ -1494,6 +1508,11 @@ def get_valid_outcome_and_trade_idea(
     reward = abs(t1 - entry)
     rr = round(reward / risk, 1) if risk > 0 else 2.0
 
+    # 4-Hour Market Structure (4H: LH, 4H: LL, 4H: HH, 4H: HL) for Day Trading Pulse
+    d_tag, d_detail = _compute_market_structure(
+        eval_high, eval_low, pdh, pdl, prefix="4H", action=action, outcome=outcome_label
+    )
+
     # Run Intraday Backtest from 8:35 AM CT through session close
     backtest = _simulate_trade_backtest(
         post_entry_bars,
@@ -1508,8 +1527,11 @@ def get_valid_outcome_and_trade_idea(
         fallback_close=daily_close,
         structure_tag=d_tag,
     )
+    backtest["four_hour_structure"] = d_tag
+    backtest["four_hour_structure_detail"] = d_detail
     backtest["daily_structure"] = d_tag
     backtest["daily_structure_detail"] = d_detail
+    backtest["structure_tag"] = d_tag
 
     contract_opts = _build_pulse_contract_options(
         ticker=sym,
@@ -1539,12 +1561,16 @@ def get_valid_outcome_and_trade_idea(
         "valid_outcome": f"[{d_tag}] {outcome_label}",
         "raw_outcome": outcome_label,
         "structure_tag": d_tag,
+        "four_hour_structure": d_tag,
+        "four_hour_structure_detail": d_detail,
         "daily_structure": d_tag,
         "daily_structure_detail": d_detail,
         "trade_idea": {
             "action": action,
             "bias": f"{bias} · {d_tag}",
             "structure_tag": d_tag,
+            "four_hour_structure": d_tag,
+            "four_hour_structure_detail": d_detail,
             "daily_structure": d_tag,
             "daily_structure_detail": d_detail,
             "suggested_contract": suggested_strike,
@@ -1641,9 +1667,6 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
         high_px = pdh
         low_px = pdl
         price = pd_close
-
-    # Daily Market Structure (D: LL LH HH HL) comparing session vs Previous Day High/Low
-    d_tag, d_detail = _compute_market_structure(high_px, low_px, pdh, pdl, prefix="D")
 
     # Determine Long Term Pulse Validated Outcome from Month (PMH/PML) + Day (PDH/PDL) Highs & Lows
     if high_px > pmh and price < pmh:
@@ -1786,6 +1809,11 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
     risk = abs(entry - stop) if entry != stop else 1.0
     rr = round(abs(t1 - entry) / risk, 2)
 
+    # Daily Market Structure (D: LH, D: LL, D: HH, D: HL) for Long Term Pulse
+    d_tag, d_detail = _compute_market_structure(
+        high_px, low_px, pdh, pdl, prefix="D", action=action, outcome=outcome_label
+    )
+
     # Forward multi-day backtest across up to 30 trading days after scan_date
     future_daily = daily[[d > scan_date for d in idx_dates]].head(30)
     backtest = _simulate_trade_backtest(
@@ -1800,6 +1828,7 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
     )
     backtest["daily_structure"] = d_tag
     backtest["daily_structure_detail"] = d_detail
+    backtest["structure_tag"] = d_tag
 
     lt_contracts = _build_pulse_contract_options(
         ticker=sym,
@@ -2082,6 +2111,19 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
     risk = abs(entry - stop) if entry != stop else 1.0
     rr = round(abs(t1 - entry) / risk, 2)
 
+    # Weekly Market Structure (W: LH, W: LL, W: HH, W: HL) for Earning Pulse
+    w_tag, w_detail = _compute_market_structure(
+        w_stats.get("curr_week_high", high_px),
+        w_stats.get("curr_week_low", low_px),
+        w_stats.get("prev_week_high", pqh),
+        w_stats.get("prev_week_low", pql),
+        prefix="W",
+        action=action,
+        outcome=outcome_label,
+    )
+    w_stats["weekly_structure"] = w_tag
+    w_stats["weekly_structure_detail"] = w_detail
+
     # Forward multi-week backtest across up to 60 trading days after scan_date
     future_daily = daily[[d > scan_date for d in idx_dates]].head(60)
     backtest = _simulate_trade_backtest(
@@ -2096,6 +2138,7 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
     )
     backtest["weekly_structure"] = w_tag
     backtest["weekly_structure_detail"] = w_detail
+    backtest["structure_tag"] = w_tag
 
     ep_contracts = _build_pulse_contract_options(
         ticker=sym,

@@ -94,24 +94,26 @@ Your Response Guidelines:
   - For any Pulse inquiry, present a clean **Markdown Table** (including `ready_pulse_markdown_table`) comparing the **Key Levels**, **Entry / Stop / Targets (T1 & T2) / R:R**, and all 4 **Contract Options** (`Open Contract`, `OTM Runner`, `Vertical Debit Spread`, and `🦋 Directional Butterfly`).
   1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
      - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle** on `scan_date` (or the last weekday if today is a weekend).
+     - **CRITICAL 4-HOUR MARKET STRUCTURE TAG (`4H: LL`, `4H: LH`, `4H: HH`, or `4H: HL`)**:
+       ALWAYS display the single 4-Hour Market Structure tag (`4H: HH`, `4H: HL`, `4H: LH`, or `4H: LL`) representing the trade's structural swing point. It must be ONLY ONE tag (e.g. `4H: LH` or `4H: LL`), NEVER combined pairs like `[D: HH LL]`.
      - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
      - Recommends `0DTE or Next Expiry` Calls vs. Puts (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R.
   2. **Long Term Pulse (`long_term_pulse`) — Month & Day High/Low Engine**:
      - Checks **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** AND **Previous Day High/Low (`PDH` / `PDL`, `PD Mid`)** as of `scan_date` (last weekday on weekends).
-     - **CRITICAL DAILY MARKET STRUCTURE TAG (`D: LL LH HH HL`)**:
-       ALWAYS display the session's Daily Market Structure tag (`D: HH HL`, `D: LH LL`, `D: HH LL`, or `D: LH HL`) comparing the session to Previous Day High/Low (`PDH`/`PDL`) in BOTH regular chat analysis/trade plans and backtest verification blocks.
+     - **CRITICAL DAILY MARKET STRUCTURE TAG (`D: LL`, `D: LH`, `D: HH`, or `D: HL`)**:
+       ALWAYS display the single Daily Market Structure tag (`D: HH`, `D: HL`, `D: LH`, or `D: LL`) comparing the session to Previous Day High/Low (`PDH`/`PDL`) in BOTH regular chat analysis/trade plans and backtest verification blocks. It must be ONLY ONE tag (e.g. `D: LL`), NEVER combined pairs like `[D: HH LL]`.
      - Triggered when the user asks for `'long term pulse'` (e.g., `'tsla long term pulse'`, `'what is tesla long term pulse on 09/15/2026?'`, `'backtest nvda long term pulse on 10/01/2026'`).
      - Recommends `30–60 DTE Monthly Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-day backtest results (`up to 30 trading days`).
   3. **Earning Pulse (`earning_pulse`) — Quarterly & Monthly High/Low Engine**:
      - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** as of `scan_date` (last weekday on weekends).
-     - **CRITICAL WEEKLY MARKET STRUCTURE TAG (`W: LL LH HH HL`)**:
-       ALWAYS display the Weekly Market Structure tag (`W: HH HL`, `W: LH LL`, `W: HH LL`, or `W: LH HL`) comparing the current week to the previous completed week in BOTH regular chat analysis/trade plans and backtest verification blocks.
+     - **CRITICAL WEEKLY MARKET STRUCTURE TAG (`W: LL`, `W: LH`, `W: HH`, or `W: HL`)**:
+       ALWAYS display the single Weekly Market Structure tag (`W: HH`, `W: HL`, `W: LH`, or `W: LL`) comparing the current week to the previous completed week in BOTH regular chat analysis/trade plans and backtest verification blocks. It must be ONLY ONE tag (e.g. `W: HL`), NEVER combined pairs like `[W: HH LL]`.
      - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
      - Recommends `45–90 DTE Quarterly / Post-Earnings Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
   4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
      - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks for Pulse after 8:35 AM or on a weekend:
      - Present the **Key Levels as of `scan_date` (`session_day_name`)**, the **Validated Pulse Outcome & Trade Plan (`Action`, `Open Contract`, `Cost-Efficient OTM, Debit Spread & Butterfly`, `Entry`, `Stop`, `T1`, `T2`, `R:R`)**, AND a dedicated **📊 Backtest Verification** section showing:
-       - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`) with market structure tag (`[D: ...]` or `[W: ...]`)
+       - **Backtest Result Badge & Status** (`✅ FULL WIN (T1 & T2 HIT)`, `✅ WIN (T1 HIT)`, `❌ STOPPED OUT`, or `⏳ EOD / ACTIVE`) with market structure tag (`[4H: ...]`, `[D: ...]`, or `[W: ...]`)
        - **Execution Timeline**: Exact timestamp/date when `T1`, `T2`, or `Stop` was hit, Post-Entry High & Low, and End/Close Price
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
   5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
@@ -1922,7 +1924,8 @@ async def chat_with_agent(req: ChatRequest, request: Request):
                 if target_date_str and tool_data.get("pulse", {}).get("backtest"):
                     bt = tool_data["pulse"]["backtest"]
                     bt_badge = bt.get("result_badge", "")
-                    h4_tag = f" [4H: {bt['four_hour_structure']}]" if bt.get("four_hour_structure") and bt.get("four_hour_structure") != "N/A" else ""
+                    h4_val = bt.get("four_hour_structure") or bt.get("structure_tag") or ""
+                    h4_tag = f" [{h4_val}]" if h4_val and f"[{h4_val}]" not in bt_badge else ""
                     summary_txt = f"Backtest ({target_date_str}): {bt_badge}{h4_tag} | {tool_data['pulse'].get('valid_outcome', '')}"
                 yield f"data: {json.dumps({'type': 'tool_done', 'ticker': lbl_tkr, 'summary': summary_txt})}\n\n"
             except Exception as e:
