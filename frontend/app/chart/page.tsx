@@ -145,6 +145,133 @@ function getLwc() {
   return lwcPromise;
 }
 
+interface PatternMarker {
+  time: number;
+  position: "aboveBar" | "belowBar";
+  color: string;
+  shape: "arrowUp" | "arrowDown" | "circle";
+  text: string;
+  size?: number;
+}
+
+// Compute Exponential Moving Average (EMA) for any candle field (high, low, close)
+function computeEma(
+  bars: ChartBar[],
+  period: number = 20,
+  source: "high" | "low" | "close" = "close"
+): { time: number; value: number }[] {
+  if (!bars || bars.length === 0) return [];
+  const k = 2 / (period + 1);
+  const result: { time: number; value: number }[] = [];
+  let ema = bars[0][source];
+  result.push({ time: bars[0].time, value: parseFloat(ema.toFixed(2)) });
+  for (let i = 1; i < bars.length; i++) {
+    ema = bars[i][source] * k + ema * (1 - k);
+    result.push({ time: bars[i].time, value: parseFloat(ema.toFixed(2)) });
+  }
+  return result;
+}
+
+// Candlestick pattern detection for Inside Bar and Engulfing Bar (Bullish & Bearish)
+function computePatternMarkers(bars: ChartBar[]): PatternMarker[] {
+  if (!bars || bars.length < 2) return [];
+  const markers: PatternMarker[] = [];
+
+  for (let i = 1; i < bars.length; i++) {
+    const prev = bars[i - 1];
+    const curr = bars[i];
+
+    // 1. Engulfing Bar Detection:
+    // Bullish Engulfing: previous bar was bearish, current bar is bullish, current real body engulfs previous real body
+    const isBullishEngulfing =
+      prev.close < prev.open &&
+      curr.close > curr.open &&
+      curr.open <= prev.close &&
+      curr.close >= prev.open;
+
+    // Bearish Engulfing: previous bar was bullish, current bar is bearish, current real body engulfs previous real body
+    const isBearishEngulfing =
+      prev.close > prev.open &&
+      curr.close < curr.open &&
+      curr.open >= prev.close &&
+      curr.close <= prev.open;
+
+    // 2. Inside Bar Detection: Current candle's range is completely inside previous candle's range
+    const isInsideBar = curr.high <= prev.high && curr.low >= prev.low;
+
+    if (isBullishEngulfing) {
+      markers.push({
+        time: curr.time,
+        position: "belowBar",
+        color: "#10b981",
+        shape: "arrowUp",
+        text: "Bull Engulf",
+        size: 1,
+      });
+    } else if (isBearishEngulfing) {
+      markers.push({
+        time: curr.time,
+        position: "aboveBar",
+        color: "#ef4444",
+        shape: "arrowDown",
+        text: "Bear Engulf",
+        size: 1,
+      });
+    } else if (isInsideBar) {
+      const isBullish = curr.close >= curr.open;
+      markers.push({
+        time: curr.time,
+        position: isBullish ? "belowBar" : "aboveBar",
+        color: isBullish ? "#34d399" : "#f87171",
+        shape: "circle",
+        text: isBullish ? "IB 🟢" : "IB 🔴",
+        size: 1,
+      });
+    }
+  }
+
+  return markers.sort((a, b) => a.time - b.time);
+}
+
+// Single bar pattern inspection helper for hover crosshair and active bar status
+function getBarPatternInfo(curr: ChartBar, prev?: ChartBar): {
+  bias: "Bullish" | "Bearish" | "Neutral";
+  change: number;
+  pctChange: number;
+  pattern: string | null;
+} {
+  const change = curr.close - curr.open;
+  const pctChange = curr.open > 0 ? (change / curr.open) * 100 : 0;
+  const bias = change > 0 ? "Bullish" : change < 0 ? "Bearish" : "Neutral";
+
+  let pattern: string | null = null;
+  if (prev) {
+    const isBullishEngulfing =
+      prev.close < prev.open &&
+      curr.close > curr.open &&
+      curr.open <= prev.close &&
+      curr.close >= prev.open;
+
+    const isBearishEngulfing =
+      prev.close > prev.open &&
+      curr.close < curr.open &&
+      curr.open >= prev.close &&
+      curr.close <= prev.open;
+
+    const isInsideBar = curr.high <= prev.high && curr.low >= prev.low;
+
+    if (isBullishEngulfing) {
+      pattern = "Bullish Engulfing 🟢";
+    } else if (isBearishEngulfing) {
+      pattern = "Bearish Engulfing 🔴";
+    } else if (isInsideBar) {
+      pattern = curr.close >= curr.open ? "Inside Bar (Bullish 🟢)" : "Inside Bar (Bearish 🔴)";
+    }
+  }
+
+  return { bias, change, pctChange, pattern };
+}
+
 function LiveChartInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -193,6 +320,8 @@ function LiveChartInner() {
   const [showPdhPdl, setShowPdhPdl] = useState(true);
   const [showSl, setShowSl] = useState(true);
   const [showEntryTarget, setShowEntryTarget] = useState(true);
+  const [showEmaBand, setShowEmaBand] = useState<boolean>(true);
+  const [showPatterns, setShowPatterns] = useState<boolean>(true);
   const [chartMode, setChartMode] = useState<"overlay" | "dual">("overlay");
 
   // Chart DOM refs
@@ -205,6 +334,10 @@ function LiveChartInner() {
   const contractSeriesRef = useRef<any>(null);
   const callSeriesRef = useRef<any>(null);
   const putSeriesRef = useRef<any>(null);
+  const emaHighSeriesRef = useRef<any>(null);
+  const emaCloseSeriesRef = useRef<any>(null);
+  const emaLowSeriesRef = useRef<any>(null);
+  const latestBarsRef = useRef<ChartBar[]>([]);
   const priceLinesRef = useRef<any[]>([]);
 
   // Performance optimization refs
@@ -217,9 +350,18 @@ function LiveChartInner() {
   const [hoverInfo, setHoverInfo] = useState<{
     time: string;
     underlyingClose: number;
+    underlyingOpen?: number;
+    underlyingHigh?: number;
+    underlyingLow?: number;
     contractValue?: number;
     callValue?: number;
     putValue?: number;
+    emaHigh?: number;
+    emaClose?: number;
+    emaLow?: number;
+    candleBias?: "Bullish" | "Bearish" | "Neutral";
+    candleChangePct?: number;
+    pattern?: string | null;
   } | null>(null);
 
   // Derived effective option mode
@@ -270,6 +412,9 @@ function LiveChartInner() {
     contractSeriesRef.current = null;
     callSeriesRef.current = null;
     putSeriesRef.current = null;
+    emaHighSeriesRef.current = null;
+    emaCloseSeriesRef.current = null;
+    emaLowSeriesRef.current = null;
     priceLinesRef.current = [];
     const dateParam = targetDate ? `&date=${targetDate}` : "";
     router.replace(`/chart?ticker=${t}&tf=${timeframe}${dateParam}`);
@@ -285,6 +430,9 @@ function LiveChartInner() {
     contractSeriesRef.current = null;
     callSeriesRef.current = null;
     putSeriesRef.current = null;
+    emaHighSeriesRef.current = null;
+    emaCloseSeriesRef.current = null;
+    emaLowSeriesRef.current = null;
     priceLinesRef.current = [];
     const dateParam = targetDate ? `&date=${targetDate}` : "";
     router.replace(`/chart?ticker=${ticker}&tf=${newTf}${dateParam}`);
@@ -310,6 +458,9 @@ function LiveChartInner() {
     contractSeriesRef.current = null;
     callSeriesRef.current = null;
     putSeriesRef.current = null;
+    emaHighSeriesRef.current = null;
+    emaCloseSeriesRef.current = null;
+    emaLowSeriesRef.current = null;
     priceLinesRef.current = [];
     const dateParam = d ? `&date=${d}` : "";
     router.replace(`/chart?ticker=${ticker}&tf=${timeframe}${dateParam}`);
@@ -341,6 +492,9 @@ function LiveChartInner() {
     contractSeriesRef.current = null;
     callSeriesRef.current = null;
     putSeriesRef.current = null;
+    emaHighSeriesRef.current = null;
+    emaCloseSeriesRef.current = null;
+    emaLowSeriesRef.current = null;
     priceLinesRef.current = [];
   };
 
@@ -592,6 +746,9 @@ function LiveChartInner() {
           const cp = callSeriesRef.current ? param.seriesPrices.get(callSeriesRef.current) : undefined;
           const pp = putSeriesRef.current ? param.seriesPrices.get(putSeriesRef.current) : undefined;
           const op = contractSeriesRef.current ? param.seriesPrices.get(contractSeriesRef.current) : undefined;
+          const eh = emaHighSeriesRef.current ? param.seriesPrices.get(emaHighSeriesRef.current) : undefined;
+          const ec = emaCloseSeriesRef.current ? param.seriesPrices.get(emaCloseSeriesRef.current) : undefined;
+          const el = emaLowSeriesRef.current ? param.seriesPrices.get(emaLowSeriesRef.current) : undefined;
 
           const dateObj = new Date(param.time * 1000);
           const dateStr = dateObj.toLocaleDateString("en-US", {
@@ -612,12 +769,41 @@ function LiveChartInner() {
             hour12: true,
           });
 
+          // Identify candle direction and patterns
+          const currentBars = latestBarsRef.current;
+          const barIdx = currentBars.findIndex((b) => b.time === param.time);
+          let pattern: string | null = null;
+          let candleBias: "Bullish" | "Bearish" | "Neutral" = "Neutral";
+          let candleChangePct: number | undefined = undefined;
+
+          if (barIdx >= 0) {
+            const currBar = currentBars[barIdx];
+            const prevBar = barIdx > 0 ? currentBars[barIdx - 1] : undefined;
+            const info = getBarPatternInfo(currBar, prevBar);
+            pattern = info.pattern;
+            candleBias = info.bias;
+            candleChangePct = info.pctChange;
+          } else if (typeof cPrice === "object" && cPrice?.open !== undefined && cPrice?.close !== undefined) {
+            const chg = cPrice.close - cPrice.open;
+            candleBias = chg > 0 ? "Bullish" : chg < 0 ? "Bearish" : "Neutral";
+            candleChangePct = cPrice.open > 0 ? (chg / cPrice.open) * 100 : 0;
+          }
+
           setHoverInfo({
             time: `${dateStr} · ${tzMode === "ET" ? `${etStr} ET (${ctStr} CT)` : `${ctStr} CT (${etStr} ET)`}`,
             underlyingClose: typeof cPrice === "object" ? cPrice?.close : cPrice,
+            underlyingOpen: typeof cPrice === "object" ? cPrice?.open : undefined,
+            underlyingHigh: typeof cPrice === "object" ? cPrice?.high : undefined,
+            underlyingLow: typeof cPrice === "object" ? cPrice?.low : undefined,
             contractValue: typeof op === "number" ? op : op?.close,
             callValue: typeof cp === "number" ? cp : cp?.close,
             putValue: typeof pp === "number" ? pp : pp?.close,
+            emaHigh: typeof eh === "number" ? eh : undefined,
+            emaClose: typeof ec === "number" ? ec : undefined,
+            emaLow: typeof el === "number" ? el : undefined,
+            candleBias,
+            candleChangePct,
+            pattern,
           });
         });
 
@@ -726,6 +912,56 @@ function LiveChartInner() {
         }
       }
 
+      // Synchronize 20 Period EMA Band Series (High, Close, Low) on right scale
+      if (showEmaBand) {
+        if (!emaHighSeriesRef.current) {
+          emaHighSeriesRef.current = chart.addLineSeries({
+            priceScaleId: "right",
+            color: "#38bdf8", // Sky blue
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+            title: "EMA 20 High",
+            crosshairMarkerVisible: true,
+          });
+        }
+        if (!emaCloseSeriesRef.current) {
+          emaCloseSeriesRef.current = chart.addLineSeries({
+            priceScaleId: "right",
+            color: "#fbbf24", // Amber gold
+            lineWidth: 2,
+            lineStyle: LineStyle.Solid,
+            priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+            title: "EMA 20 Close",
+            crosshairMarkerVisible: true,
+          });
+        }
+        if (!emaLowSeriesRef.current) {
+          emaLowSeriesRef.current = chart.addLineSeries({
+            priceScaleId: "right",
+            color: "#f43f5e", // Rose pink
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+            title: "EMA 20 Low",
+            crosshairMarkerVisible: true,
+          });
+        }
+      } else {
+        if (emaHighSeriesRef.current) {
+          try { chart.removeSeries(emaHighSeriesRef.current); } catch {}
+          emaHighSeriesRef.current = null;
+        }
+        if (emaCloseSeriesRef.current) {
+          try { chart.removeSeries(emaCloseSeriesRef.current); } catch {}
+          emaCloseSeriesRef.current = null;
+        }
+        if (emaLowSeriesRef.current) {
+          try { chart.removeSeries(emaLowSeriesRef.current); } catch {}
+          emaLowSeriesRef.current = null;
+        }
+      }
+
       // Determine if this is a new dataset or an incremental live tick
       const currentDatasetKey = `${data?.ticker || ""}_${data?.timeframe || ""}_${data?.target_date || ""}_${data?.session?.extended_hours}_${chartMode}_${replayMode}_${effectiveMode}_${data?.contract?.strike}`;
       const isDatasetChange = isNewChart || currentDatasetKey !== lastDatasetIdRef.current;
@@ -736,6 +972,17 @@ function LiveChartInner() {
         if (candleSeriesRef.current && data?.bars) {
           const barsToSet = replayMode ? data.bars.slice(0, Math.min(replayIndex + 1, data.bars.length)) : data.bars;
           candleSeriesRef.current.setData(barsToSet);
+          if (showPatterns) {
+            candleSeriesRef.current.setMarkers(computePatternMarkers(barsToSet));
+          } else {
+            candleSeriesRef.current.setMarkers([]);
+          }
+          if (showEmaBand && barsToSet.length > 0) {
+            emaHighSeriesRef.current?.setData(computeEma(barsToSet, 20, "high"));
+            emaCloseSeriesRef.current?.setData(computeEma(barsToSet, 20, "close"));
+            emaLowSeriesRef.current?.setData(computeEma(barsToSet, 20, "low"));
+          }
+          latestBarsRef.current = barsToSet;
           if (barsToSet.length > 0) {
             lastBarTimestampRef.current = barsToSet[barsToSet.length - 1].time;
           }
@@ -768,6 +1015,15 @@ function LiveChartInner() {
           const prevTime = lastBarTimestampRef.current;
           if (prevTime > 0 && latestBar.time >= prevTime) {
             candleSeriesRef.current.update(latestBar);
+            if (showPatterns) {
+              candleSeriesRef.current.setMarkers(computePatternMarkers(data.bars));
+            }
+            if (showEmaBand) {
+              emaHighSeriesRef.current?.setData(computeEma(data.bars, 20, "high"));
+              emaCloseSeriesRef.current?.setData(computeEma(data.bars, 20, "close"));
+              emaLowSeriesRef.current?.setData(computeEma(data.bars, 20, "low"));
+            }
+            latestBarsRef.current = data.bars;
             if (volumeSeriesRef.current && data.volume_bars?.length && showVolume) {
               volumeSeriesRef.current.update(data.volume_bars[data.volume_bars.length - 1]);
             }
@@ -787,6 +1043,17 @@ function LiveChartInner() {
             }
           } else {
             candleSeriesRef.current.setData(data.bars);
+            if (showPatterns) {
+              candleSeriesRef.current.setMarkers(computePatternMarkers(data.bars));
+            } else {
+              candleSeriesRef.current.setMarkers([]);
+            }
+            if (showEmaBand) {
+              emaHighSeriesRef.current?.setData(computeEma(data.bars, 20, "high"));
+              emaCloseSeriesRef.current?.setData(computeEma(data.bars, 20, "close"));
+              emaLowSeriesRef.current?.setData(computeEma(data.bars, 20, "low"));
+            }
+            latestBarsRef.current = data.bars;
             if (volumeSeriesRef.current && data.volume_bars && showVolume) {
               volumeSeriesRef.current.setData(data.volume_bars);
             }
@@ -930,7 +1197,7 @@ function LiveChartInner() {
     return () => {
       // Keep chart instance alive across smooth polling ticks unless component unmounts
     };
-  }, [data, showContractOverlap, showVolume, showPdhPdl, showSl, showEntryTarget, chartMode, replayMode, effectiveMode]);
+  }, [data, showContractOverlap, showVolume, showPdhPdl, showSl, showEntryTarget, showEmaBand, showPatterns, chartMode, replayMode, effectiveMode]);
 
   // Replay bar slice updater: fast in-memory slicing without chart rebuild
   useEffect(() => {
@@ -944,7 +1211,18 @@ function LiveChartInner() {
 
     if (candleSeriesRef.current && slicedBars.length > 0) {
       candleSeriesRef.current.setData(slicedBars);
+      if (showPatterns) {
+        candleSeriesRef.current.setMarkers(computePatternMarkers(slicedBars));
+      } else {
+        candleSeriesRef.current.setMarkers([]);
+      }
     }
+    if (showEmaBand && slicedBars.length > 0) {
+      emaHighSeriesRef.current?.setData(computeEma(slicedBars, 20, "high"));
+      emaCloseSeriesRef.current?.setData(computeEma(slicedBars, 20, "close"));
+      emaLowSeriesRef.current?.setData(computeEma(slicedBars, 20, "low"));
+    }
+    latestBarsRef.current = slicedBars;
     if (volumeSeriesRef.current && slicedVolume.length > 0 && showVolume) {
       volumeSeriesRef.current.setData(slicedVolume);
     }
@@ -962,12 +1240,23 @@ function LiveChartInner() {
         }
       }
     }
-  }, [replayMode, replayIndex, data, showVolume, showContractOverlap, chartMode, effectiveMode]);
+  }, [replayMode, replayIndex, data, showVolume, showContractOverlap, showEmaBand, showPatterns, chartMode, effectiveMode]);
 
   // When replayMode turns off, restore full series
   useEffect(() => {
     if (!replayMode && data?.bars?.length) {
       candleSeriesRef.current?.setData(data.bars);
+      if (showPatterns) {
+        candleSeriesRef.current?.setMarkers(computePatternMarkers(data.bars));
+      } else {
+        candleSeriesRef.current?.setMarkers([]);
+      }
+      if (showEmaBand) {
+        emaHighSeriesRef.current?.setData(computeEma(data.bars, 20, "high"));
+        emaCloseSeriesRef.current?.setData(computeEma(data.bars, 20, "close"));
+        emaLowSeriesRef.current?.setData(computeEma(data.bars, 20, "low"));
+      }
+      latestBarsRef.current = data.bars;
       if (volumeSeriesRef.current && data.volume_bars && showVolume) {
         volumeSeriesRef.current.setData(data.volume_bars);
       }
@@ -986,7 +1275,7 @@ function LiveChartInner() {
         }
       }
     }
-  }, [replayMode, data, showVolume, showContractOverlap, chartMode, effectiveMode]);
+  }, [replayMode, data, showVolume, showContractOverlap, showEmaBand, showPatterns, chartMode, effectiveMode]);
 
   // Replay playback timer loop
   useEffect(() => {
@@ -1709,11 +1998,38 @@ function LiveChartInner() {
                       {data.levels.target_2 && ` · T2: $${data.levels.target_2.toFixed(2)}`}
                     </span>
                   )}
+
+                  {/* Active / Current Candle Bias & Pattern */}
+                  {(() => {
+                    const activeBars = replayMode && data?.bars ? data.bars.slice(0, Math.min(replayIndex + 1, data.bars.length)) : data?.bars;
+                    if (!activeBars || activeBars.length === 0) return null;
+                    const curr = activeBars[activeBars.length - 1];
+                    const prev = activeBars.length > 1 ? activeBars[activeBars.length - 2] : undefined;
+                    const { bias, change, pctChange, pattern } = getBarPatternInfo(curr, prev);
+                    return (
+                      <div className="flex items-center gap-1.5 text-xs font-mono">
+                        <span className={`px-2 py-0.5 rounded font-bold border ${
+                          bias === "Bullish"
+                            ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                            : bias === "Bearish"
+                            ? "bg-rose-500/15 border-rose-500/40 text-rose-300"
+                            : "bg-slate-800 border-slate-700 text-slate-300"
+                        }`}>
+                          {bias === "Bullish" ? "🟢 Bullish" : bias === "Bearish" ? "🔴 Bearish" : "⚪ Neutral"} ({change >= 0 ? "+" : ""}{pctChange.toFixed(2)}%)
+                        </span>
+                        {pattern && (
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold animate-pulse">
+                            ⚡ {pattern}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
-              {/* Levels Visibility Controls */}
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+              {/* Levels & Indicators Visibility Controls */}
+              <div className="flex flex-wrap items-center gap-2 text-xs font-mono text-slate-400">
                 <label className="flex items-center gap-1 cursor-pointer hover:text-white">
                   <input
                     type="checkbox"
@@ -1749,6 +2065,29 @@ function LiveChartInner() {
                     className="accent-emerald-500 rounded"
                   />
                   <span>Volume</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer hover:text-white" title="20 EMA of High, Close, and Low">
+                  <input
+                    type="checkbox"
+                    checked={showEmaBand}
+                    onChange={(e) => setShowEmaBand(e.target.checked)}
+                    className="accent-amber-400 rounded"
+                  />
+                  <span className="flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400" title="20 EMA High (Cyan)" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="20 EMA Close (Gold)" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-400" title="20 EMA Low (Rose)" />
+                    <span>20 EMA</span>
+                  </span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer hover:text-white" title="Inside Bars (IB) and Engulfing Bars">
+                  <input
+                    type="checkbox"
+                    checked={showPatterns}
+                    onChange={(e) => setShowPatterns(e.target.checked)}
+                    className="accent-emerald-400 rounded"
+                  />
+                  <span>Patterns</span>
                 </label>
               </div>
             </div>
@@ -2037,7 +2376,7 @@ function LiveChartInner() {
 
         {/* Hover Crosshair Info Bar */}
         {hoverInfo && (
-          <div className="bg-[#121829] border border-cyan-500/30 rounded-lg px-3 py-1.5 text-xs font-mono flex flex-wrap items-center gap-4">
+          <div className="bg-[#121829] border border-cyan-500/30 rounded-lg px-3 py-1.5 text-xs font-mono flex flex-wrap items-center gap-x-4 gap-y-1">
             <span className="text-slate-400">
               Time: <b className="text-white">{hoverInfo.time}</b>
             </span>
@@ -2047,6 +2386,50 @@ function LiveChartInner() {
                 ${hoverInfo.underlyingClose !== undefined ? hoverInfo.underlyingClose.toFixed(2) : "—"}
               </b>
             </span>
+
+            {/* Candle Direction & % Change */}
+            {hoverInfo.candleBias && (
+              <span className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                hoverInfo.candleBias === "Bullish"
+                  ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300"
+                  : hoverInfo.candleBias === "Bearish"
+                  ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                  : "bg-slate-800 border-slate-700 text-slate-300"
+              }`}>
+                {hoverInfo.candleBias === "Bullish" ? "🟢 Bullish" : hoverInfo.candleBias === "Bearish" ? "🔴 Bearish" : "⚪ Neutral"}
+                {hoverInfo.candleChangePct !== undefined && ` (${hoverInfo.candleChangePct >= 0 ? "+" : ""}${hoverInfo.candleChangePct.toFixed(2)}%)`}
+              </span>
+            )}
+
+            {/* Pattern Badge */}
+            {hoverInfo.pattern && (
+              <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-amber-500/20 border border-amber-500/40 text-amber-300 animate-pulse">
+                ⚡ {hoverInfo.pattern}
+              </span>
+            )}
+
+            {/* 20 Period EMA Band Values (High, Close, Low) */}
+            {showEmaBand && (hoverInfo.emaHigh !== undefined || hoverInfo.emaClose !== undefined || hoverInfo.emaLow !== undefined) && (
+              <div className="flex items-center gap-2.5 text-[11px] border-l border-slate-700/80 pl-3">
+                {hoverInfo.emaHigh !== undefined && (
+                  <span className="text-slate-400">
+                    EMA 20 H: <b className="text-sky-400">${hoverInfo.emaHigh.toFixed(2)}</b>
+                  </span>
+                )}
+                {hoverInfo.emaClose !== undefined && (
+                  <span className="text-slate-400">
+                    EMA 20 C: <b className="text-amber-400 font-bold">${hoverInfo.emaClose.toFixed(2)}</b>
+                  </span>
+                )}
+                {hoverInfo.emaLow !== undefined && (
+                  <span className="text-slate-400">
+                    EMA 20 L: <b className="text-rose-400">${hoverInfo.emaLow.toFixed(2)}</b>
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Option Overlay Values */}
             {hoverInfo.contractValue !== undefined && (
               <span className="text-slate-400">
                 Option Premium:{" "}
@@ -2107,40 +2490,74 @@ function LiveChartInner() {
           <div className="flex flex-wrap items-center gap-3">
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-0.5 bg-red-400 inline-block" />
-              <span>PDH (Prior Day High)</span>
+              <span>PDH</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-0.5 bg-emerald-400 inline-block" />
-              <span>PDL (Prior Day Low)</span>
+              <span>PDL</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-0.5 bg-red-600 inline-block" />
-              <span>🛑 SL (Stop Loss)</span>
+              <span>🛑 SL</span>
             </span>
             <span className="flex items-center gap-1">
               <span className="w-2.5 h-0.5 bg-amber-400 inline-block" />
-              <span>Entry Trigger</span>
+              <span>Entry</span>
             </span>
+
+            {/* 20 EMA Band Legend */}
+            {showEmaBand && (
+              <>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-0.5 border-b border-dashed border-sky-400 inline-block" />
+                  <span className="text-sky-300">EMA 20 High</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-0.5 bg-amber-400 inline-block" />
+                  <span className="text-amber-300 font-bold">EMA 20 Close</span>
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-2.5 h-0.5 border-b border-dashed border-rose-400 inline-block" />
+                  <span className="text-rose-300">EMA 20 Low</span>
+                </span>
+              </>
+            )}
+
+            {/* Pattern Legend */}
+            {showPatterns && (
+              <>
+                <span className="flex items-center gap-1 text-emerald-400">
+                  <span>▲ Bull Engulf</span>
+                </span>
+                <span className="flex items-center gap-1 text-rose-400">
+                  <span>▼ Bear Engulf</span>
+                </span>
+                <span className="flex items-center gap-1 text-slate-300">
+                  <span>● Inside Bar (IB 🟢/🔴)</span>
+                </span>
+              </>
+            )}
+
             {effectiveMode === "BOTH" ? (
               <>
                 <span className="flex items-center gap-1">
                   <span className="w-2.5 h-0.5 bg-emerald-400 inline-block" />
-                  <span>🟢 Call Contract (Left Scale)</span>
+                  <span>🟢 Call (Left Scale)</span>
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-2.5 h-0.5 bg-rose-500 inline-block" />
-                  <span>🔴 Put Contract (Left Scale)</span>
+                  <span>🔴 Put (Left Scale)</span>
                 </span>
               </>
             ) : (
               <span className="flex items-center gap-1">
                 <span className="w-2.5 h-0.5 bg-yellow-500 inline-block" />
-                <span>Option Contract (Left Scale)</span>
+                <span>Option (Left Scale)</span>
               </span>
             )}
           </div>
           <div>
-            <span>Scroll to zoom · Drag to pan · Live updates every 5s</span>
+            <span>Scroll to zoom · Drag to pan · Live 5s</span>
           </div>
         </div>
       </div>
