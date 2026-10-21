@@ -1207,6 +1207,16 @@ def _compute_4h_structure(
                         ch, cl = float(curr["High"]), float(curr["Low"])
                         co, cc = float(curr["Open"]), float(curr["Close"])
                         ph, pl = float(prev["High"]), float(prev["Low"])
+                        po, pc = float(prev["Open"]), float(prev["Close"])
+
+                        # 4H Candlestick Pattern Detection (Inside Bar & Engulfing Bar)
+                        h4_pattern = None
+                        if ch <= ph and cl >= pl:
+                            h4_pattern = "Inside Bar (Bullish 🟢)" if cc >= co else "Inside Bar (Bearish 🔴)"
+                        elif pc < po and cc > co and co <= pc and cc >= po:
+                            h4_pattern = "Bullish Engulfing 🟢"
+                        elif pc > po and cc < co and co >= pc and cc <= po:
+                            h4_pattern = "Bearish Engulfing 🔴"
 
                         tag, desc = _compute_market_structure(
                             ch, cl, ph, pl, prefix="4H", curr_close=cc, curr_open=co
@@ -1221,11 +1231,14 @@ def _compute_4h_structure(
                             "prev_time": str(prev.name),
                             "prev_high": round(ph, 2),
                             "prev_low": round(pl, 2),
+                            "prev_open": round(po, 2),
+                            "prev_close": round(pc, 2),
                             "four_hour_structure": tag,
                             "four_hour_structure_detail": desc,
                             "four_hour_arrow": arr,
                             "four_hour_badge": badge,
                             "four_hour_color": col,
+                            "four_hour_pattern": h4_pattern,
                             "is_premarket_eth": include_prepost,
                         }
                         return tag, desc, stats

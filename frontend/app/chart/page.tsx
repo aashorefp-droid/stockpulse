@@ -111,6 +111,7 @@ interface LiveChartPayload {
     valid_outcome: string | null;
     focus_badge: string | null;
     focus_rule: string | null;
+    four_hour_pattern?: string | null;
   };
   bars: ChartBar[];
   volume_bars: VolumeBar[];
@@ -131,6 +132,7 @@ const TIMEFRAMES = [
   { key: "15m", label: "15m" },
   { key: "30m", label: "30m" },
   { key: "1h", label: "1h" },
+  { key: "4h", label: "4h" },
   { key: "1d", label: "1D" },
 ];
 
@@ -320,8 +322,8 @@ function LiveChartInner() {
   const [showPdhPdl, setShowPdhPdl] = useState(true);
   const [showSl, setShowSl] = useState(true);
   const [showEntryTarget, setShowEntryTarget] = useState(true);
-  const [showEmaBand, setShowEmaBand] = useState<boolean>(true);
-  const [showPatterns, setShowPatterns] = useState<boolean>(true);
+  const [showEmaBand, setShowEmaBand] = useState<boolean>(false);
+  const [showPatterns, setShowPatterns] = useState<boolean>(false);
   const [chartMode, setChartMode] = useState<"overlay" | "dual">("overlay");
 
   // Chart DOM refs
@@ -2066,6 +2068,30 @@ function LiveChartInner() {
                   />
                   <span>Volume</span>
                 </label>
+
+                {/* Master Quick Toggle to Hide or Show Indicators */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const anyActive = showEmaBand || showPatterns;
+                    if (anyActive) {
+                      setShowEmaBand(false);
+                      setShowPatterns(false);
+                    } else {
+                      setShowEmaBand(true);
+                      setShowPatterns(true);
+                    }
+                  }}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold flex items-center gap-1 transition-all ${
+                    showEmaBand || showPatterns
+                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30"
+                      : "bg-slate-800 text-slate-400 border border-slate-700 hover:text-white hover:bg-slate-700"
+                  }`}
+                  title={showEmaBand || showPatterns ? "Hide 20 EMA and Candlestick Pattern Indicators" : "Show 20 EMA and Candlestick Pattern Indicators"}
+                >
+                  <span>{showEmaBand || showPatterns ? "👁️ Hide Indicators" : "👁️ Show Indicators"}</span>
+                </button>
+
                 <label className="flex items-center gap-1.5 cursor-pointer hover:text-white" title="20 EMA of High, Close, and Low">
                   <input
                     type="checkbox"
@@ -2100,6 +2126,11 @@ function LiveChartInner() {
                   <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 font-bold">
                     {data.levels.focus_badge}
                   </span>
+                  {data.levels.four_hour_pattern && (
+                    <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold animate-pulse">
+                      ⚡ 4H: {data.levels.four_hour_pattern}
+                    </span>
+                  )}
                   {data.levels.valid_outcome && (
                     <span className="text-slate-300 text-[11px]">
                       · Outcome: <b>{data.levels.valid_outcome}</b>

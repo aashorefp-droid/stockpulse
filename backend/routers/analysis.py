@@ -1221,7 +1221,7 @@ def get_fib_report(tickers: str = "AAPL,MSFT,NVDA,GOOGL,AMZN", as_of: str = None
 @router.get("/live-chart/{ticker}")
 def live_chart_endpoint(
     ticker: str,
-    timeframe: str = Query("5m", description="Candle timeframe (1m, 5m, 15m, 30m, 1h, 1d)"),
+    timeframe: str = Query("5m", description="Candle timeframe (1m, 5m, 15m, 30m, 1h, 4h, 1d)"),
     strike: Optional[float] = Query(None, description="Contract strike"),
     option_type: Optional[str] = Query(None, description="Contract option type (CALL or PUT)"),
     dte: Optional[int] = Query(0, description="Contract days to expiration (0 = today / nearest)"),

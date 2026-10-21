@@ -312,10 +312,11 @@ def get_live_chart_data(
         "15m": ("5d", "15m"),
         "30m": ("1mo", "30m"),
         "1h": ("1mo", "1h"),
+        "4h": ("3mo", "4h"),
         "1d": ("1y", "1d"),
     }
     period, interval = tf_map.get(tf, ("5d", "5m"))
-    use_prepost = extended_hours and tf in ("1m", "5m", "15m", "30m", "1h")
+    use_prepost = extended_hours and tf in ("1m", "5m", "15m", "30m", "1h", "4h")
 
     tk = yf.Ticker(yf_sym)
 
@@ -375,7 +376,7 @@ def get_live_chart_data(
         current_price = bars[-1]["close"] if bars else 0.0
 
     # For SPXW / SPX during pre-market: bridge ES=F (S&P 500 Futures) so today's live pre-market candles display
-    if canon_ticker in ("SPXW", "SPX") and extended_hours and tf != "1d":
+    if canon_ticker in ("SPXW", "SPX") and extended_hours and tf not in ("1d", "4h"):
         try:
             if market_session == "PRE_MARKET":
                 es_tk = yf.Ticker("ES=F")
@@ -608,6 +609,27 @@ def get_live_chart_data(
     focus_badge = four_hour_focus.get("badge_with_levels") or four_hour_focus.get("badge") or ""
     focus_rule = four_hour_focus.get("rule") or ""
 
+    # Extract or compute 4H Candlestick Pattern (Inside Bar & Engulfing Bar)
+    d_h4_stats = trade_idea.get("four_hour_stats", {}) or (v4_data.get("trade_idea", {}).get("four_hour_stats", {}) if isinstance(v4_data, dict) else {}) or (v4_data.get("four_hour_stats", {}) if isinstance(v4_data, dict) else {})
+    four_hour_pattern = d_h4_stats.get("four_hour_pattern") or four_hour_focus.get("pattern")
+    if not four_hour_pattern and d_h4_stats:
+        ch = d_h4_stats.get("curr_high")
+        cl = d_h4_stats.get("curr_low")
+        co = d_h4_stats.get("curr_open")
+        cc = d_h4_stats.get("curr_close")
+        ph = d_h4_stats.get("prev_high")
+        pl = d_h4_stats.get("prev_low")
+        po = d_h4_stats.get("prev_open")
+        pc = d_h4_stats.get("prev_close")
+        if ch is not None and cl is not None and ph is not None and pl is not None:
+            if ch <= ph and cl >= pl:
+                four_hour_pattern = "Inside Bar (Bullish 🟢)" if (cc is not None and co is not None and cc >= co) else "Inside Bar (Bearish 🔴)"
+            elif po is not None and pc is not None and co is not None and cc is not None:
+                if pc < po and cc > co and co <= pc and cc >= po:
+                    four_hour_pattern = "Bullish Engulfing 🟢"
+                elif pc > po and cc < co and co >= pc and cc <= po:
+                    four_hour_pattern = "Bearish Engulfing 🔴"
+
     result = {
         "ticker": canon_ticker,
         "yf_symbol": yf_sym,
@@ -632,6 +654,7 @@ def get_live_chart_data(
             "valid_outcome": v4_data.get("valid_outcome") if isinstance(v4_data, dict) else None,
             "focus_badge": focus_badge,
             "focus_rule": focus_rule,
+            "four_hour_pattern": four_hour_pattern,
         },
         "bars": bars,
         "volume_bars": volume_bars,
