@@ -6,7 +6,7 @@ import logging
 import asyncio
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import httpx
@@ -94,6 +94,12 @@ Your Response Guidelines:
   - For any Pulse inquiry, present a clean **Markdown Table** (including `ready_pulse_markdown_table`) comparing the **Key Levels**, **Entry / Stop / Targets (T1 & T2) / R:R**, and all 4 **Contract Options** (`Open Contract`, `OTM Runner`, `Vertical Debit Spread`, and `🦋 Directional Butterfly`).
   1. **Pulse (`pulse` / `day_trading_v4`) — Day Trading 8:35 AM Open Validator**:
      - Checks **Previous Day High/Low (`PDH` / `PDL`)** and **Previous Week High/Low (`PWH` / `PWL`)** + the **8:30–8:35 AM CT first 5-minute opening candle** on `scan_date` (or the last weekday if today is a weekend).
+     - **PRE-MARKET & 8:05 AM / 8:35 AM CST TIMERS (WEEKDAYS BEFORE 8:35 AM CST)**:
+       If today is a weekday and current time is before Market Open and 8:00 AM CST (or anytime before 8:35 AM CST):
+       - **4H Structure Timer (Before 8:05 AM CST)**: Display the 4H countdown: `4H (⏱️ Timer left for 8:05 AM CST: <countdown>)` as provided in `pulse.structure_tag` or `pulse.four_hour_structure`.
+       - **Recommendation Waiting State (Before 8:35 AM CST)**: The trade idea and action MUST be in waiting state: `WAITING (⏱️ Timer Left for 8:35 AM: <countdown>)` as provided in `pulse.trade_idea.action` or `pulse.action`. Backtest result badge is `⏱️ PENDING 8:35 AM`.
+       - **Between 8:05 AM and 8:35 AM CST**: The 4H structure shows the confirmed 8:05 AM alert tag (e.g. `4H: LH` or `4H: LL`), while the recommendation remains in waiting state (`WAITING (⏱️ Timer Left for 8:35 AM: <countdown>)`) until the 8:35 AM 5-minute candle completes.
+       - Clearly inform the user that prior session key levels (`PDH`, `PDL`, `Mid`, `PWH`, `PWL`) are already mapped for today's trading playbook, but the actionable Call/Put trigger confirms at 8:35 AM CST.
      - **CRITICAL 4-HOUR MARKET STRUCTURE TAG (`4H: LL`, `4H: LH`, `4H: HH`, or `4H: HL`)**:
        ALWAYS display the single 4-Hour Market Structure tag (`4H: HH`, `4H: HL`, `4H: LH`, or `4H: LL`) representing the trade's structural swing point. It must be ONLY ONE tag (e.g. `4H: LH` or `4H: LL`), NEVER combined pairs like `[D: HH LL]`.
      - Triggered when the user asks for `'pulse'`, `'v4'`, `'what is tesla pulse today?'`, `'tsla pulse 10/12/2026'`, or `'backtest tesla pulse for 10/12/2026'`.
@@ -108,7 +114,12 @@ Your Response Guidelines:
      - Checks **Previous Quarter High/Low (`PQH` / `PQL`, `PQ Mid`)** AND **Previous Month High/Low (`PMH` / `PML`, `PM Mid`)** as of `scan_date` (last weekday on weekends).
      - **CRITICAL WEEKLY MARKET STRUCTURE TAG (`W: LL`, `W: LH`, `W: HH`, or `W: HL`)**:
        ALWAYS display the single Weekly Market Structure tag (`W: HH`, `W: HL`, `W: LH`, or `W: LL`) comparing the current week to the previous completed week in BOTH regular chat analysis/trade plans and backtest verification blocks. It must be ONLY ONE tag (e.g. `W: HL`), NEVER combined pairs like `[W: HH LL]`.
-     - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse on 08/15/2026'`).
+     - Triggered when the user asks for `'earning pulse'` or `'earnings pulse'` (e.g., `'tsla earning pulse'`, `'backtest tsla earning pulse'`, `'backtest last 4 quarter earnings'`).
+     - **CRITICAL LAST 4 QUARTERS EARNINGS BACKTEST SCORECARD**:
+       Whenever the user chooses earnings and backtest (e.g. `'backtest earning pulse'`, `'backtest tsla earning pulse'`, `'backtest last 4 quarter earnings'`, `'tsla earnings backtest'`), you MUST present the comprehensive **Last 4 Quarters Earnings Backtest Table & Scorecard** (`ready_earnings_backtest_table` or `earnings_backtest_last_4_quarters`) displaying:
+       - Overall Scorecard & Win Rate: `{wins}/{total_quarters} WINS ({win_rate_pct}%) · Net Return {net_r_multiple} (+${net_pnl_per_share}/sh)`
+       - Clean GitHub-Flavored Markdown table with all 4 quarters: `| Quarter & Date | EPS Actual vs Est (Surprise) | Weekly Structure | Trade Idea & Setup | Entry / Stop / T1 → T2 | Backtest Result | Realized P&L & R | MFE / MAE |`
+       - Actionable commentary on institutional post-earnings drift and win consistency across quarters.
      - Recommends `45–90 DTE Quarterly / Post-Earnings Options` (`Open Contract` + `Cost-Efficient OTM Runner` + `Vertical Debit Spread` + `Butterfly Spread`) with Entry, Stop-Loss, Target 1, Target 2, and R:R, plus forward multi-week backtest results (`up to 60 trading days`) and corporate earnings history (`earnings_analysis`).
   4. **Backtest & Historical Date Reporting (`backtest` block inside each Pulse strategy)**:
      - Whenever the user specifies a date (e.g. `'on 10/12/2026'`, `'tsla pulse 10/12/2026'`, `'backtest ...'`) OR asks for Pulse after 8:35 AM or on a weekend:
@@ -118,6 +129,13 @@ Your Response Guidelines:
        - **Excursion & Return Metrics**: `Max Favorable Excursion (MFE)`, `Max Adverse Excursion (MAE)`, `Realized P&L per share ($/sh)`, and `Realized R-Multiple`.
   5. **Intraday CPR Plan (`intraday_cpr_plan`)**:
      - When the user asks specifically for the **Intraday Plan** (`'TSLA intraday'`), present the live multi-timeframe `10m/30m/4H` bias, Central Pivot Range (`CPR TC/P/BC`), and ATR intraday stops/targets.
+   6. **Volume Profile Backtest (`volume_profile_backtest` & `ready_volume_profile_backtest_table`)**:
+     - Triggered when the user asks for `'volume profile backtest'`, `'backtest volume profile'`, `'vp backtest'`, or `'backtest vp'`.
+     - You MUST present the complete **Volume Profile Backtest Scorecard & Table** (`ready_volume_profile_backtest_table` or `volume_profile_backtest`) displaying:
+       - **Overall Scorecard**: `{wins}/{total_trades} Wins ({win_rate_pct}%) · Net Return {net_r_multiple} (+${net_pnl_per_share}/sh) · Profit Factor: {profit_factor} · Avg Win: +{avg_win_pct}% · Avg Loss: {avg_loss_pct}%`
+       - **Setup Breakdown**: VAL Bounces, VAH Rejections, VAH Breakouts, VAL Breakdowns
+       - **Clean GitHub-Flavored Markdown Table**: `| Entry Date → Exit | Setup & Bias | VP Levels (VAL / POC / VAH) | Entry / Stop / T1 → T2 | Result Badge | Realized P&L & R | Days Held | MFE / MAE |`
+       - Actionable commentary on Auction Market Theory, mean reversion efficiency to Point of Control (POC), and breakout expansion.
 - Weekly Earnings Calendar & Comprehensive Analysis (`earningshub.com/earnings-calendar/this-week`):
   When the user asks for `'Next week earnings analysis'`, `'This week earnings analysis'`, `'weekly earnings analysis'`, or `'earnings calendar'`, you receive the `EARNINGSHUB WEEKLY EARNINGS CALENDAR & INSTITUTIONAL ANALYSIS` block fetched live from `https://earningshub.com/earnings-calendar/this-week` (including pre-formatted `ready_markdown_tables`). Present a comprehensive, institutional-grade analysis structured into 5 sections using Markdown tables:
   1. **Executive Summary & Macro/Economic Catalysts**: Total companies reporting, confirmed count, `$10B+` mega/large-cap count, busiest day of the week, and the week's scheduled Economic/Fed events (`economic_events`).
@@ -794,6 +812,27 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             ret["long_term_pulse"] = lt_res
         if not isinstance(ep_res, Exception) and isinstance(ep_res, dict):
             ret["earning_pulse"] = ep_res
+            b4q = ep_res.get("earnings_backtest_last_4_quarters")
+            if b4q and b4q.get("quarters"):
+                ret["earnings_backtest_last_4_quarters"] = b4q
+                q_rows = [
+                    f"### 📊 {ticker} Last 4 Quarters Earnings Backtest Scorecard ({b4q.get('win_rate_badge')})",
+                    f"- **Scorecard:** **{b4q.get('wins')}/{b4q.get('total_quarters')} Wins ({b4q.get('win_rate_pct')}%)** | Net Return: **{b4q.get('net_r_multiple')}** ({'+$' if b4q.get('net_pnl_per_share', 0) >= 0 else '-$'}{abs(b4q.get('net_pnl_per_share', 0)):.2f}/sh)",
+                    "",
+                    "| Quarter & Date | EPS Actual vs Est (Surprise) | Weekly Structure | Trade Idea & Setup | Entry / Stop / T1 → T2 | Backtest Result | Realized P&L & R | MFE / MAE |",
+                    "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",
+                ]
+                for q in b4q["quarters"]:
+                    eps_str = f"{q.get('eps_actual') if q.get('eps_actual') is not None else '—'} vs {q.get('eps_estimate') if q.get('eps_estimate') is not None else '—'}"
+                    if q.get('surprise_pct') is not None:
+                        eps_str += f" ({q.get('surprise_pct'):+.1f}%)"
+                    levels = f"${q.get('entry')} | Stop ${q.get('stop')} | T1 ${q.get('t1')} → T2 ${q.get('t2')}"
+                    mfe_mae = f"MFE {q.get('max_favorable_excursion')} / MAE {q.get('max_adverse_excursion')}"
+                    pnl_str = f"{q.get('realized_r_multiple')} (${q.get('realized_pnl_per_share'):+.2f}/sh)"
+                    q_rows.append(
+                        f"| **{q.get('quarter_label')}** | {eps_str} | `{q.get('structure_tag')}` | **{q.get('action')}** ({q.get('outcome_label')}) | {levels} | {q.get('result_badge')} | **{pnl_str}** | {mfe_mae} |"
+                    )
+                ret["ready_earnings_backtest_table"] = "\n".join(q_rows)
 
         # Build ready-to-render 3-Pulse Comparison Markdown Table
         pulse_rows = [
@@ -844,12 +883,14 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             fetch_institutional_sec_and_risk,
             fetch_institutional_post_earnings_audit,
         )
-        fv_res, cg_res, al_res, sec_risk_res, sec_post_res = await asyncio.gather(
+        from backend.services.volume_profile_backtest import run_volume_profile_backtest
+        fv_res, cg_res, al_res, sec_risk_res, sec_post_res, vp_bt_res = await asyncio.gather(
             asyncio.to_thread(fetch_finviz_insider, ticker),
             asyncio.to_thread(fetch_congress_trades, ticker),
             asyncio.to_thread(fetch_alphaspread_intrinsic, ticker),
             asyncio.to_thread(fetch_institutional_sec_and_risk, ticker),
             asyncio.to_thread(fetch_institutional_post_earnings_audit, ticker),
+            asyncio.to_thread(run_volume_profile_backtest, ticker, 252),
             return_exceptions=True,
         )
         if isinstance(fv_res, dict) and not fv_res.get("error"):
@@ -866,6 +907,10 @@ async def execute_stock_tool(ticker: str, target_date: Optional[str] = None) -> 
             ret["institutional_post_earnings_audit"] = sec_post_res
             if sec_post_res.get("ready_post_earnings_markdown"):
                 ret["ready_institutional_post_earnings_markdown"] = sec_post_res["ready_post_earnings_markdown"]
+        if isinstance(vp_bt_res, dict) and not vp_bt_res.get("error"):
+            ret["volume_profile_backtest"] = vp_bt_res
+            if vp_bt_res.get("ready_markdown_table"):
+                ret["ready_volume_profile_backtest_table"] = vp_bt_res["ready_markdown_table"]
 
         # Build ready-to-render Fundamentals Extras Markdown Tables
         extra_tables = []
@@ -1555,10 +1600,19 @@ async def get_agent_status(request: Request):
     }
 
 
+@router.get("/volume-profile-backtest")
+async def get_agent_volume_profile_backtest(ticker: str = "SPY", days: int = 252):
+    """Return historical systematic Volume Profile backtest results and trade log."""
+    from backend.services.volume_profile_backtest import run_volume_profile_backtest
+    sym = TICKER_ALIASES.get((ticker or "SPY").strip().upper(), (ticker or "SPY").strip().upper())
+    return await asyncio.to_thread(run_volume_profile_backtest, sym, days)
+
+
 @router.get("/spy-outcome")
 @router.get("/v4-outcome")
 @router.get("/pulse-outcome")
 async def get_spy_outcome_endpoint(
+    response: Response,
     ticker: str = "SPY",
     date: Optional[str] = None,
     mode: str = "pulse",
@@ -1571,6 +1625,8 @@ async def get_spy_outcome_endpoint(
     - mode='earning': Earning Pulse (Quarterly PQH/PQL & Monthly PMH/PML)
     - mode='all': All 3 Pulse engines at once
     """
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
     try:
         from day_trading.v4 import (
             get_valid_outcome_and_trade_idea,
@@ -1921,7 +1977,11 @@ async def chat_with_agent(req: ChatRequest, request: Request):
                     tool_data["user_unrealized_pnl"] = f"{diff:+.2f} ({diff_pct:+.2f}%)"
 
                 summary_txt = tool_data.get("final_judgement", {}).get("summary")
-                if target_date_str and tool_data.get("pulse", {}).get("backtest"):
+                if any(w in req.message.lower() for w in ["volume profile", "vp backtest", "val bounce", "vah"]):
+                    vp_b = tool_data.get("volume_profile_backtest")
+                    if vp_b and not vp_b.get("error"):
+                        summary_txt = f"Volume Profile Backtest: {vp_b.get('win_rate_badge')} | Profit Factor: {vp_b.get('profit_factor')}"
+                elif target_date_str and tool_data.get("pulse", {}).get("backtest"):
                     bt = tool_data["pulse"]["backtest"]
                     bt_badge = bt.get("result_badge", "")
                     h4_val = bt.get("four_hour_structure") or bt.get("structure_tag") or ""

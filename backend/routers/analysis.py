@@ -1024,6 +1024,13 @@ def get_backtest_history(ticker: str, days: int = Query(365)):
     return _clean_nans(res)
 
 
+@router.get("/volume-profile-backtest/{ticker}")
+def get_volume_profile_backtest_endpoint(ticker: str, days: int = Query(252)):
+    from backend.services.volume_profile_backtest import run_volume_profile_backtest
+    res = run_volume_profile_backtest(ticker, days=days)
+    return _clean_nans(res)
+
+
 @router.get("/tab2/vix-scenario")
 def get_vix_scenario(as_of: str = None):
     try:
@@ -1209,4 +1216,38 @@ def get_fib_report(tickers: str = "AAPL,MSFT,NVDA,GOOGL,AMZN", as_of: str = None
     rows = [r for r in results if r is not None]
 
     return {"count": len(rows), "items": rows}
+
+
+@router.get("/live-chart/{ticker}")
+def live_chart_endpoint(
+    ticker: str,
+    timeframe: str = Query("5m", description="Candle timeframe (1m, 5m, 15m, 30m, 1h, 1d)"),
+    strike: Optional[float] = Query(None, description="Contract strike"),
+    option_type: Optional[str] = Query(None, description="Contract option type (CALL or PUT)"),
+    dte: Optional[int] = Query(0, description="Contract days to expiration (0 = today / nearest)"),
+    custom_expiry: Optional[str] = Query(None, description="Custom expiration date string (YYYY-MM-DD)"),
+    extended_hours: bool = Query(True, description="Include pre-market and extended trading sessions"),
+    target_date: Optional[str] = Query(None, description="Backdated historical session date (YYYY-MM-DD)"),
+):
+    """
+    Returns real-time or backdated intraday candlestick data with pre-drawn key levels
+    (PDH, PDL, SL, Mid, Targets) and option contract series (default 0 DTE, adjustable).
+    """
+    from backend.services.live_chart import get_live_chart_data
+    from fastapi import Response
+    import json
+    try:
+        res = get_live_chart_data(
+            ticker=ticker,
+            timeframe=timeframe,
+            strike=strike,
+            option_type=option_type,
+            dte=dte,
+            custom_expiry=custom_expiry,
+            extended_hours=extended_hours,
+            target_date=target_date,
+        )
+        return Response(content=json.dumps(res), media_type="application/json")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 

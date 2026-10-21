@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+
 interface VolumeProfile {
   poc:       number;
   vah:       number;
@@ -36,6 +38,8 @@ interface VolumeProfileCardProps {
   distFromHigh?: number | null;
   distFromLow?: number | null;
   finalJudgement?: any;
+  ticker?: string;
+  initialBacktest?: any;
 }
 
 export default function VolumeProfileCard({
@@ -46,7 +50,36 @@ export default function VolumeProfileCard({
   distFromHigh,
   distFromLow,
   finalJudgement,
+  ticker = "SPY",
+  initialBacktest,
 }: VolumeProfileCardProps) {
+  const [showBacktest, setShowBacktest] = useState(false);
+  const [backtestData, setBacktestData] = useState<any>(initialBacktest || null);
+  const [loadingBacktest, setLoadingBacktest] = useState(false);
+
+  useEffect(() => {
+    setBacktestData(initialBacktest || null);
+    setShowBacktest(false);
+  }, [ticker, initialBacktest]);
+
+  const fetchBacktest = async (targetTicker?: string) => {
+    const sym = (targetTicker || ticker || "SPY").trim().toUpperCase();
+    try {
+      setLoadingBacktest(true);
+      const res = await fetch(`/api/analysis/volume-profile-backtest/${encodeURIComponent(sym)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && !data.error) {
+          setBacktestData(data);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch volume profile backtest:", e);
+    } finally {
+      setLoadingBacktest(false);
+    }
+  };
+
   const aboveVah = currentPrice > vp.vah;
   const belowVal = currentPrice < vp.val;
   const inVA     = !aboveVah && !belowVal;
@@ -240,6 +273,125 @@ export default function VolumeProfileCard({
           </p>
         </div>
       )}
+
+      {/* Systematic Volume Profile Backtest Section */}
+      <div className="mt-3 pt-3 border-t border-border/60">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+            <span>📊</span>
+            <span>Volume Profile Backtest ({(ticker || "SPY").toUpperCase()})</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const sym = (ticker || "SPY").trim().toUpperCase();
+              if (!showBacktest && (!backtestData || backtestData.ticker?.toUpperCase() !== sym) && !loadingBacktest) {
+                fetchBacktest(sym);
+              }
+              setShowBacktest(!showBacktest);
+            }}
+            className="text-[11px] font-mono px-2 py-0.5 rounded border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-all"
+          >
+            {loadingBacktest ? "Computing..." : showBacktest ? "Hide Backtest ▴" : "Show Backtest ▾"}
+          </button>
+        </div>
+
+        {showBacktest && (
+          <div className="mt-2.5 space-y-2 font-mono text-[11px]">
+            {loadingBacktest ? (
+              <div className="flex items-center justify-center py-3 text-slate-400 gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+                <span>Simulating 252-day Auction Market Theory setups for {(ticker || "SPY").toUpperCase()}...</span>
+              </div>
+            ) : backtestData && !backtestData.error ? (
+              <>
+                {/* Scorecard banner */}
+                <div className="bg-[#0e1424] border border-cyan-500/25 rounded-lg p-2.5 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-white uppercase bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                      {backtestData.ticker || (ticker || "SPY").toUpperCase()}
+                    </span>
+                    <span className={`px-2 py-0.5 rounded font-bold border ${
+                      backtestData.win_rate_pct >= 50
+                        ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"
+                        : "bg-red-500/20 text-red-300 border-red-500/40"
+                    }`}>
+                      {backtestData.win_rate_badge}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-300 text-[10px]">
+                    <span>Profit Factor: <b className="text-white">{backtestData.profit_factor}</b></span>
+                    <span>·</span>
+                    <span>Net Return: <b className={backtestData.net_pnl_per_share >= 0 ? "text-emerald-400" : "text-red-400"}>
+                      {backtestData.net_pnl_per_share >= 0 ? "+$" : "-$"}{Math.abs(backtestData.net_pnl_per_share).toFixed(2)}/sh
+                    </b></span>
+                  </div>
+                </div>
+
+                {/* Setup Breakdown chips */}
+                {backtestData.setup_breakdown && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
+                    {Object.entries(backtestData.setup_breakdown).map(([name, stat]: [string, any]) => (
+                      <div key={name} className="bg-[#121626] border border-border/50 rounded p-1.5 flex flex-col">
+                        <span className="text-muted truncate">{name}</span>
+                        <span className="font-bold text-white mt-0.5">
+                          {stat.wins}/{stat.total} ({stat.win_rate_pct}%)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Recent Trades Table */}
+                {backtestData.trades && backtestData.trades.length > 0 && (
+                  <div className="overflow-x-auto max-h-56 overflow-y-auto border border-border/40 rounded-lg">
+                    <table className="w-full text-left border-collapse text-[10px]">
+                      <thead className="bg-[#0b0e17] sticky top-0 text-slate-400 uppercase">
+                        <tr className="border-b border-border/40">
+                          <th className="py-1 px-1.5">Date</th>
+                          <th className="py-1 px-1.5">Setup</th>
+                          <th className="py-1 px-1.5">Plan</th>
+                          <th className="py-1 px-1.5">Result</th>
+                          <th className="py-1 px-1.5">P&L (R)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/20 text-slate-300">
+                        {backtestData.trades.slice(-8).map((t: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-[#131b30]">
+                            <td className="py-1 px-1.5 whitespace-nowrap text-slate-400">{t.entry_date}</td>
+                            <td className="py-1 px-1.5 whitespace-nowrap">
+                              <span className={t.direction === "LONG" ? "text-emerald-400" : "text-red-400"}>
+                                {t.setup}
+                              </span>
+                            </td>
+                            <td className="py-1 px-1.5 whitespace-nowrap text-slate-400">
+                              ${t.entry} | S ${t.stop} | T1 ${t.t1}
+                            </td>
+                            <td className="py-1 px-1.5 whitespace-nowrap">
+                              <span className={t.result_badge?.includes("WIN") ? "text-emerald-300 font-semibold" : t.result_badge?.includes("STOPPED") ? "text-red-400 font-semibold" : "text-amber-300"}>
+                                {t.result_badge}
+                              </span>
+                            </td>
+                            <td className="py-1 px-1.5 whitespace-nowrap font-bold">
+                              <span className={t.pnl >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                {t.pnl_pct >= 0 ? "+" : ""}{t.pnl_pct}% ({t.r_multiple})
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-center py-2 text-slate-500">
+                {backtestData?.error || "No backtest trades found"}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

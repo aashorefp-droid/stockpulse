@@ -89,6 +89,9 @@ export default function Navbar() {
           <Link href="/chat" className="text-emerald-400 font-semibold hover:text-white transition-colors whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20">
             <span>🤖</span> AI Analyst
           </Link>
+          <Link href="/chart" className="text-cyan-400 font-semibold hover:text-white transition-colors whitespace-nowrap flex items-center gap-1 px-2 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-500/30 hover:bg-cyan-500/20">
+            <span>📈</span> Live 5m Chart
+          </Link>
           <Link href="/stock-analysis" className="text-accent font-semibold hover:text-white transition-colors whitespace-nowrap">🔬 Stock Analysis</Link>
           <Link href="/stock/SPY" className="hover:text-white transition-colors whitespace-nowrap">Chart & Deep Dive</Link>
           <Link href="/scanner" className="hover:text-white transition-colors whitespace-nowrap">Strategy Scanner</Link>

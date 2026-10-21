@@ -44,3 +44,6 @@ GMAIL_IMAP_HOST    = os.getenv("GMAIL_IMAP_HOST", "imap.gmail.com").strip()
 TOS_EMAIL_FROM     = os.getenv("TOS_EMAIL_FROM", "thinkorswim.com").strip()
 TOS_EMAIL_SUBJECT  = os.getenv("TOS_EMAIL_SUBJECT", "Alert:").strip()
 TOS_LOOKBACK_DAYS  = int(os.getenv("TOS_LOOKBACK_DAYS", "3"))
+
+# ── Frontend App URL ────────────────────────────────────────────────────────
+FRONTEND_URL       = _get_clean_env("FRONTEND_URL", "http://localhost:3002").rstrip("/")

@@ -73,6 +73,11 @@ except ImportError:
         TELEGRAM_SWING_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SWING_MESSAGE_THREAD_ID", "")
         TELEGRAM_SWEEP_MESSAGE_THREAD_ID = os.getenv("TELEGRAM_SWEEP_MESSAGE_THREAD_ID", TELEGRAM_SWING_MESSAGE_THREAD_ID)
 
+try:
+    from backend.config import FRONTEND_URL
+except Exception:
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+
 # ── Scheduler instance ────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="America/Chicago")
 
@@ -1530,11 +1535,28 @@ def _send_v4_summary_for_ticker(ticker: str) -> dict:
                     "dt4_atr": _lvl.get("atr"),
                     "dt4_outcomes": _direct.get("outcomes"),
                     "price": _direct.get("price") or row.get("price"),
+                    "dt4_4h_tag": _direct.get("four_hour_structure") or _sig.get("four_hour_structure"),
+                    "dt4_4h_detail": _direct.get("four_hour_structure_detail") or _sig.get("four_hour_structure_detail"),
+                    "dt4_4h_arrow": _direct.get("four_hour_arrow") or _sig.get("four_hour_arrow"),
+                    "dt4_4h_badge": _direct.get("four_hour_badge") or _sig.get("four_hour_badge"),
                 })
             elif _direct.get("error"):
                 row["error"] = _direct.get("error")
         except Exception as _e:
             logger.warning(f"[scheduler] {sym} direct V4 analyze failed: {_e}")
+
+        # Ensure 4H tracking structure & arrow symbol are populated
+        if not row.get("dt4_4h_tag"):
+            try:
+                from day_trading.v4 import _compute_4h_structure, get_4h_structure_arrow, _yf_symbol
+                h4_tag, h4_desc, h4_stats = _compute_4h_structure(_yf_symbol(sym), datetime.now(CST).date(), use_prepost=True)
+                h4_arr, h4_col, h4_badge = get_4h_structure_arrow(h4_tag)
+                row["dt4_4h_tag"] = h4_tag
+                row["dt4_4h_detail"] = h4_desc
+                row["dt4_4h_arrow"] = h4_arr
+                row["dt4_4h_badge"] = h4_badge
+            except Exception as _h4e:
+                logger.warning(f"[scheduler] {sym} 4H fallback failed: {_h4e}")
 
         if not row.get("dt4_setup") and sym not in {"SPXW", "SPX", "$SPX", "^GSPC"}:
             try:
@@ -1584,6 +1606,31 @@ def _send_v4_summary_for_ticker(ticker: str) -> dict:
         exit_plan = html.escape(str(row.get("dt4_exit_plan") or "—"))[:260]
         note = html.escape(str(row.get("dt4_note") or ""))[:260]
 
+        # 4H Tracking arrow badge formatting
+        h4_badge = row.get("dt4_4h_badge")
+        h4_tag = row.get("dt4_4h_tag")
+        h4_detail = row.get("dt4_4h_detail")
+        h4_arrow = row.get("dt4_4h_arrow") or "➡️"
+
+        if h4_badge:
+            h4_line = f"⏱️ <b>4H Tracking:</b> {h4_badge}"
+            if h4_detail and h4_detail != h4_tag:
+                h4_line += f" · <i>{html.escape(h4_detail)}</i>"
+        elif h4_tag:
+            h4_line = f"⏱️ <b>4H Tracking:</b> {h4_arrow} <b>{html.escape(h4_tag)}</b>"
+            if h4_detail:
+                h4_line += f" · <i>{html.escape(h4_detail)}</i>"
+        else:
+            h4_line = "⏱️ <b>4H Tracking:</b> ⚪ ➡️ <b>4H: Evaluating</b>"
+
+        from day_trading.v4 import get_4h_narrowed_focus
+        h4_focus = row.get("dt4_4h_focus") or get_4h_narrowed_focus(
+            h4_tag or "4H: N/A",
+            {"pdh": row.get("dt4_pdh"), "pdl": row.get("dt4_pdl"), "pd_mid": ((row.get("dt4_pdh") or 0) + (row.get("dt4_pdl") or 0)) / 2.0},
+            row.get("price"),
+        )
+        focus_badge = h4_focus.get("badge")
+
         outcomes = row.get("dt4_outcomes")
         if not outcomes and row.get("price") and row.get("dt4_pdh") and row.get("dt4_pdl"):
             try:
@@ -1605,6 +1652,8 @@ def _send_v4_summary_for_ticker(ticker: str) -> dict:
             f"🎯 <b>{html.escape(sym)} Day Trading V4 Playbook — {today_str()}</b>",
             f"Status: <b>{side_label}</b> | Setup: <b>{setup_text}</b> | Grade: <b>{grade}</b>",
             f"Bias: {bias} | Context: {context}",
+            h4_line,
+            f"🎯 <b>Narrowed Focus:</b> {focus_badge}",
             f"Price: <b>{_money(row.get('price'))}</b> | ATR: {_money(row.get('dt4_atr'))}",
             f"PDH {_money(row.get('dt4_pdh'))} | PDL {_money(row.get('dt4_pdl'))} | "
             f"PWH {_money(row.get('dt4_pwh'))} | PWL {_money(row.get('dt4_pwl'))}",
@@ -1730,6 +1779,9 @@ def _send_v4_summary_for_ticker(ticker: str) -> dict:
         if note:
             msg_lines.append(f"\nNote: {note}")
 
+        chart_url = f"{FRONTEND_URL}/chart?ticker={sym}&tf=5m"
+        msg_lines.append(f"\n📈 <b>Live Chart:</b> <a href=\"{chart_url}\">Open Live 5m Chart (PDH/PDL/SL Pre-drawn)</a>")
+
         msg = "\n".join(msg_lines)
 
         sent = send_telegram(
@@ -1805,10 +1857,45 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
         ce_spread = idea.get("cost_efficient_spread", "")
         ce_butterfly = idea.get("cost_efficient_butterfly", "")
 
+        from day_trading.v4 import get_4h_structure_arrow
+        h4_badge = data.get("live_4h_badge") or data.get("four_hour_badge")
+        h4_detail = data.get("four_hour_structure_detail") or ""
+        if not h4_badge:
+            h4_tag = data.get("live_4h_tag") or data.get("four_hour_structure") or data.get("structure_tag") or "4H: N/A"
+            _, _, h4_badge = get_4h_structure_arrow(h4_tag)
+
+        from day_trading.v4 import get_4h_narrowed_focus, check_4h_confluence
+        h4_focus = data.get("four_hour_focus")
+        h4_tag_val = data.get("live_4h_tag") or data.get("four_hour_structure") or data.get("structure_tag") or "4H: N/A"
+        if not h4_focus:
+            h4_focus = get_4h_narrowed_focus(h4_tag_val, levels, price)
+        confluence = data.get("four_hour_confluence") or check_4h_confluence(h4_focus, valid_outcome, action)
+
+        focus_badge = h4_focus.get("badge")
+        conf_badge = confluence.get("badge")
+        conf_note = confluence.get("note")
+
+        if h4_focus.get("badge_with_levels"):
+            focus_line_val = h4_focus.get("badge_with_levels")
+        elif "PDL" in str(focus_badge) and pdl and stop:
+            focus_line_val = f"{focus_badge} (PDL: ${pdl:.2f} | SL: ${stop:.2f})"
+        elif "PDH" in str(focus_badge) and pdh and stop:
+            focus_line_val = f"{focus_badge} (PDH: ${pdh:.2f} | SL: ${stop:.2f})"
+        elif stop:
+            focus_line_val = f"{focus_badge} (SL: ${stop:.2f})"
+        else:
+            focus_line_val = focus_badge
+
         lines = [
             f"🎯 <b>{html.escape(sym)} Open Validation — 5-Min Post-Open ({now_str})</b>",
             f"<b>Valid Outcome:</b> {action_emoji} <b>{html.escape(valid_outcome)}</b>",
             f"<i>{html.escape(rationale)}</i>",
+            "",
+            "🎯 <b>4H Setup Focus (from 8:05 AM):</b>",
+            f"• <b>4H Tracking:</b> {h4_badge}" + (f" · <i>{html.escape(h4_detail)}</i>" if h4_detail else ""),
+            f"• <b>Narrowed Focus:</b> {focus_line_val}",
+            f"• <b>Confluence:</b> {conf_badge}",
+            f"• <i>{html.escape(conf_note)}</i>",
             "",
             "📊 <b>Market Structure & Levels:</b>",
             f"• {html.escape(sym)} Price: <b>${price:.2f}</b>",
@@ -1839,6 +1926,8 @@ def _send_v4_post_open_outcome_for_ticker(ticker: str) -> dict:
             "",
             f"📋 <b>Execution Rule:</b> <i>{html.escape(strategy)}</i>",
             "💡 <i>Triggered from 8:00 AM Playbook scenario validation.</i>",
+            "",
+            f"📈 <b>Live Chart:</b> <a href=\"{FRONTEND_URL}/chart?ticker={sym}&tf=5m\">Open Live 5m Chart (PDH/PDL/SL + 0DTE Overlap)</a>",
         ]
 
         msg = "\n".join(lines)
@@ -1882,6 +1971,98 @@ def spy_v4_post_open_outcome_job(tickers: list[str] | None = None):
         "valid_outcome": first_res.get("valid_outcome"),
         "trade_idea": first_res.get("trade_idea"),
     }
+
+
+def _send_v4_4h_structure_alert_for_ticker(ticker: str) -> dict:
+    """Send the 8:05 AM CST 4H Structure Milestone Alert for a single ticker."""
+    import html
+    from day_trading.v4 import get_valid_outcome_and_trade_idea, get_4h_structure_arrow, _compute_4h_structure, _yf_symbol
+
+    sym = (ticker or "SPY").strip().upper()
+    try:
+        now_dt = datetime.now(CST)
+        now_str = now_dt.strftime("%I:%M %p CT")
+        chat_id, thread_id = _telegram_target(TELEGRAM_SPY_INTRADAY_MESSAGE_THREAD_ID)
+
+        data = get_valid_outcome_and_trade_idea(ticker=sym)
+        price = data.get("price", 0)
+        levels = data.get("key_levels", {})
+        pdh = levels.get("pdh", 0)
+        pdl = levels.get("pdl", 0)
+        pd_mid = levels.get("pd_mid", 0)
+
+        h4_badge = data.get("live_4h_badge") or data.get("four_hour_badge")
+        h4_detail = data.get("four_hour_structure_detail") or ""
+        if not h4_badge:
+            h4_tag = data.get("live_4h_tag") or data.get("four_hour_structure") or data.get("structure_tag") or "4H: N/A"
+            _, _, h4_badge = get_4h_structure_arrow(h4_tag)
+
+        timer_835_str = data.get("timer_left_835") or "00h 30m 00s"
+
+        from day_trading.v4 import get_4h_narrowed_focus
+        h4_focus = data.get("four_hour_focus")
+        h4_tag_val = data.get("live_4h_tag") or data.get("four_hour_structure") or data.get("structure_tag") or "4H: N/A"
+        if not h4_focus:
+            h4_focus = get_4h_narrowed_focus(h4_tag_val, levels, price)
+        focus_badge = h4_focus.get("badge")
+        focus_rule = h4_focus.get("rule")
+        idea = data.get("trade_idea", {})
+        stop = idea.get("stop_loss", price)
+        if h4_focus.get("badge_with_levels"):
+            focus_line_val = h4_focus.get("badge_with_levels")
+        elif "PDL" in str(focus_badge) and pdl and stop:
+            focus_line_val = f"{focus_badge} (PDL: ${pdl:.2f} | SL: ${stop:.2f})"
+        elif "PDH" in str(focus_badge) and pdh and stop:
+            focus_line_val = f"{focus_badge} (PDH: ${pdh:.2f} | SL: ${stop:.2f})"
+        elif stop:
+            focus_line_val = f"{focus_badge} (SL: ${stop:.2f})"
+        else:
+            focus_line_val = focus_badge
+
+        lines = [
+            f"⏱️ 🎯 <b>{html.escape(sym)} 4H Structure Alert — 8:05 AM CT ({now_str})</b>",
+            f"• <b>4H Tracking:</b> {h4_badge}" + (f" · <i>{html.escape(h4_detail)}</i>" if h4_detail else ""),
+            f"• <b>Narrowed Focus:</b> {focus_line_val}",
+            f"• <b>Playbook Rule:</b> <i>{html.escape(focus_rule)}</i>",
+            f"• <b>{html.escape(sym)} Price:</b> <b>${price:.2f}</b>",
+            f"• <b>Key Levels:</b> PDH ${pdh:.2f} | PDL ${pdl:.2f} | Mid ${pd_mid:.2f}",
+            "",
+            f"⏱️ <b>Status:</b> <b>WAITING FOR OPEN</b> (⏱️ Timer Left for 8:35 AM: {timer_835_str})",
+            "🔒 <i>Pre-market 4H market structure locked. Actionable CALLS / PUTS recommendation validates at 8:35 AM CST following the first 5-minute opening candle.</i>",
+            "",
+            f"📈 <b>Live Chart:</b> <a href=\"{FRONTEND_URL}/chart?ticker={sym}&tf=5m\">Open Live 5m Chart (PDH/PDL/SL + 0DTE Overlap)</a>",
+        ]
+        msg = "\n".join(lines)
+        sent = send_telegram(
+            TELEGRAM_BOT_TOKEN,
+            chat_id,
+            msg,
+            message_thread_id=thread_id,
+        )
+        logger.info("[scheduler] %s 8:05 AM 4H structure alert sent=%s badge=%s", sym, sent, h4_badge)
+        return {"ticker": sym, "sent": sent, "four_hour_badge": h4_badge}
+    except Exception as e:
+        logger.error(f"[scheduler] {sym} 8:05 AM 4H structure alert failed: {e}")
+        return {"ticker": sym, "sent": False, "error": str(e)}
+
+
+def spy_v4_4h_structure_alert_job(tickers: list[str] | None = None):
+    """
+    8:05 AM CST (Mon-Fri) — Send 4H Structure Milestone Alert with directional arrows
+    to Telegram for all configured V4 tickers (SPY, SPXW, QQQ, etc.).
+    """
+    if not _SPY_V4_SUMMARY_ENABLED:
+        logger.info("[scheduler] V4 8:05 AM 4H structure alert skipped: SPY_V4_SUMMARY_ENABLED=0")
+        return {"skipped": True}
+
+    target_tickers = [t.strip().upper() for t in (tickers or get_v4_alert_tickers()) if str(t).strip()]
+    if not target_tickers:
+        target_tickers = ["SPY"]
+
+    results = {}
+    for sym in target_tickers:
+        results[sym] = _send_v4_4h_structure_alert_for_ticker(sym)
+    return {"tickers": target_tickers, "results": results}
 
 
 def sweep_digest_job():
@@ -2323,6 +2504,13 @@ def setup_scheduler():
             id="spy_v4_summary_morning",
             replace_existing=True,
             misfire_grace_time=600,
+        )
+        scheduler.add_job(
+            spy_v4_4h_structure_alert_job,
+            CronTrigger(day_of_week="mon-fri", hour=8, minute=5, timezone=CST),
+            id="spy_v4_4h_structure_morning",
+            replace_existing=True,
+            misfire_grace_time=300,
         )
         scheduler.add_job(
             spy_v4_summary_job,

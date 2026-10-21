@@ -430,6 +430,8 @@ export default function StockPage({ params }: StockPageProps) {
             distFromHigh={strategy_signals?.dist_from_high}
             distFromLow={strategy_signals?.dist_from_low}
             finalJudgement={final_judgement}
+            ticker={ticker}
+            initialBacktest={data?.volume_profile_backtest}
           />
         ) : (
           <div className="bg-[#0d0f17] border border-[#1a1d2e] rounded-xl p-5 flex items-center justify-center text-slate-500 text-sm">

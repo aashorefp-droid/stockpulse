@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown(wait=False)
 
 
+# StockPulse FastAPI Application (Live Chart & Replay Engine)
 app = FastAPI(title="StockPulse API", version="1.0.0", lifespan=lifespan)
 
 _cors_env = os.getenv("CORS_ORIGINS") or os.getenv("CORS_ORIGIN", "")

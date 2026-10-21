@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://stockpulse-pkpj.onrender.com";
 
@@ -35,6 +35,8 @@ export default function ChatPage() {
   const [spyLoading, setSpyLoading] = useState<boolean>(false);
   const [pulseMode, setPulseMode] = useState<"pulse" | "long_term" | "earning">("pulse");
   const [pulseDate, setPulseDate] = useState<string>("");
+  const [seconds805, setSeconds805] = useState<number | null>(null);
+  const [seconds835, setSeconds835] = useState<number | null>(null);
   const [v4AlertTickers, setV4AlertTickers] = useState<string[]>(["SPY", "SPXW"]);
   const [v4PopularOptions, setV4PopularOptions] = useState<string[]>([
     "SPY",
@@ -496,30 +498,159 @@ Provide your analysis in the following structured format:
   const currentActiveTicker = ticker === "CUSTOM" ? (customTicker.toUpperCase() || "AAOI") : ticker;
   const isV4Ticker = !isGeneral && Boolean(currentActiveTicker);
 
-  useEffect(() => {
-    if (isV4Ticker) {
-      setSpyLoading(true);
-      setSpyOutcome(null);
-      const q = `?ticker=${encodeURIComponent(currentActiveTicker)}&mode=${encodeURIComponent(pulseMode)}${
-        pulseDate ? `&date=${encodeURIComponent(pulseDate)}` : ""
-      }`;
-      fetch(`/api/agent/spy-outcome${q}`)
-        .then((res) => {
-          if (!res.ok) throw new Error("Proxy error");
-          return res.json();
-        })
-        .catch(() => fetch(`${API_BASE}/api/agent/spy-outcome${q}`).then((r) => r.json()))
-        .then((data) => {
-          if (data && !data.error) {
-            setSpyOutcome(data);
+  const target805Ref = useRef<number | null>(null);
+  const target835Ref = useRef<number | null>(null);
+  const isFetchingRef = useRef<boolean>(false);
+  const lastFetchTimeRef = useRef<number>(0);
+
+  const fetchSpyOutcome = useCallback((showLoading: boolean = false) => {
+    if (!isV4Ticker || isFetchingRef.current) return;
+
+    // Minimum throttle gap of 1.5s between rapid calls
+    if (Date.now() - lastFetchTimeRef.current < 1500) return;
+
+    if (showLoading) setSpyLoading(true);
+    isFetchingRef.current = true;
+    lastFetchTimeRef.current = Date.now();
+
+    const ts = Date.now();
+    const q = `?ticker=${encodeURIComponent(currentActiveTicker)}&mode=${encodeURIComponent(pulseMode)}${
+      pulseDate ? `&date=${encodeURIComponent(pulseDate)}` : ""
+    }&_t=${ts}`;
+
+    fetch(`/api/agent/spy-outcome${q}`, {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+      },
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("Proxy error");
+        return res.json();
+      })
+      .catch(() =>
+        fetch(`${API_BASE}/api/agent/spy-outcome${q}`, {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+          },
+        }).then((r) => r.json())
+      )
+      .then((data) => {
+        if (data && !data.error) {
+          setSpyOutcome(data);
+          const now = Date.now();
+          if (data.is_premarket_waiting) {
+            target805Ref.current = data.target_time_805_iso
+              ? new Date(data.target_time_805_iso).getTime()
+              : typeof data.seconds_left_805 === "number"
+              ? now + data.seconds_left_805 * 1000
+              : null;
+            target835Ref.current = data.target_time_835_iso
+              ? new Date(data.target_time_835_iso).getTime()
+              : typeof data.seconds_left_835 === "number"
+              ? now + data.seconds_left_835 * 1000
+              : null;
+
+            if (target805Ref.current) {
+              setSeconds805(Math.max(0, Math.ceil((target805Ref.current - now) / 1000)));
+            }
+            if (target835Ref.current) {
+              setSeconds835(Math.max(0, Math.ceil((target835Ref.current - now) / 1000)));
+            }
+          } else {
+            target805Ref.current = null;
+            target835Ref.current = null;
+            setSeconds805(null);
+            setSeconds835(null);
           }
-        })
-        .catch(() => {})
-        .finally(() => setSpyLoading(false));
-    } else {
-      setSpyOutcome(null);
-    }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        isFetchingRef.current = false;
+        if (showLoading) setSpyLoading(false);
+      });
   }, [isV4Ticker, currentActiveTicker, pulseMode, pulseDate]);
+
+  // Initial fetch on ticker/mode/date switch
+  useEffect(() => {
+    fetchSpyOutcome(true);
+  }, [fetchSpyOutcome]);
+
+  // Wall-clock synced 1-second countdown timer for pre-market (immune to tab throttling/sleep)
+  useEffect(() => {
+    if (!spyOutcome?.is_premarket_waiting) {
+      setSeconds805(null);
+      setSeconds835(null);
+      return;
+    }
+
+    const timer = setInterval(() => {
+      const now = Date.now();
+      if (target805Ref.current) {
+        setSeconds805(Math.max(0, Math.ceil((target805Ref.current - now) / 1000)));
+      }
+      if (target835Ref.current) {
+        setSeconds835(Math.max(0, Math.ceil((target835Ref.current - now) / 1000)));
+      }
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [spyOutcome?.is_premarket_waiting]);
+
+  // Master Autonomous Auto-Refresh Coordinator:
+  // 1. Exactly at 8:05 AM CST: polls every 3s until 4H structure alert confirms
+  // 2. Exactly at 8:35 AM CST: polls every 3s until 8:35 opening candle trade recommendation confirms
+  // 3. Pre-market heartbeat: polls every 15s to update live pre-market price, change, and range
+  // 4. Market hours heartbeat: polls every 30s to update live price, MFE, and trade status (T1/Stop)
+  useEffect(() => {
+    if (!isV4Ticker || pulseDate) return;
+
+    const coordinatorInterval = setInterval(() => {
+      const now = Date.now();
+
+      // Trigger 1: 8:05 AM CST 4H Structure Alert milestone
+      if (spyOutcome?.is_waiting_4h && target805Ref.current && now >= target805Ref.current) {
+        fetchSpyOutcome(false);
+        return;
+      }
+
+      // Trigger 2: 8:35 AM CST Actionable Recommendation milestone
+      if (spyOutcome?.is_premarket_waiting && target835Ref.current && now >= target835Ref.current) {
+        fetchSpyOutcome(false);
+        return;
+      }
+
+      // Trigger 3: Pre-market periodic heartbeat (every 15s)
+      if (spyOutcome?.is_premarket_waiting) {
+        if (now - lastFetchTimeRef.current >= 15000) {
+          fetchSpyOutcome(false);
+        }
+        return;
+      }
+
+      // Trigger 4: Active trading session periodic heartbeat (every 30s)
+      if (spyOutcome && !spyOutcome.is_weekend_or_closed) {
+        if (now - lastFetchTimeRef.current >= 30000) {
+          fetchSpyOutcome(false);
+        }
+      }
+    }, 1000);
+
+    return () => clearInterval(coordinatorInterval);
+  }, [isV4Ticker, pulseDate, spyOutcome, fetchSpyOutcome]);
+
+  const formatTimerCountdown = (sec: number | null | undefined, fallback: string = "00h 00m 00s"): string => {
+    if (sec === null || sec === undefined) return fallback;
+    const s = Math.max(0, Math.floor(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const remS = s % 60;
+    return `${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m ${String(remS).padStart(2, "0")}s`;
+  };
 
   const quickPrompts = isGeneral
     ? [
@@ -621,12 +752,16 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
           prompt: `What is ${currentActiveTicker} Long Term Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Month (PMH/PML) and Day (PDH/PDL) Highs & Lows, multi-week trade plan, and forward backtest details.`,
         },
         {
-          title: `⚡ ${currentActiveTicker} Earning Pulse`,
-          prompt: `What is ${currentActiveTicker} Earning Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, 45–90 DTE options setup, and forward backtest details.`,
+          title: `⚡ ${currentActiveTicker} Earning Pulse (Last 4Q Backtest)`,
+          prompt: `What is ${currentActiveTicker} Earning Pulse? Include the complete Last 4 Quarters Earnings Backtest Scorecard (Win Rate %, Net Return R, Realized P&L $/sh, and the 4-quarter breakdown table).`,
         },
         {
           title: `⏪ Backtest ${currentActiveTicker} (${pulseDate || "10/12/2026"})`,
           prompt: `Backtest ${currentActiveTicker} pulse on ${pulseDate || "10/12/2026"}: provide the exact levels as of ${pulseDate || "10/12/2026"}, the validated Pulse, Long Term Pulse, and Earning Pulse setups, and full backtest verification.`,
+        },
+        {
+          title: `📊 ${currentActiveTicker} Volume Profile Backtest`,
+          prompt: `Backtest ${currentActiveTicker} Volume Profile setups: show the systematic Win Rate %, Net Return R-Multiple, Profit Factor, VAL Bounce / VAH Rejection / Breakout breakdown, and the recent trade log table.`,
         },
         {
           title: `📈 ${currentActiveTicker} Fundamentals (StockVerdicts)`,
@@ -715,9 +850,14 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
           template: `Backtest <ticker> long term pulse on ${pulseDate || "09/15/2026"}`,
         },
         {
-          label: "⏪ Backtest Earning Pulse",
-          badge: pulseDate || "08/15/2026",
-          template: `Backtest <ticker> earning pulse on ${pulseDate || "08/15/2026"}`,
+          label: "⏪ Backtest Earning Pulse (Last 4Q)",
+          badge: "Last 4 Quarters",
+          template: `Backtest <ticker> last 4 quarter earnings backtest: show the complete 4-quarter scorecard, win rate %, net R-multiple, realized P&L $/sh, and quarter-by-quarter breakdown table.`,
+        },
+        {
+          label: "⏪ Backtest Volume Profile (<ticker>)",
+          badge: "VAL/POC/VAH",
+          template: `Backtest <ticker> Volume Profile setups: show the systematic Win Rate %, Net Return R-Multiple, Profit Factor, VAL Bounce / VAH Rejection / Breakout breakdown, and the recent trade log table.`,
         },
       ],
     },
@@ -1162,35 +1302,151 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                   </span>
                 ) : spyOutcome ? (
                   <div className="flex flex-wrap items-center gap-1.5 ml-1 text-[11px] font-mono">
-                    <span className="text-white font-bold">
+                    <span className="text-white font-bold flex items-center gap-1">
                       {currentActiveTicker} ${spyOutcome.price?.toFixed(2)}
+                      {spyOutcome.is_premarket_waiting && (
+                        <span className="px-1 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider bg-purple-500/20 text-purple-300 border border-purple-500/40" title="Live Pre-Market Price">
+                          Pre-Market
+                        </span>
+                      )}
                     </span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] ${
-                        spyOutcome.trade_idea?.action?.includes("CALLS")
-                          ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
-                          : "bg-red-500/15 border-red-500/40 text-red-300"
-                      }`}
-                    >
-                      {spyOutcome.trade_idea?.action} (
-                      {spyOutcome.trade_idea?.suggested_contract || "ATM"})
-                    </span>
-                    <span className="text-slate-300 hidden xl:inline">
-                      Entry <b className="text-emerald-400">${spyOutcome.trade_idea?.entry_level?.toFixed(2)}</b> → T1{" "}
-                      <b className="text-cyan-400">${spyOutcome.trade_idea?.target_1?.toFixed(2)}</b>
-                    </span>
-                    {spyOutcome.backtest?.result_badge && (
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          spyOutcome.backtest.result_badge.includes("WIN")
-                            ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-                            : spyOutcome.backtest.result_badge.includes("STOPPED")
-                            ? "bg-red-500/15 text-red-300 border border-red-500/30"
-                            : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                        }`}
-                      >
-                        {spyOutcome.backtest.result_badge}
+                    {spyOutcome.is_premarket_waiting && spyOutcome.premarket_change !== undefined && spyOutcome.premarket_change !== null && (
+                      <span className={`text-[10px] font-semibold ${spyOutcome.premarket_change >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                        {spyOutcome.premarket_change >= 0 ? "+" : ""}{spyOutcome.premarket_change.toFixed(2)} ({spyOutcome.premarket_change_pct >= 0 ? "+" : ""}{spyOutcome.premarket_change_pct.toFixed(2)}%)
                       </span>
+                    )}
+                    {spyOutcome.is_premarket_waiting && spyOutcome.latest_session_close && (
+                      <span className="text-[10px] text-slate-400 hidden lg:inline">
+                        (Prior Close: ${spyOutcome.latest_session_close.toFixed(2)})
+                      </span>
+                    )}
+                    {spyOutcome.is_premarket_waiting ? (
+                      <>
+                        <span className="px-1.5 py-0.5 rounded font-semibold border text-[10px] bg-amber-500/15 border-amber-500/40 text-amber-300 flex items-center gap-1 shadow-sm">
+                          <span className={seconds835 !== null && seconds835 <= 0 ? "animate-spin" : "animate-pulse"}>
+                            {seconds835 !== null && seconds835 <= 0 ? "🔄" : "⏱️"}
+                          </span>
+                          <span>
+                            {seconds835 !== null && seconds835 <= 0
+                              ? "CONFIRMING 8:35 AM OPEN..."
+                              : `WAITING (⏱️ Rec in ${formatTimerCountdown(seconds835, spyOutcome.timer_left_835)})`}
+                          </span>
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded font-semibold border text-[10px] bg-cyan-500/15 border-cyan-500/40 text-cyan-300 hidden md:inline-flex items-center gap-1 shadow-sm">
+                          <span>⏱️</span>
+                          <span>
+                            {seconds805 !== null && seconds805 > 0
+                              ? `4H (⏱️ 8:05 CST: ${formatTimerCountdown(seconds805, spyOutcome.timer_left_805)})`
+                              : spyOutcome.four_hour_badge || spyOutcome.structure_tag || "4H Confirmed"}
+                          </span>
+                        </span>
+                        {spyOutcome.four_hour_focus?.short_badge && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] hidden lg:inline-flex items-center gap-1 shadow-sm ${
+                              spyOutcome.four_hour_focus.side === "LONG"
+                                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                                : "bg-red-500/15 border-red-500/40 text-red-300"
+                            }`}
+                            title={spyOutcome.four_hour_focus.summary}
+                          >
+                            <span>🎯</span>
+                            <span>{spyOutcome.four_hour_focus.short_badge}</span>
+                          </span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                          <span className={seconds835 !== null && seconds835 <= 0 ? "animate-spin" : ""}>
+                            {seconds835 !== null && seconds835 <= 0 ? "🔄" : "⏱️"}
+                          </span>
+                          <span>
+                            {seconds835 !== null && seconds835 <= 0 ? "CONFIRMING OPEN" : "PENDING 8:35 AM"}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => fetchSpyOutcome(true)}
+                          disabled={spyLoading}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 flex items-center gap-1 shadow-sm cursor-pointer"
+                          title="Click to refresh live recommendation"
+                        >
+                          <span className={spyLoading ? "animate-spin" : ""}>🔄</span>
+                          <span>Refresh</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span
+                          className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] ${
+                            spyOutcome.trade_idea?.action?.includes("CALLS")
+                              ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                              : "bg-red-500/15 border-red-500/40 text-red-300"
+                          }`}
+                        >
+                          {spyOutcome.trade_idea?.action} (
+                          {spyOutcome.trade_idea?.suggested_contract || "ATM"})
+                        </span>
+                        {spyOutcome.four_hour_focus?.short_badge && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] hidden md:inline-flex items-center gap-1 shadow-sm ${
+                              spyOutcome.four_hour_focus.side === "LONG"
+                                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                                : "bg-red-500/15 border-red-500/40 text-red-300"
+                            }`}
+                            title={spyOutcome.four_hour_focus.summary}
+                          >
+                            <span>🎯</span>
+                            <span>{spyOutcome.four_hour_focus.short_badge}</span>
+                          </span>
+                        )}
+                        {spyOutcome.four_hour_confluence?.badge && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-semibold border text-[10px] hidden lg:inline-flex items-center gap-1 shadow-sm ${
+                              spyOutcome.four_hour_confluence.is_aligned || spyOutcome.four_hour_confluence.confluent
+                                ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                                : "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                            }`}
+                            title={spyOutcome.four_hour_confluence.note || spyOutcome.four_hour_confluence.detail}
+                          >
+                            <span>{spyOutcome.four_hour_confluence.badge}</span>
+                          </span>
+                        )}
+                        <span className="text-slate-300 hidden xl:inline">
+                          Entry <b className="text-emerald-400">${spyOutcome.trade_idea?.entry_level?.toFixed(2)}</b> → T1{" "}
+                          <b className="text-cyan-400">${spyOutcome.trade_idea?.target_1?.toFixed(2)}</b>
+                        </span>
+                        {pulseMode === "earning" && spyOutcome.earnings_backtest_last_4_quarters?.win_rate_badge ? (
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              spyOutcome.earnings_backtest_last_4_quarters.wins >= 2
+                                ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                                : "bg-red-500/15 text-red-300 border border-red-500/30"
+                            }`}
+                          >
+                            4Q Backtest: {spyOutcome.earnings_backtest_last_4_quarters.win_rate_badge} · {spyOutcome.earnings_backtest_last_4_quarters.net_r_multiple}
+                          </span>
+                        ) : spyOutcome.backtest?.result_badge ? (
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                              spyOutcome.backtest.result_badge.includes("WIN")
+                                ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                                : spyOutcome.backtest.result_badge.includes("STOPPED")
+                                ? "bg-red-500/15 text-red-300 border border-red-500/30"
+                                : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                            }`}
+                          >
+                            {spyOutcome.backtest.result_badge}
+                          </span>
+                        ) : null}
+                        <button
+                          type="button"
+                          onClick={() => fetchSpyOutcome(true)}
+                          disabled={spyLoading}
+                          className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 flex items-center gap-1 shadow-sm cursor-pointer ml-1"
+                          title="Refresh live price & trade execution status"
+                        >
+                          <span className={spyLoading ? "animate-spin" : ""}>🔄</span>
+                          <span>Refresh</span>
+                        </button>
+                      </>
                     )}
                   </div>
                 ) : null}
@@ -1201,6 +1457,7 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                 <input
                   type="date"
                   value={pulseDate}
+                  max={new Date().toISOString().split("T")[0]}
                   onChange={(e) => setPulseDate(e.target.value)}
                   className="bg-[#121626] border border-slate-700 text-white font-mono text-[11px] px-2 py-0.5 rounded-md focus:outline-none focus:border-[#4d9fff]"
                 />
@@ -1212,6 +1469,16 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                     Today
                   </button>
                 )}
+                <a
+                  href={`/chart?ticker=${currentActiveTicker}&tf=5m`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/25 transition-all flex items-center gap-1.5"
+                  title="Open Interactive Live 5m Chart (PDH/PDL/SL pre-drawn + 0DTE Contract Overlap)"
+                >
+                  <span>📈</span>
+                  <span>Live 5m Chart ↗</span>
+                </a>
                 <button
                   type="button"
                   onClick={() => setShowPulseCard(!showPulseCard)}
@@ -1248,24 +1515,63 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                     </span>
                     <span
                       className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-semibold border ${
-                        spyOutcome.valid_outcome?.includes("Outcome 1") || spyOutcome.trade_idea?.action?.includes("CALLS")
+                        spyOutcome.is_premarket_waiting
+                          ? "bg-amber-500/15 border-amber-500/40 text-amber-400"
+                          : spyOutcome.valid_outcome?.includes("Outcome 1") || spyOutcome.trade_idea?.action?.includes("CALLS")
                           ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-400"
                           : spyOutcome.valid_outcome?.includes("Outcome 2") || spyOutcome.trade_idea?.action?.includes("PUTS")
                           ? "bg-red-500/15 border-red-500/40 text-red-400"
                           : "bg-amber-500/15 border-amber-500/40 text-amber-400"
                       }`}
                     >
-                      {spyOutcome.valid_outcome}
+                      {spyOutcome.is_premarket_waiting
+                        ? `WAITING · (⏱️ Timer Left for 8:35 AM: ${formatTimerCountdown(seconds835, spyOutcome.timer_left_835)})`
+                        : spyOutcome.valid_outcome}
                     </span>
-                    {spyOutcome.structure_tag && (
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300">
-                        {spyOutcome.structure_tag}
+                    {(spyOutcome.structure_tag || spyOutcome.is_premarket_waiting) && (
+                      <span className="text-[11px] font-mono px-2 py-0.5 rounded-full font-bold bg-cyan-500/15 border border-cyan-500/40 text-cyan-300 flex items-center gap-1">
+                        {seconds805 !== null && seconds805 > 0 ? (
+                          <>
+                            <span className="animate-pulse">⏱️</span>
+                            <span>4H (⏱️ Timer left for 8:05 AM CST: {formatTimerCountdown(seconds805, spyOutcome.timer_left_805)})</span>
+                          </>
+                        ) : (
+                          <span>{spyOutcome.four_hour_badge || spyOutcome.structure_tag}</span>
+                        )}
+                      </span>
+                    )}
+                    {spyOutcome.four_hour_focus?.short_badge && (
+                      <span
+                        className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                          spyOutcome.four_hour_focus.side === "LONG"
+                            ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
+                            : "bg-red-500/15 border border-red-500/40 text-red-300"
+                        }`}
+                        title={spyOutcome.four_hour_focus.summary}
+                      >
+                        <span>🎯 Focus:</span>
+                        <span>{spyOutcome.four_hour_focus.short_badge}</span>
+                      </span>
+                    )}
+                    {spyOutcome.four_hour_confluence?.badge && !spyOutcome.is_premarket_waiting && (
+                      <span
+                        className={`text-[11px] font-mono px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                          spyOutcome.four_hour_confluence.is_aligned || spyOutcome.four_hour_confluence.confluent
+                            ? "bg-emerald-500/15 border border-emerald-500/40 text-emerald-300"
+                            : "bg-amber-500/15 border border-amber-500/40 text-amber-300"
+                        }`}
+                        title={spyOutcome.four_hour_confluence.note || spyOutcome.four_hour_confluence.detail}
+                      >
+                        <span>{spyOutcome.four_hour_confluence.badge}</span>
                       </span>
                     )}
                   </div>
                   <div className="text-[11px] font-mono text-slate-400 flex flex-wrap items-center gap-2">
                     <span>
                       {currentActiveTicker}: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b>
+                      {spyOutcome.is_premarket_waiting && (
+                        <span className="ml-1 text-[10px] text-purple-300 font-semibold">(Live Pre-Market)</span>
+                      )}
                     </span>
                     {pulseMode === "earning" ? (
                       <>
@@ -1320,28 +1626,166 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                   </div>
                 </div>
 
+                {spyOutcome.is_premarket_waiting && (
+                  <div className="bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent border border-amber-500/30 rounded-lg p-3 text-xs font-mono space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/20 pb-2">
+                      <div className="flex items-center gap-2 text-amber-300 font-bold">
+                        <span className="text-base animate-pulse">⏱️</span>
+                        <span>PRE-MARKET WAITING STATE · {spyOutcome.session_day_name || "TODAY"}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                          Live Pre-Market
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3 text-slate-300 text-[11px]">
+                        <span>Live PM: <b className="text-white">${spyOutcome.price?.toFixed(2)}</b></span>
+                        {spyOutcome.premarket_change !== undefined && spyOutcome.premarket_change !== null && (
+                          <span className={spyOutcome.premarket_change >= 0 ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                            {spyOutcome.premarket_change >= 0 ? "+" : ""}{spyOutcome.premarket_change.toFixed(2)} ({spyOutcome.premarket_change_pct >= 0 ? "+" : ""}{spyOutcome.premarket_change_pct.toFixed(2)}%)
+                          </span>
+                        )}
+                        <span>·</span>
+                        <span>Prior Close: <b className="text-white">${spyOutcome.latest_session_close?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>PM Range: <b className="text-cyan-300">${spyOutcome.session_low?.toFixed(2)} - ${spyOutcome.session_high?.toFixed(2)}</b></span>
+                        <span>·</span>
+                        <span>ATR: <b className="text-cyan-300">${spyOutcome.key_levels?.atr?.toFixed(2) || "—"}</b></span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                      <div className="bg-[#121626]/80 border border-slate-700/60 rounded p-2 flex items-center justify-between">
+                        <span className="text-slate-300">4H Structure Alert (8:05 AM CST):</span>
+                        <span className={seconds805 !== null && seconds805 > 0 ? "text-amber-400 font-bold" : "text-emerald-400 font-bold"}>
+                          {seconds805 !== null && seconds805 > 0
+                            ? `4H (⏱️ Timer left for 8:05 AM CST: ${formatTimerCountdown(seconds805, spyOutcome.timer_left_805)})`
+                            : `✅ Alert Confirmed (${spyOutcome.four_hour_badge || spyOutcome.structure_tag})`}
+                        </span>
+                      </div>
+                      <div className="bg-[#121626]/80 border border-slate-700/60 rounded p-2 flex items-center justify-between">
+                        <span className="text-slate-300">Action & Recommendation (8:35 AM CST):</span>
+                        <span className="text-amber-400 font-bold">
+                          {seconds835 !== null && seconds835 <= 0 ? (
+                            <span className="flex items-center gap-1.5 text-cyan-300">
+                              <span className="animate-spin">🔄</span>
+                              <span>Confirming 8:35 AM Candle...</span>
+                              <button
+                                type="button"
+                                onClick={() => fetchSpyOutcome(true)}
+                                className="px-1.5 py-0.5 rounded text-[9px] bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 hover:bg-cyan-500/30 cursor-pointer"
+                              >
+                                Refresh Now
+                              </button>
+                            </span>
+                          ) : (
+                            `WAITING (⏱️ Timer Left for 8:35 AM: ${formatTimerCountdown(seconds835, spyOutcome.timer_left_835)})`
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    {spyOutcome.four_hour_focus && (
+                      <div className="bg-[#121626]/90 border border-cyan-500/30 rounded p-2 text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-300 font-medium">🎯 4H Narrowed Focus:</span>
+                          <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
+                            spyOutcome.four_hour_focus.side === "LONG"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : "bg-red-500/20 text-red-300 border border-red-500/40"
+                          }`}>
+                            {spyOutcome.four_hour_focus.badge_with_levels || spyOutcome.four_hour_focus.badge}
+                          </span>
+                        </div>
+                        <span className="text-slate-400 text-[10px]">
+                          {spyOutcome.four_hour_focus.rule}
+                        </span>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-slate-400">
+                      💡 <b>Playbook Setup:</b> {spyOutcome.four_hour_focus?.summary || "Prior session levels are mapped for today."} Actionable Call/Put contracts and execution trigger will confirm at 8:35 AM CST following the 8:30 AM market open.
+                    </p>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-[#121626] border border-[#1d243b] rounded-lg p-2.5 text-xs">
                   <div>
-                    <span className="text-[10px] text-slate-400 block font-mono">OPEN CONTRACT (ATM)</span>
-                    <span className="font-bold text-white font-mono">
-                      {spyOutcome.trade_idea?.open_contract || spyOutcome.trade_idea?.suggested_contract || `${currentActiveTicker} ATM`}
+                    <span className="text-[10px] text-slate-400 block font-mono">
+                      {spyOutcome.is_premarket_waiting ? "RECOMMENDATION" : "OPEN CONTRACT (ATM)"}
+                    </span>
+                    <span className="font-bold text-white font-mono text-[11px]">
+                      {spyOutcome.is_premarket_waiting ? (
+                        <span className="text-amber-300">
+                          WAITING (⏱️ {formatTimerCountdown(seconds835, spyOutcome.timer_left_835)})
+                        </span>
+                      ) : (
+                        spyOutcome.trade_idea?.open_contract || spyOutcome.trade_idea?.suggested_contract || `${currentActiveTicker} ATM`
+                      )}
                     </span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 block font-mono">ENTRY TRIGGER</span>
-                    <span className="font-semibold text-emerald-400 font-mono">${spyOutcome.trade_idea?.entry_level?.toFixed(2)}</span>
+                    <span className="font-semibold text-emerald-400 font-mono">
+                      {spyOutcome.is_premarket_waiting
+                        ? (spyOutcome.four_hour_focus?.trigger_level ? `${spyOutcome.four_hour_focus.focus_type} at $${spyOutcome.four_hour_focus.trigger_level.toFixed(2)}` : "Awaiting 8:35 AM CST")
+                        : `$${spyOutcome.trade_idea?.entry_level?.toFixed(2)}`}
+                    </span>
                   </div>
                   <div>
                     <span className="text-[10px] text-slate-400 block font-mono">STOP LOSS</span>
-                    <span className="font-semibold text-red-400 font-mono">${spyOutcome.trade_idea?.stop_loss?.toFixed(2)}</span>
+                    <span className="font-semibold text-red-400 font-mono">
+                      {spyOutcome.is_premarket_waiting
+                        ? "Defined at 8:35 AM"
+                        : `$${spyOutcome.trade_idea?.stop_loss?.toFixed(2)}`}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-slate-400 block font-mono">TARGETS (R:R {spyOutcome.trade_idea?.reward_risk})</span>
+                    <span className="text-[10px] text-slate-400 block font-mono">
+                      TARGETS (R:R {spyOutcome.trade_idea?.reward_risk || "—"})
+                    </span>
                     <span className="font-semibold text-cyan-400 font-mono">
-                      ${spyOutcome.trade_idea?.target_1?.toFixed(2)} / ${spyOutcome.trade_idea?.target_2?.toFixed(2)}
+                      {spyOutcome.is_premarket_waiting
+                        ? "Calculated at 8:35 AM"
+                        : `$${spyOutcome.trade_idea?.target_1?.toFixed(2)} / $${spyOutcome.trade_idea?.target_2?.toFixed(2)}`}
                     </span>
                   </div>
                 </div>
+
+                {spyOutcome.four_hour_focus && (
+                  <div className="bg-[#101626] border border-cyan-500/25 rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-mono">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-cyan-300 font-bold uppercase">🎯 4H Narrowed Focus (from 8:05 AM):</span>
+                      <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                        spyOutcome.four_hour_focus.side === "LONG"
+                          ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                          : "bg-red-500/15 text-red-300 border border-red-500/30"
+                      }`}>
+                        {spyOutcome.four_hour_focus.badge_with_levels || spyOutcome.four_hour_focus.badge}
+                      </span>
+                      {spyOutcome.four_hour_confluence?.badge && (
+                        <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
+                          spyOutcome.four_hour_confluence.is_aligned || spyOutcome.four_hour_confluence.confluent
+                            ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                            : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                        }`} title={spyOutcome.four_hour_confluence.note}>
+                          {spyOutcome.four_hour_confluence.badge}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-cyan-500/15 pt-1.5 mt-1">
+                      {spyOutcome.four_hour_focus.rule && (
+                        <span className="text-slate-400 text-[10px] italic">
+                          {spyOutcome.four_hour_focus.rule}
+                        </span>
+                      )}
+                      <a
+                        href={`/chart?ticker=${currentActiveTicker}&tf=5m`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-400 hover:text-cyan-300 underline font-bold text-[10px] whitespace-nowrap ml-auto flex items-center gap-1"
+                        title="Open Live 5m Chart with pre-drawn PDH, PDL, SL and 0DTE Contract Overlap"
+                      >
+                        <span>📈 Open Live 5m Chart (PDH/PDL/SL) ↗</span>
+                      </a>
+                    </div>
+                  </div>
+                )}
 
                 {(spyOutcome.trade_idea?.cost_efficient_otm || spyOutcome.trade_idea?.cost_efficient_spread || spyOutcome.trade_idea?.cost_efficient_butterfly) && (
                   <div className="bg-[#101626] border border-cyan-500/25 rounded-lg px-3 py-2 flex flex-col gap-1.5 text-[11px] font-mono">
@@ -1368,7 +1812,139 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                   </div>
                 )}
 
-                {spyOutcome.backtest && (
+                {pulseMode === "earning" && spyOutcome.earnings_backtest_last_4_quarters ? (
+                  <div className="bg-[#0e1424] border border-purple-500/30 rounded-lg p-3 space-y-2.5 text-[11px] font-mono">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-purple-500/20 pb-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-purple-300 font-bold uppercase flex items-center gap-1">
+                          <span>📊</span>
+                          <span>Last 4 Quarters Earnings Backtest Scorecard:</span>
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded font-bold ${
+                            spyOutcome.earnings_backtest_last_4_quarters.wins >= 2
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                              : "bg-red-500/20 text-red-300 border border-red-500/40"
+                          }`}
+                        >
+                          {spyOutcome.earnings_backtest_last_4_quarters.win_rate_badge}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-slate-300">
+                        <span>
+                          Net Return:{" "}
+                          <b
+                            className={
+                              spyOutcome.earnings_backtest_last_4_quarters.net_r_multiple?.startsWith("+")
+                                ? "text-emerald-400"
+                                : "text-red-400"
+                            }
+                          >
+                            {spyOutcome.earnings_backtest_last_4_quarters.net_r_multiple}
+                          </b>
+                        </span>
+                        <span>
+                          Realized P&L:{" "}
+                          <b
+                            className={
+                              (spyOutcome.earnings_backtest_last_4_quarters.net_pnl_per_share || 0) >= 0
+                                ? "text-emerald-400"
+                                : "text-red-400"
+                            }
+                          >
+                            {(spyOutcome.earnings_backtest_last_4_quarters.net_pnl_per_share || 0) >= 0 ? "+$" : "-$"}
+                            {Math.abs(spyOutcome.earnings_backtest_last_4_quarters.net_pnl_per_share || 0).toFixed(2)}/sh
+                          </b>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 4 Quarters Breakdown Table */}
+                    {spyOutcome.earnings_backtest_last_4_quarters.quarters && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead>
+                            <tr className="border-b border-[#1f2842] text-slate-400 uppercase text-[10px]">
+                              <th className="py-1 px-1.5">Quarter (Date)</th>
+                              <th className="py-1 px-1.5">EPS vs Est (Surprise)</th>
+                              <th className="py-1 px-1.5">Weekly Structure</th>
+                              <th className="py-1 px-1.5">Setup & Plan</th>
+                              <th className="py-1 px-1.5">Result</th>
+                              <th className="py-1 px-1.5">Realized P&L / R</th>
+                              <th className="py-1 px-1.5">MFE / MAE</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#182138] text-slate-300">
+                            {spyOutcome.earnings_backtest_last_4_quarters.quarters.map((q: any, qIdx: number) => (
+                              <tr key={qIdx} className="hover:bg-[#131b30]">
+                                <td className="py-1.5 px-1.5 font-semibold text-white whitespace-nowrap">
+                                  {q.quarter_label}
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap">
+                                  {q.eps_actual != null ? (
+                                    <span>
+                                      ${q.eps_actual} vs ${q.eps_estimate}{" "}
+                                      <span
+                                        className={
+                                          (q.surprise_pct || 0) >= 0 ? "text-emerald-400" : "text-red-400"
+                                        }
+                                      >
+                                        ({(q.surprise_pct || 0) >= 0 ? "+" : ""}
+                                        {q.surprise_pct}%)
+                                      </span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-500">—</span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap">
+                                  <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-[10px]">
+                                    {q.structure_tag || "—"}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap">
+                                  <span
+                                    className={`font-bold mr-1 ${
+                                      q.action?.includes("CALLS") ? "text-emerald-400" : "text-red-400"
+                                    }`}
+                                  >
+                                    {q.action}
+                                  </span>
+                                  <span className="text-slate-400 text-[10px]">
+                                    ${q.entry} | S ${q.stop} | T1 ${q.t1}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap">
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                      q.result_badge?.includes("WIN")
+                                        ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                                        : q.result_badge?.includes("STOPPED")
+                                        ? "bg-red-500/15 text-red-300 border border-red-500/30"
+                                        : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                                    }`}
+                                  >
+                                    {q.result_badge}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap font-semibold">
+                                  <span className={(q.realized_pnl_per_share || 0) >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                    {q.realized_r_multiple} ({(q.realized_pnl_per_share || 0) >= 0 ? "+$" : "-$"}
+                                    {Math.abs(q.realized_pnl_per_share || 0).toFixed(2)}/sh)
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-1.5 whitespace-nowrap text-slate-400 text-[10px]">
+                                  MFE <span className="text-emerald-400">{q.max_favorable_excursion}</span> / MAE{" "}
+                                  <span className="text-red-400">{q.max_adverse_excursion}</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ) : spyOutcome.backtest ? (
                   <div className="bg-[#101524] border border-[#1e2942] rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-slate-400 uppercase">Backtest:</span>
@@ -1383,14 +1959,18 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                       >
                         {spyOutcome.backtest.result_badge}
                       </span>
-                      <span className="text-slate-300">{spyOutcome.backtest.summary}</span>
+                      <span className="text-slate-300">
+                        {spyOutcome.is_premarket_waiting
+                          ? `Waiting for market open (8:30 AM CST) and 5m confirmation (8:35 AM CST). Timer left: ${formatTimerCountdown(seconds835, spyOutcome.timer_left_835)}`
+                          : spyOutcome.backtest.summary}
+                      </span>
                     </div>
                     <div className="text-slate-400">
                       MFE: <b className="text-emerald-400">{spyOutcome.backtest.max_favorable_excursion}</b> · MAE:{" "}
                       <b className="text-red-400">{spyOutcome.backtest.max_adverse_excursion}</b>
                     </div>
                   </div>
-                )}
+                ) : null}
 
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
                   <p className="text-[11px] text-slate-400 line-clamp-1 italic">
@@ -1412,7 +1992,7 @@ Follow the table with a 4-sentence high-conviction narrative summarizing the pri
                           pulseMode === "long_term"
                             ? `What is ${currentActiveTicker} Long Term Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Month (PMH/PML) and Day (PDH/PDL) Highs & Lows, trade plan, and backtest details.`
                             : pulseMode === "earning"
-                            ? `What is ${currentActiveTicker} Earning Pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Check Quarterly (PQH/PQL) and Monthly (PMH/PML) Highs & Lows, trade plan, and backtest details.`
+                            ? `What is ${currentActiveTicker} Earning Pulse${pulseDate ? ` on ${pulseDate}` : ""}? Show the Quarterly (PQH/PQL) levels, trade plan, and complete Last 4 Quarters Earnings Backtest Scorecard with quarter-by-quarter breakdown.`
                             : `What is ${currentActiveTicker} pulse${pulseDate ? ` on ${pulseDate}` : " today"}? Provide the validated outcome, key levels, Calls vs Puts trade idea, and backtest verification.`
                         )
                       }

@@ -582,6 +582,37 @@ def analyze_from_daily(
     signal = _pick_signal(price, session_high, session_low, levels)
     outcomes = compute_outcomes(price, levels)
 
+    # 4-Hour market structure and tracking arrow
+    h4_tag, h4_desc, h4_stats = _compute_4h_structure(_yf_symbol(ticker), scan_date, daily, use_prepost=True)
+    h4_arr, h4_col, h4_badge = get_4h_structure_arrow(h4_tag)
+    h4_focus = get_4h_narrowed_focus(h4_tag, asdict(levels), price)
+    if isinstance(h4_focus, dict):
+        stop_val = signal.stop if (signal is not None and signal.stop is not None) else None
+        if stop_val is not None:
+            h4_focus["stop_loss"] = stop_val
+            h4_focus["stop_loss_str"] = f"${stop_val:.2f}"
+            if "PDL" in str(h4_focus.get("badge", "")) and levels.pdl is not None:
+                h4_focus["level_name"] = "PDL"
+                h4_focus["level_value"] = levels.pdl
+                h4_focus["badge_with_levels"] = f"{h4_focus.get('badge')} (PDL: ${levels.pdl:.2f} | SL: ${stop_val:.2f})"
+                h4_focus["short_badge"] = f"{h4_focus.get('arrow', '')} {h4_focus.get('focus_type', '')} (PDL ${levels.pdl:.2f} | SL ${stop_val:.2f})".strip()
+            elif "PDH" in str(h4_focus.get("badge", "")) and levels.pdh is not None:
+                h4_focus["level_name"] = "PDH"
+                h4_focus["level_value"] = levels.pdh
+                h4_focus["badge_with_levels"] = f"{h4_focus.get('badge')} (PDH: ${levels.pdh:.2f} | SL: ${stop_val:.2f})"
+                h4_focus["short_badge"] = f"{h4_focus.get('arrow', '')} {h4_focus.get('focus_type', '')} (PDH ${levels.pdh:.2f} | SL ${stop_val:.2f})".strip()
+            else:
+                h4_focus["badge_with_levels"] = f"{h4_focus.get('badge')} (SL: ${stop_val:.2f})"
+                h4_focus["short_badge"] = f"{h4_focus.get('arrow', '')} {h4_focus.get('focus_type', '')} (SL ${stop_val:.2f})".strip()
+
+    sig_dict = asdict(signal)
+    sig_dict["four_hour_structure"] = h4_tag
+    sig_dict["four_hour_structure_detail"] = h4_desc
+    sig_dict["four_hour_arrow"] = h4_arr
+    sig_dict["four_hour_badge"] = h4_badge
+    sig_dict["four_hour_focus"] = h4_focus
+    sig_dict["structure_tag"] = h4_tag
+
     return {
         "ticker": ticker,
         "enabled": True,
@@ -592,8 +623,16 @@ def analyze_from_daily(
         "session_high": _round2(session_high),
         "session_low": _round2(session_low),
         "levels": asdict(levels),
-        "signal": asdict(signal),
+        "signal": sig_dict,
         "outcomes": outcomes,
+        "four_hour_structure": h4_tag,
+        "four_hour_structure_detail": h4_desc,
+        "four_hour_arrow": h4_arr,
+        "four_hour_badge": h4_badge,
+        "four_hour_color": h4_col,
+        "four_hour_focus": h4_focus,
+        "four_hour_stats": h4_stats,
+        "structure_tag": h4_tag,
     }
 
 
@@ -910,65 +949,313 @@ def _compute_market_structure(
     prev_high: float,
     prev_low: float,
     prefix: str = "4H",
+    curr_close: Optional[float] = None,
+    curr_open: Optional[float] = None,
     action: str = "",
     outcome: str = "",
 ) -> tuple[str, str]:
     """
-    Computes price action market structure returning exactly ONE dominant swing tag:
-    - For 4H (Pulse): '4H: LH', '4H: LL', '4H: HH', or '4H: HL'
-    - For D (Long Term Pulse): 'D: LH', 'D: LL', 'D: HH', or 'D: HL'
-    - For W (Earning Pulse): 'W: LH', 'W: LL', 'W: HH', or 'W: HL'
+    Computes genuine price action market structure returning exactly ONE dominant swing tag:
+    - '4H: HH', '4H: HL', '4H: LH', or '4H: LL' (matching ThinkorSwim 4H chart)
+    - 'D: HH', 'D: HL', 'D: LH', or 'D: LL' (Long Term Pulse)
+    - 'W: HH', 'W: HL', 'W: LH', or 'W: LL' (Earning Pulse)
+    Pure price action swing rules:
+      HH = Higher High (curr_high > prev_high and curr_low >= prev_low, or bullish outside bar)
+      LL = Lower Low (curr_low < prev_low and curr_high <= prev_high, or bearish outside bar)
+      HL = Higher Low (curr_low > prev_low and curr_high <= prev_high, or bullish inside bar)
+      LH = Lower High (curr_high < prev_high and curr_low >= prev_low, or bearish inside bar)
     """
-    act = (action or "").upper()
-    out = (outcome or "").lower()
-    is_puts = "PUT" in act or "SHORT" in act or "BEAR" in act
-    is_calls = "CALL" in act or "LONG" in act or "BULL" in act
-
-    if is_puts:
-        # Bearish: choose between Lower High (LH - rejection/sweep) or Lower Low (LL - breakdown/continuation)
-        if any(w in out for w in ["breakdown", "below pdl", "below pml", "below pql", "lower low", "undercut", "distribution"]):
-            tag = "LL"
-            desc = "Lower Low Breakdown"
-        elif any(w in out for w in ["sweep", "reject", "resistance", "failed breakout", "lower high", "fade", "exhaustion"]):
-            tag = "LH"
-            desc = "Lower High Rejection"
-        elif curr_low < prev_low and curr_high <= prev_high:
-            tag = "LL"
-            desc = "Lower Low Breakdown"
-        else:
-            tag = "LH"
-            desc = "Lower High Rejection"
-    elif is_calls:
-        # Bullish: choose between Higher High (HH - breakout/expansion) or Higher Low (HL - support hold/reclaim)
-        if any(w in out for w in ["breakout", "above pdh", "above pmh", "above pqh", "higher high", "expansion", "momentum"]):
+    # 1. Higher High Expansion (HH):
+    if curr_high > prev_high and curr_low >= prev_low:
+        tag = "HH"
+        desc = "Higher High Expansion"
+    # 2. Lower Low Breakdown (LL):
+    elif curr_low < prev_low and curr_high <= prev_high:
+        tag = "LL"
+        desc = "Lower Low Breakdown"
+    # 3. Outside Bar (Higher High & Lower Low expansion):
+    elif curr_high > prev_high and curr_low < prev_low:
+        is_bull_bar = (curr_close >= curr_open) if (curr_close is not None and curr_open is not None) else (curr_close >= (curr_high + curr_low) / 2.0 if curr_close is not None else True)
+        if is_bull_bar:
             tag = "HH"
-            desc = "Higher High Expansion"
-        elif any(w in out for w in ["reclaim", "support", "bounce", "trap", "higher low", "hold", "rebound"]):
+            desc = "Bullish Outside Bar Expansion"
+        else:
+            tag = "LL"
+            desc = "Bearish Outside Bar Rejection"
+    # 4. Inside Bar (Lower/equal High & Higher/equal Low consolidation):
+    elif curr_high <= prev_high and curr_low >= prev_low:
+        is_bull_bar = (curr_close >= curr_open) if (curr_close is not None and curr_open is not None) else (curr_close >= (curr_high + curr_low) / 2.0 if curr_close is not None else True)
+        if is_bull_bar:
             tag = "HL"
             desc = "Higher Low Support Hold"
-        elif curr_high > prev_high and curr_low >= prev_low:
-            tag = "HH"
-            desc = "Higher High Expansion"
         else:
-            tag = "HL"
-            desc = "Higher Low Support Hold"
+            tag = "LH"
+            desc = "Lower High Resistance Rejection"
+    # 5. Higher Low pullback / support hold:
+    elif curr_low > prev_low and curr_high <= prev_high:
+        tag = "HL"
+        desc = "Higher Low Support Hold"
+    # 6. Lower High rejection / failed retest:
+    elif curr_high < prev_high and curr_low >= prev_low:
+        tag = "LH"
+        desc = "Lower High Resistance Rejection"
     else:
-        # Neutral / fallback
-        if curr_high > prev_high and curr_low >= prev_low:
-            tag = "HH"
-            desc = "Higher High Expansion"
-        elif curr_high <= prev_high and curr_low < prev_low:
-            tag = "LL"
-            desc = "Lower Low Breakdown"
-        elif curr_high > prev_high and curr_low < prev_low:
-            tag = "LH"
-            desc = "Lower High Rejection"
-        else:
-            tag = "HL"
-            desc = "Higher Low Support Hold"
+        tag = "HL" if (curr_close is not None and curr_open is not None and curr_close >= curr_open) else "LH"
+        desc = "Market Structure Consolidation"
 
     p_name = "4-Hour" if prefix == "4H" else ("Daily" if prefix == "D" else ("Weekly" if prefix == "W" else prefix))
     return f"{prefix}: {tag}", f"{p_name} {desc} ({tag})"
+
+
+def get_4h_structure_arrow(structure_tag: str) -> tuple[str, str, str]:
+    """
+    Returns (arrow_symbol, color_emoji, formatted_badge) for 4H market structure:
+    - 4H: HH -> ('⬆️', '🟢', '🟢 ⬆️ 4H: HH')
+    - 4H: HL -> ('↗️', '🟢', '🟢 ↗️ 4H: HL')
+    - 4H: LH -> ('↘️', '🔴', '🔴 ↘️ 4H: LH')
+    - 4H: LL -> ('⬇️', '🔴', '🔴 ⬇️ 4H: LL')
+    """
+    tag_clean = str(structure_tag or "").upper()
+    if "HH" in tag_clean:
+        return ("⬆️", "🟢", "🟢 ⬆️ 4H: HH")
+    elif "HL" in tag_clean:
+        return ("↗️", "🟢", "🟢 ↗️ 4H: HL")
+    elif "LH" in tag_clean:
+        return ("↘️", "🔴", "🔴 ↘️ 4H: LH")
+    elif "LL" in tag_clean:
+        return ("⬇️", "🔴", "🔴 ⬇️ 4H: LL")
+    elif "WAIT" in tag_clean or "TIMER" in tag_clean:
+        return ("⏱️", "🟡", f"⏱️ 🟡 {structure_tag}")
+    return ("➡️", "⚪", f"⚪ ➡️ {structure_tag or '4H: N/A'}")
+
+
+def get_4h_narrowed_focus(
+    structure_tag: str,
+    levels: Optional[dict] = None,
+    price: Optional[float] = None,
+) -> dict:
+    """
+    Narrows down the Day Trading V4 Playbook to a single primary focus setup
+    (Breakout vs Sweep/Breakdown) based on the 8:05 AM 4H Market Structure:
+    - 4H: HH -> 🟢 ⬆️ Breakout Focus (Breakout & Retest PDH)
+    - 4H: HL -> 🟢 ↗️ Sweep Focus (Sweep & Reclaim PDL Bear Trap Bounce)
+    - 4H: LH -> 🔴 ↘️ Sweep Focus (Sweep & Reject PDH Bull Trap Rejection)
+    - 4H: LL -> 🔴 ⬇️ Breakdown Focus (Breakdown & Retest PDL)
+    """
+    tag = str(structure_tag or "").upper()
+    lvl = levels or {}
+    pdh = float(lvl.get("pdh", 0) or 0)
+    pdl = float(lvl.get("pdl", 0) or 0)
+    pd_mid = float(lvl.get("pd_mid", 0) or 0)
+
+    if "HH" in tag:
+        return {
+            "focus_type": "Breakout",
+            "arrow": "⬆️",
+            "color": "🟢",
+            "badge": "🟢 ⬆️ BREAKOUT FOCUS: Breakout & Retest PDH",
+            "short_badge": "🟢 ⬆️ Breakout (PDH)",
+            "setup_name": "Breakout & Retest PDH",
+            "setup_key": "long_breakout",
+            "side": "LONG",
+            "action": "BUY CALLS",
+            "trigger_level": pdh,
+            "summary": "4H Higher High (HH) indicates upward structural expansion. Primary morning focus is Breakout & Retest above PDH.",
+            "rule": f"Wait for 5m candle close above PDH (${pdh:.2f}), then enter on retest holding above PDH.",
+        }
+    elif "HL" in tag:
+        return {
+            "focus_type": "Sweep",
+            "arrow": "↗️",
+            "color": "🟢",
+            "badge": "🟢 ↗️ SWEEP FOCUS: Sweep & Reclaim PDL (Bear Trap)",
+            "short_badge": "🟢 ↗️ Sweep (PDL Reclaim)",
+            "setup_name": "Sweep & Reclaim PDL",
+            "setup_key": "long_reclaim",
+            "side": "LONG",
+            "action": "BUY CALLS",
+            "trigger_level": pdl,
+            "summary": "4H Higher Low (HL) indicates structural support defense. Primary morning focus is Sweep & Reclaim of PDL support.",
+            "rule": f"Wait for dip into/below PDL (${pdl:.2f}), then enter as 5m candle reclaims back above PDL.",
+        }
+    elif "LH" in tag:
+        return {
+            "focus_type": "Sweep",
+            "arrow": "↘️",
+            "color": "🔴",
+            "badge": "🔴 ↘️ SWEEP FOCUS: Sweep & Reject PDH (Bull Trap)",
+            "short_badge": "🔴 ↘️ Sweep (PDH Reject)",
+            "setup_name": "Sweep & Reject PDH",
+            "setup_key": "short_reject",
+            "side": "SHORT",
+            "action": "BUY PUTS",
+            "trigger_level": pdh,
+            "summary": "4H Lower High (LH) indicates seller dominance on rallies. Primary morning focus is Sweep & Reject of PDH for a short fade.",
+            "rule": f"Wait for push into/above PDH (${pdh:.2f}), then enter as 5m candle rejects back below PDH.",
+        }
+    elif "LL" in tag:
+        return {
+            "focus_type": "Breakdown",
+            "arrow": "⬇️",
+            "color": "🔴",
+            "badge": "🔴 ⬇️ BREAKDOWN FOCUS: Breakdown & Retest PDL",
+            "short_badge": "🔴 ⬇️ Breakdown (PDL)",
+            "setup_name": "Breakdown & Retest PDL",
+            "setup_key": "short_breakdown",
+            "side": "SHORT",
+            "action": "BUY PUTS",
+            "trigger_level": pdl,
+            "summary": "4H Lower Low (LL) indicates downward structural breakdown. Primary morning focus is Breakdown & Retest below PDL.",
+            "rule": f"Wait for 5m candle close below PDL (${pdl:.2f}), then enter on retest rejecting PDL from underneath.",
+        }
+    else:
+        return {
+            "focus_type": "Range",
+            "arrow": "➡️",
+            "color": "⚪",
+            "badge": "⚪ ➡️ RANGE FOCUS: Wait for Confirmed Extreme Reaction",
+            "short_badge": "⚪ ➡️ Range Wait",
+            "setup_name": "Range Wait & React",
+            "setup_key": "range_wait",
+            "side": "NEUTRAL",
+            "action": "WAIT",
+            "trigger_level": pd_mid,
+            "summary": "4H Market structure consolidating. Monitor reaction at PDH and PDL boundaries.",
+            "rule": "Wait for confirmed break or sweep at outer boundaries.",
+        }
+
+
+def check_4h_confluence(focus_dict: dict, valid_outcome: str, action: str) -> dict:
+    """
+    Evaluates whether the 8:35 AM confirmed outcome is aligned with the 4H 8:05 AM Narrowed Focus.
+    """
+    f_side = focus_dict.get("side", "NEUTRAL")
+    f_setup = focus_dict.get("setup_name", "").lower()
+    f_type = focus_dict.get("focus_type", "").lower()
+    v_out = str(valid_outcome or "").lower()
+    act = str(action or "").upper()
+
+    aligned_side = (f_side == "LONG" and "CALLS" in act) or (f_side == "SHORT" and "PUTS" in act)
+    aligned_setup = (f_setup in v_out) or (f_type in v_out)
+
+    if aligned_setup:
+        status = "ALIGNED_SETUP"
+        badge = "✅ PERFECT 4H CONFLUENCE (Setup & Direction Aligned)"
+        note = f"8:35 AM opening candle confirmed the exact 4H {focus_dict.get('setup_name')} setup!"
+    elif aligned_side:
+        status = "ALIGNED_DIRECTION"
+        badge = "✅ DIRECTIONALLY ALIGNED (4H Trend Support)"
+        note = f"8:35 AM trade direction ({act}) aligns with 4H {f_side} bias."
+    else:
+        status = "COUNTER_STRUCTURE"
+        badge = "⚠️ COUNTER-STRUCTURE TRADE (Mean Reversion)"
+        note = f"8:35 AM price action triggered counter to 4H {focus_dict.get('focus_type')}; trade with strict invalidation."
+
+    return {
+        "status": status,
+        "badge": badge,
+        "note": note,
+        "is_aligned": aligned_side,
+    }
+
+
+def _compute_4h_structure(
+    yf_sym: str,
+    scan_date: date,
+    daily_df: Optional[pd.DataFrame] = None,
+    use_prepost: bool = False,
+) -> tuple[str, str, dict]:
+    """
+    Computes 4-Hour market structure matching ThinkorSwim (TOS) 4H chart aggregation:
+    - RTH 4H candles: Bar 1 (09:30 - 13:30 ET) and Bar 2 (13:30 - 16:00 ET).
+    - ETH Pre-market 4H candles: 04:00 - 08:00 ET and 08:00 - 12:00 ET.
+    - Evaluates the latest completed/session 4H candle vs previous 4H candle into:
+      '4H: HH', '4H: HL', '4H: LH', or '4H: LL' using strict ThinkorSwim price action swing rules.
+    """
+    from datetime import timedelta, datetime
+    import yfinance as yf
+    import logging
+    _log = logging.getLogger(__name__)
+
+    if isinstance(scan_date, str):
+        try:
+            scan_date = datetime.strptime(scan_date, "%Y-%m-%d").date()
+        except Exception:
+            pass
+
+    empty = ("4H: N/A", "4H data unavailable", {})
+    try:
+        # Check if historical lookup is within 1h bar availability (last ~700 days)
+        if isinstance(scan_date, (date, datetime)) and (date.today() - (scan_date.date() if isinstance(scan_date, datetime) else scan_date)).days <= 700:
+            s_date = scan_date.date() if isinstance(scan_date, datetime) else scan_date
+            start_str = (s_date - timedelta(days=12)).isoformat()
+            end_str = (s_date + timedelta(days=2)).isoformat()
+            include_prepost = bool(use_prepost)
+            h1 = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="1h", auto_adjust=True, prepost=include_prepost)
+            if h1 is not None and not h1.empty:
+                # Include bars on or before scan_date
+                session_bars = h1[[i.date() <= s_date for i in h1.index]]
+                if not session_bars.empty:
+                    # ThinkorSwim 4H candles: offset='4h' for ETH pre-market (04:00, 08:00, 12:00, 16:00 ET), offset='9h30min' for RTH
+                    offset_str = "4h" if include_prepost else "9h30min"
+                    h4 = session_bars.resample("4h", origin="start_day", offset=offset_str).agg({
+                        "Open": "first", "High": "max", "Low": "min", "Close": "last"
+                    }).dropna()
+                    if len(h4) >= 2:
+                        prev = h4.iloc[-2]
+                        curr = h4.iloc[-1]
+                        ch, cl = float(curr["High"]), float(curr["Low"])
+                        co, cc = float(curr["Open"]), float(curr["Close"])
+                        ph, pl = float(prev["High"]), float(prev["Low"])
+
+                        tag, desc = _compute_market_structure(
+                            ch, cl, ph, pl, prefix="4H", curr_close=cc, curr_open=co
+                        )
+                        arr, col, badge = get_4h_structure_arrow(tag)
+                        stats = {
+                            "curr_time": str(curr.name),
+                            "curr_high": round(ch, 2),
+                            "curr_low": round(cl, 2),
+                            "curr_open": round(co, 2),
+                            "curr_close": round(cc, 2),
+                            "prev_time": str(prev.name),
+                            "prev_high": round(ph, 2),
+                            "prev_low": round(pl, 2),
+                            "four_hour_structure": tag,
+                            "four_hour_structure_detail": desc,
+                            "four_hour_arrow": arr,
+                            "four_hour_badge": badge,
+                            "four_hour_color": col,
+                            "is_premarket_eth": include_prepost,
+                        }
+                        return tag, desc, stats
+    except Exception as exc:
+        _log.debug(f"[4H structure] Exception fetching 1h bars for {yf_sym}: {exc}")
+
+    # Fallback to daily bars if 1h bars unavailable (e.g. historical backtest >700 days ago)
+    if daily_df is not None and len(daily_df) >= 2:
+        idx_dates = [_idx_date(i) for i in daily_df.index]
+        completed_daily = daily_df[[d <= scan_date for d in idx_dates]]
+        if len(completed_daily) >= 2:
+            prev_d = completed_daily.iloc[-2]
+            curr_d = completed_daily.iloc[-1]
+            ch, cl = float(curr_d["high"]), float(curr_d["low"])
+            co, cc = float(curr_d["open"]), float(curr_d["close"])
+            ph, pl = float(prev_d["high"]), float(prev_d["low"])
+            tag, desc = _compute_market_structure(ch, cl, ph, pl, prefix="4H", curr_close=cc, curr_open=co)
+            arr, col, badge = get_4h_structure_arrow(tag)
+            return tag, desc, {
+                "fallback": "daily_bar_proxy",
+                "curr_high": round(ch, 2),
+                "curr_low": round(cl, 2),
+                "four_hour_structure": tag,
+                "four_hour_structure_detail": desc,
+                "four_hour_arrow": arr,
+                "four_hour_badge": badge,
+                "four_hour_color": col,
+            }
+
+    return empty
 
 
 def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date, action: str = "", outcome: str = "") -> tuple[str, str, dict]:
@@ -994,10 +1281,14 @@ def _compute_weekly_structure(daily_df: pd.DataFrame, scan_date: date, action: s
 
     curr_high = round(float(curr_week_df["high"].max()), 2)
     curr_low = round(float(curr_week_df["low"].min()), 2)
+    curr_open = round(float(curr_week_df.iloc[0]["open"]), 2)
+    curr_close = round(float(curr_week_df.iloc[-1]["close"]), 2)
     prev_high = round(float(prev_week_df["high"].max()), 2)
     prev_low = round(float(prev_week_df["low"].min()), 2)
 
-    w_tag, w_detail = _compute_market_structure(curr_high, curr_low, prev_high, prev_low, prefix="W", action=action, outcome=outcome)
+    w_tag, w_detail = _compute_market_structure(
+        curr_high, curr_low, prev_high, prev_low, prefix="W", curr_close=curr_close, curr_open=curr_open, action=action, outcome=outcome
+    )
     w_stats = {
         "curr_week_high": curr_high,
         "curr_week_low": curr_low,
@@ -1261,8 +1552,37 @@ def get_valid_outcome_and_trade_idea(
     if daily.empty:
         return {"ticker": sym, "error": "missing daily bars"}
 
-    if req_date:
+    import pytz
+    cst_tz = pytz.timezone("America/Chicago")
+    now_cst = datetime.now(cst_tz)
+    today_date = now_cst.date()
+    is_today_weekday = now_cst.weekday() < 5
+    t_805 = now_cst.replace(hour=8, minute=5, second=0, microsecond=0)
+    t_835 = now_cst.replace(hour=8, minute=35, second=0, microsecond=0)
+
+    # Detect if user requested today (or live pulse) on a weekday before the 8:35 AM CST opening candle confirmation
+    is_premarket_today = (req_date is None or req_date == today_date) and is_today_weekday and (now_cst < t_835)
+
+    sec_805 = max(0, int((t_805 - now_cst).total_seconds())) if is_premarket_today else 0
+    sec_835 = max(0, int((t_835 - now_cst).total_seconds())) if is_premarket_today else 0
+
+    def _fmt_pulse_timer(s: int) -> str:
+        h = s // 3600
+        m = (s % 3600) // 60
+        sec = s % 60
+        if h > 0:
+            return f"{h:02d}h {m:02d}m {sec:02d}s"
+        return f"{m:02d}m {sec:02d}s"
+
+    timer_805_str = _fmt_pulse_timer(sec_805)
+    timer_835_str = _fmt_pulse_timer(sec_835)
+
+    if req_date and req_date != today_date:
         scan_date, completed, session_row = _resolve_trading_session(daily, req_date)
+    elif is_premarket_today:
+        scan_date = today_date
+        completed = daily[[_idx_date(i) < today_date for i in daily.index]]
+        session_row = None
     else:
         idx_dates = [_idx_date(i) for i in daily.index]
         weekday_dates = [d for d in idx_dates if d.weekday() < 5]
@@ -1291,53 +1611,84 @@ def get_valid_outcome_and_trade_idea(
     post_entry_bars = pd.DataFrame()
     candle_source = "Daily Session Bar (Historical >60d fallback)"
 
-    try:
-        days_ago = (date.today() - scan_date).days
-        if days_ago <= 58:
-            if req_date:
+    premarket_open = None
+    premarket_high = None
+    premarket_low = None
+    premarket_price = None
+    premarket_change = None
+    premarket_change_pct = None
+    prior_close = float(completed.iloc[-1]["close"]) if len(completed) > 0 else price
+
+    if is_premarket_today:
+        try:
+            # Fetch 5m bars with prepost=True to obtain live pre-market prices (available from 4:00 AM ET / 3:00 AM CT)
+            pm_bars = yf.Ticker(yf_sym).history(period="1d", interval="5m", prepost=True, auto_adjust=True)
+            if pm_bars is not None and not pm_bars.empty:
+                today_pm = pm_bars[[_idx_date(i) == today_date for i in pm_bars.index]]
+                if not today_pm.empty:
+                    premarket_open = round(float(today_pm["Open"].iloc[0]), 2)
+                    premarket_high = round(float(today_pm["High"].max()), 2)
+                    premarket_low = round(float(today_pm["Low"].min()), 2)
+                    premarket_price = round(float(today_pm["Close"].iloc[-1]), 2)
+                    price = premarket_price
+                    session_high = premarket_high
+                    session_low = premarket_low
+                    open_5m = premarket_open
+                    close_5m = premarket_price
+                    candle_source = f"Live Pre-Market 5m Data ({now_cst.strftime('%I:%M %p CT')})"
+                    if prior_close > 0:
+                        premarket_change = round(price - prior_close, 2)
+                        premarket_change_pct = round((premarket_change / prior_close) * 100, 2)
+        except Exception:
+            pass
+    else:
+        try:
+            days_ago = (date.today() - scan_date).days
+            if days_ago <= 58:
+                if req_date:
+                    start_str = scan_date.isoformat()
+                    end_str = (scan_date + timedelta(days=2)).isoformat()
+                    intraday = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="5m", auto_adjust=True)
+                else:
+                    intraday = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
+                if not intraday.empty:
+                    day_bars = intraday[[_idx_date(i) == scan_date for i in intraday.index]]
+                    if not day_bars.empty:
+                        first_bar = day_bars.iloc[0]
+                        last_bar = day_bars.iloc[-1]
+                        open_5m = float(first_bar["Open"])
+                        close_5m = float(first_bar["Close"])
+                        high_5m = float(first_bar["High"])
+                        low_5m = float(first_bar["Low"])
+                        latest_price = round(float(last_bar["Close"]), 2)
+                        post_entry_bars = day_bars.iloc[1:]
+                        candle_source = f"8:30–8:35 AM CT 5m Opening Candle ({scan_date.isoformat()})"
+                        if current_price is None or current_price <= 0:
+                            price = round(close_5m, 2)
+                            session_high = round(high_5m, 2)
+                            session_low = round(low_5m, 2)
+            elif days_ago <= 720:
                 start_str = scan_date.isoformat()
                 end_str = (scan_date + timedelta(days=2)).isoformat()
-                intraday = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="5m", auto_adjust=True)
-            else:
-                intraday = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
-            if not intraday.empty:
-                day_bars = intraday[[_idx_date(i) == scan_date for i in intraday.index]]
-                if not day_bars.empty:
-                    first_bar = day_bars.iloc[0]
-                    last_bar = day_bars.iloc[-1]
-                    open_5m = float(first_bar["Open"])
-                    close_5m = float(first_bar["Close"])
-                    high_5m = float(first_bar["High"])
-                    low_5m = float(first_bar["Low"])
-                    latest_price = round(float(last_bar["Close"]), 2)
-                    post_entry_bars = day_bars.iloc[1:]
-                    candle_source = f"8:30–8:35 AM CT 5m Opening Candle ({scan_date.isoformat()})"
-                    if current_price is None or current_price <= 0:
-                        price = round(close_5m, 2)
-                        session_high = round(high_5m, 2)
-                        session_low = round(low_5m, 2)
-        elif days_ago <= 720:
-            start_str = scan_date.isoformat()
-            end_str = (scan_date + timedelta(days=2)).isoformat()
-            intraday_1h = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="1h", auto_adjust=True)
-            if not intraday_1h.empty:
-                day_bars = intraday_1h[[_idx_date(i) == scan_date for i in intraday_1h.index]]
-                if not day_bars.empty:
-                    first_bar = day_bars.iloc[0]
-                    last_bar = day_bars.iloc[-1]
-                    open_5m = float(first_bar["Open"])
-                    close_5m = float(first_bar["Close"])
-                    high_5m = float(first_bar["High"])
-                    low_5m = float(first_bar["Low"])
-                    latest_price = round(float(last_bar["Close"]), 2)
-                    post_entry_bars = day_bars.iloc[1:]
-                    candle_source = f"Opening 1h Candle ({scan_date.isoformat()} — >60d lookback)"
-                    if current_price is None or current_price <= 0:
-                        price = round(close_5m, 2)
-                        session_high = round(high_5m, 2)
-                        session_low = round(low_5m, 2)
-    except Exception:
-        pass
+                intraday_1h = yf.Ticker(yf_sym).history(start=start_str, end=end_str, interval="1h", auto_adjust=True)
+                if not intraday_1h.empty:
+                    day_bars = intraday_1h[[_idx_date(i) == scan_date for i in intraday_1h.index]]
+                    if not day_bars.empty:
+                        first_bar = day_bars.iloc[0]
+                        last_bar = day_bars.iloc[-1]
+                        open_5m = float(first_bar["Open"])
+                        close_5m = float(first_bar["Close"])
+                        high_5m = float(first_bar["High"])
+                        low_5m = float(first_bar["Low"])
+                        latest_price = round(float(last_bar["Close"]), 2)
+                        post_entry_bars = day_bars.iloc[1:]
+                        candle_source = f"Opening 1h Candle ({scan_date.isoformat()} — >60d lookback)"
+                        if current_price is None or current_price <= 0:
+                            price = round(close_5m, 2)
+                            session_high = round(high_5m, 2)
+                            session_low = round(low_5m, 2)
+        except Exception:
+            pass
 
     levels = v4_data.get("levels", {})
     pdh = float(levels.get("pdh", 0))
@@ -1508,27 +1859,126 @@ def get_valid_outcome_and_trade_idea(
     reward = abs(t1 - entry)
     rr = round(reward / risk, 1) if risk > 0 else 2.0
 
-    # 4-Hour Market Structure (4H: LH, 4H: LL, 4H: HH, 4H: HL) for Day Trading Pulse
-    d_tag, d_detail = _compute_market_structure(
-        eval_high, eval_low, pdh, pdl, prefix="4H", action=action, outcome=outcome_label
-    )
+    is_waiting_4h = is_premarket_today and (now_cst < t_805)
+    live_4h_tag, live_4h_desc, live_4h_stats = _compute_4h_structure(yf_sym, today_date if is_premarket_today else scan_date, daily, use_prepost=True)
+    live_arr, live_col, live_badge = get_4h_structure_arrow(live_4h_tag)
+    four_hour_focus = get_4h_narrowed_focus(live_4h_tag, levels, price)
 
-    # Run Intraday Backtest from 8:35 AM CT through session close
-    backtest = _simulate_trade_backtest(
-        post_entry_bars,
-        entry=entry,
-        stop=stop,
-        t1=t1,
-        t2=t2,
-        action=action,
-        timeframe_label=f"Intraday Session ({scan_date.isoformat()} · Post-8:35 AM CT)",
-        fallback_high=daily_high,
-        fallback_low=daily_low,
-        fallback_close=daily_close,
-        structure_tag=d_tag,
-    )
+    if is_premarket_today:
+        if is_waiting_4h:
+            d_tag = f"4H (⏱️ Timer left for 8:05 AM CST: {timer_805_str})"
+            d_detail = f"Pre-market: 4H Market Structure tracking {live_badge} · Alert locks at 8:05 AM CST (⏱️ Timer left: {timer_805_str})"
+            d_h4_stats = {**live_4h_stats, "timer_left_805": timer_805_str, "status": "waiting"}
+        else:
+            d_tag, d_detail, d_h4_stats = live_4h_tag, live_4h_desc, live_4h_stats
+
+        outcome_label = f"Waiting for 8:35 AM CST Confirmation (⏱️ Timer Left for 8:35 AM: {timer_835_str})"
+        action = f"WAITING (⏱️ Timer Left for 8:35 AM: {timer_835_str})"
+        valid_outcome = f"WAITING [{d_tag}] · (⏱️ Timer Left for 8:35 AM: {timer_835_str})"
+        bias = f"Pre-Market Watch · Waiting for 8:35 AM CST Validation ({timer_835_str} remaining)"
+        suggested_strike = "Pending 8:35 AM Open Validation"
+        entry = round(price, 2)
+        stop = round(pdl - buf * 0.5, 2)
+        t1 = round(pd_mid, 2)
+        t2 = round(pdh, 2)
+        trigger = f"Pending 8:35 AM CST 5-Minute Opening Candle Confirmation (⏱️ Timer Left: {timer_835_str})"
+        invalidation = f"Reversal beyond line in the sand stop (${stop:.2f})"
+        rationale = (
+            f"{sym} is currently in Pre-Market session today ({now_cst.strftime('%A, %b %d')}). "
+            f"4H structure evaluates at 8:05 AM CST ({'⏱️ Timer left: ' + timer_805_str if is_waiting_4h else '4H Confirmed: ' + live_badge}), "
+            f"and recommendation is in waiting state until 8:35 AM CST (⏱️ Timer Left: {timer_835_str}) "
+            f"when the first 5-minute opening candle confirms. Key levels established: PDH ${pdh:.2f}, PDL ${pdl:.2f}, Mid ${pd_mid:.2f}."
+        )
+        backtest = {
+            "result_badge": "⏱️ PENDING 8:35 AM",
+            "summary": f"Waiting for market open (8:30 AM CST) and 5m confirmation (8:35 AM CST). Timer left: {timer_835_str}",
+            "max_favorable_excursion": "0.0%",
+            "max_adverse_excursion": "0.0%",
+            "one_hour": {
+                "result_badge": "⏱️ PENDING 8:35 AM",
+                "summary": f"Waiting for market open (8:30 AM CST) and 5m confirmation (8:35 AM CST). Timer left: {timer_835_str}",
+                "max_favorable_excursion": "0.0%",
+                "max_adverse_excursion": "0.0%",
+            },
+            "full_day": {
+                "result_badge": "⏱️ PENDING 8:35 AM",
+                "summary": f"Waiting for market open (8:30 AM CST) and 5m confirmation (8:35 AM CST). Timer left: {timer_835_str}",
+                "max_favorable_excursion": "0.0%",
+                "max_adverse_excursion": "0.0%",
+            },
+            "session_window": "1h",
+        }
+    else:
+        # If scan_date is today, preserve the live 8:05 AM 4H structure lock
+        if scan_date == today_date:
+            d_tag, d_detail, d_h4_stats = live_4h_tag, live_4h_desc, live_4h_stats
+        else:
+            # Historical scan date: 4-Hour Market Structure matching ThinkorSwim
+            d_tag, d_detail, d_h4_stats = _compute_4h_structure(yf_sym, scan_date, daily, use_prepost=True)
+            live_4h_tag = d_tag
+            live_arr, live_col, live_badge = get_4h_structure_arrow(d_tag)
+            four_hour_focus = get_4h_narrowed_focus(d_tag, levels, price)
+
+        # Slice 1-Hour post-entry window (first 60 minutes after 8:35 AM CT entry)
+        one_hour_bars = pd.DataFrame()
+        if post_entry_bars is not None and not post_entry_bars.empty:
+            try:
+                first_ts = pd.Timestamp(post_entry_bars.index[0])
+                limit_ts = first_ts + pd.Timedelta(minutes=60)
+                one_hour_bars = post_entry_bars[post_entry_bars.index <= limit_ts]
+                if one_hour_bars.empty:
+                    one_hour_bars = post_entry_bars.iloc[:12]
+            except Exception:
+                one_hour_bars = post_entry_bars.iloc[:12]
+
+        # Full-Day Intraday Backtest from 8:35 AM CT through session close
+        backtest_full = _simulate_trade_backtest(
+            post_entry_bars,
+            entry=entry,
+            stop=stop,
+            t1=t1,
+            t2=t2,
+            action=action,
+            timeframe_label=f"Full-Day Session ({scan_date.isoformat()} · Post-8:35 AM CT to Close)",
+            fallback_high=daily_high,
+            fallback_low=daily_low,
+            fallback_close=daily_close,
+            structure_tag=d_tag,
+        )
+
+        # 1-Hour Intraday Backtest (first 60 minutes: 8:35 AM – 9:35 AM CT)
+        backtest_1h = _simulate_trade_backtest(
+            one_hour_bars if not one_hour_bars.empty else post_entry_bars.iloc[:12],
+            entry=entry,
+            stop=stop,
+            t1=t1,
+            t2=t2,
+            action=action,
+            timeframe_label=f"1-Hour Session ({scan_date.isoformat()} · 8:35 AM – 9:35 AM CT)",
+            fallback_high=daily_high,
+            fallback_low=daily_low,
+            fallback_close=daily_close,
+            structure_tag=d_tag,
+        )
+
+        for bt in (backtest_full, backtest_1h):
+            bt["four_hour_structure"] = d_tag
+            bt["four_hour_structure_detail"] = d_detail
+            bt["four_hour_arrow"] = live_arr
+            bt["four_hour_badge"] = live_badge
+            bt["daily_structure"] = d_tag
+            bt["daily_structure_detail"] = d_detail
+            bt["structure_tag"] = d_tag
+
+        # Default backtest to 1-Hour Session as requested, while providing both one_hour and full_day
+        backtest = dict(backtest_1h)
+        backtest["one_hour"] = backtest_1h
+        backtest["full_day"] = backtest_full
+        backtest["session_window"] = "1h"
     backtest["four_hour_structure"] = d_tag
     backtest["four_hour_structure_detail"] = d_detail
+    backtest["four_hour_arrow"] = live_arr
+    backtest["four_hour_badge"] = live_badge
     backtest["daily_structure"] = d_tag
     backtest["daily_structure_detail"] = d_detail
     backtest["structure_tag"] = d_tag
@@ -1545,24 +1995,67 @@ def get_valid_outcome_and_trade_idea(
 
     as_of_str, session_day_name, is_weekend = _format_session_as_of(scan_date, req_date)
 
+    if isinstance(four_hour_focus, dict):
+        four_hour_focus = dict(four_hour_focus)
+        if stop is not None:
+            four_hour_focus["stop_loss"] = stop
+            four_hour_focus["stop_loss_str"] = f"${stop:.2f}"
+            if "PDL" in str(four_hour_focus.get("badge", "")) and pdl is not None:
+                four_hour_focus["level_name"] = "PDL"
+                four_hour_focus["level_value"] = pdl
+                four_hour_focus["badge_with_levels"] = f"{four_hour_focus.get('badge')} (PDL: ${pdl:.2f} | SL: ${stop:.2f})"
+                four_hour_focus["short_badge"] = f"{four_hour_focus.get('arrow', '')} {four_hour_focus.get('focus_type', '')} (PDL ${pdl:.2f} | SL ${stop:.2f})".strip()
+            elif "PDH" in str(four_hour_focus.get("badge", "")) and pdh is not None:
+                four_hour_focus["level_name"] = "PDH"
+                four_hour_focus["level_value"] = pdh
+                four_hour_focus["badge_with_levels"] = f"{four_hour_focus.get('badge')} (PDH: ${pdh:.2f} | SL: ${stop:.2f})"
+                four_hour_focus["short_badge"] = f"{four_hour_focus.get('arrow', '')} {four_hour_focus.get('focus_type', '')} (PDH ${pdh:.2f} | SL ${stop:.2f})".strip()
+            else:
+                four_hour_focus["badge_with_levels"] = f"{four_hour_focus.get('badge')} (SL: ${stop:.2f})"
+                four_hour_focus["short_badge"] = f"{four_hour_focus.get('arrow', '')} {four_hour_focus.get('focus_type', '')} (SL ${stop:.2f})".strip()
+
     return {
         "strategy_name": "Pulse (Day Trading 8:35 AM Open Validator)",
         "ticker": sym,
         "yf_symbol": yf_sym,
         "scan_date": scan_date.isoformat(),
-        "session_day_name": session_day_name,
+        "session_day_name": f"Today · {now_cst.strftime('%A, %b %d')} (Pre-Market)" if is_premarket_today else session_day_name,
+        "is_premarket_waiting": is_premarket_today,
+        "is_waiting_4h": is_premarket_today and is_waiting_4h,
+        "is_waiting_recommendation": is_premarket_today,
+        "seconds_left_805": sec_805,
+        "seconds_left_835": sec_835,
+        "timer_left_805": timer_805_str if is_premarket_today else "",
+        "timer_left_835": timer_835_str if is_premarket_today else "",
+        "target_time_805_iso": t_805.isoformat() if is_premarket_today else None,
+        "target_time_835_iso": t_835.isoformat() if is_premarket_today else None,
         "is_weekend_or_closed": is_weekend,
         "requested_date": req_date.isoformat() if req_date else None,
         "candle_source": candle_source,
         "price": price,
-        "latest_session_close": round(latest_price, 2),
+        "latest_session_close": round(prior_close if is_premarket_today else latest_price, 2),
         "session_high": round(session_high, 2),
         "session_low": round(session_low, 2),
+        "premarket_price": premarket_price,
+        "premarket_high": premarket_high,
+        "premarket_low": premarket_low,
+        "premarket_change": premarket_change,
+        "premarket_change_pct": premarket_change_pct,
+        "is_premarket_live": bool(premarket_price is not None),
         "valid_outcome": f"[{d_tag}] {outcome_label}",
         "raw_outcome": outcome_label,
+        "action": action,
         "structure_tag": d_tag,
         "four_hour_structure": d_tag,
         "four_hour_structure_detail": d_detail,
+        "four_hour_arrow": live_arr,
+        "four_hour_badge": live_badge,
+        "four_hour_color": live_col,
+        "live_4h_tag": live_4h_tag,
+        "live_4h_badge": live_badge,
+        "live_4h_arrow": live_arr,
+        "four_hour_focus": four_hour_focus,
+        "four_hour_confluence": check_4h_confluence(four_hour_focus, outcome_label, action),
         "daily_structure": d_tag,
         "daily_structure_detail": d_detail,
         "trade_idea": {
@@ -1571,6 +2064,10 @@ def get_valid_outcome_and_trade_idea(
             "structure_tag": d_tag,
             "four_hour_structure": d_tag,
             "four_hour_structure_detail": d_detail,
+            "four_hour_arrow": live_arr,
+            "four_hour_badge": live_badge,
+            "four_hour_focus": four_hour_focus,
+            "four_hour_confluence": check_4h_confluence(four_hour_focus, outcome_label, action),
             "daily_structure": d_tag,
             "daily_structure_detail": d_detail,
             "suggested_contract": suggested_strike,
@@ -1599,8 +2096,11 @@ def get_valid_outcome_and_trade_idea(
             "pd_mid": round(pd_mid, 2),
             "atr": round(atr, 2),
             "structure_tag": d_tag,
+            "four_hour_structure": d_tag,
+            "four_hour_structure_detail": d_detail,
             "daily_structure": d_tag,
             "daily_structure_detail": d_detail,
+            "four_hour_stats": d_h4_stats,
         },
         "backtest": backtest,
         "morning_signal": v4_data.get("signal", {}),
@@ -1900,12 +2400,137 @@ def get_long_term_pulse(ticker: str = "SPY", target_date: Optional[str] = None) 
     }
 
 
-def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) -> dict:
+def get_last_4_quarter_earnings_backtest(ticker: str = "SPY", as_of_date: Optional[date] = None) -> dict:
+    """
+    Backtests the last 4 reported quarterly earnings releases for `ticker`:
+    - Evaluates the Earning Pulse (PQH/PQL & PMH/PML) trade setup, Action, Entry, Stop, Targets,
+      and forward multi-week performance for each of the last 4 quarters.
+    - Computes overall Win Rate %, Realized P&L ($/sh), and Realized R-Multiple scorecard.
+    """
+    from datetime import datetime
+    from backend.services.earnings import get_earnings_dates_yf
+
+    sym = (ticker or "SPY").strip().upper()
+    cutoff_date = as_of_date or date.today()
+
+    # 1. Fetch historical earnings releases
+    ed_list = get_earnings_dates_yf(sym)
+    past = []
+    for e in ed_list:
+        try:
+            d = datetime.strptime(e["date"], "%Y-%m-%d").date()
+            if d <= cutoff_date and (e.get("eps_actual") is not None or e.get("surprise_pct") is not None):
+                past.append({**e, "date_obj": d})
+        except Exception:
+            continue
+
+    # Fallback for index ETFs (SPY, QQQ) or if no earnings releases populated in YF
+    if len(past) < 4:
+        fallback_dates = []
+        year = cutoff_date.year
+        q_starts = [
+            (year, 10, 14), (year, 7, 14), (year, 4, 14), (year, 1, 14),
+            (year - 1, 10, 14), (year - 1, 7, 14), (year - 1, 4, 14), (year - 1, 1, 14)
+        ]
+        for y, m, day in q_starts:
+            qd = date(y, m, day)
+            if qd <= cutoff_date:
+                fallback_dates.append(qd)
+            if len(fallback_dates) >= 4:
+                break
+        past = [{"date": qd.isoformat(), "date_obj": qd, "eps_actual": None, "eps_estimate": None, "surprise_pct": None} for qd in reversed(fallback_dates)]
+
+    last_4 = past[-4:]
+    quarters_detail = []
+    wins = 0
+    losses = 0
+    total_net_pnl = 0.0
+    total_net_r = 0.0
+
+    for item in last_4:
+        d_str = item["date"]
+        d_obj = item["date_obj"] if "date_obj" in item else datetime.strptime(d_str, "%Y-%m-%d").date()
+        q_num = (d_obj.month - 1) // 3 + 1
+        quarter_label = f"Q{q_num} {d_obj.year} ({d_obj.strftime('%b %d, %Y')})"
+
+        ep = get_earning_pulse(sym, target_date=d_str, include_last_4q_backtest=False)
+        bt = ep.get("backtest") or {}
+        ti = ep.get("trade_idea") or {}
+
+        badge = bt.get("result_badge", "⏳ ACTIVE")
+        is_win = "WIN" in badge
+        is_loss = "STOPPED" in badge
+        if is_win:
+            wins += 1
+        elif is_loss:
+            losses += 1
+
+        pnl_val = bt.get("realized_pnl_per_share", 0.0)
+        total_net_pnl += pnl_val
+        r_str = bt.get("realized_r_multiple", "+0.00R")
+        try:
+            r_val = float(r_str.replace("R", "").replace("+", ""))
+        except Exception:
+            r_val = 0.0
+        total_net_r += r_val
+
+        quarters_detail.append({
+            "quarter_label": quarter_label,
+            "earnings_date": d_str,
+            "eps_actual": item.get("eps_actual"),
+            "eps_estimate": item.get("eps_estimate"),
+            "surprise_pct": item.get("surprise_pct"),
+            "structure_tag": ep.get("structure_tag", "W: N/A"),
+            "action": ti.get("action", "WAIT"),
+            "outcome_label": ep.get("raw_outcome", ep.get("valid_outcome", "")),
+            "entry": ti.get("entry_level"),
+            "stop": ti.get("stop_loss"),
+            "t1": ti.get("target_1"),
+            "t2": ti.get("target_2"),
+            "open_contract": ti.get("open_contract"),
+            "cost_efficient_spread": ti.get("cost_efficient_spread"),
+            "cost_efficient_butterfly": ti.get("cost_efficient_butterfly"),
+            "result_badge": badge,
+            "status": "WIN" if is_win else ("STOPPED" if is_loss else "ACTIVE"),
+            "realized_pnl_per_share": pnl_val,
+            "realized_r_multiple": r_str,
+            "max_favorable_excursion": bt.get("max_favorable_excursion", "$0.00"),
+            "max_adverse_excursion": bt.get("max_adverse_excursion", "$0.00"),
+            "summary": bt.get("summary", ""),
+        })
+
+    tot = len(quarters_detail)
+    win_rate = round((wins / tot) * 100, 1) if tot > 0 else 0.0
+    win_badge = f"{wins}/{tot} WINS ({win_rate:.0f}%)"
+    if total_net_r >= 0:
+        win_badge += f" · NET +{total_net_r:.2f}R"
+    else:
+        win_badge += f" · NET {total_net_r:.2f}R"
+
+    return {
+        "ticker": sym,
+        "as_of_date": cutoff_date.isoformat(),
+        "total_quarters": tot,
+        "wins": wins,
+        "losses": losses,
+        "win_rate_pct": win_rate,
+        "win_rate_badge": win_badge,
+        "net_pnl_per_share": round(total_net_pnl, 2),
+        "net_r_multiple": f"{total_net_r:+.2f}R",
+        "quarters": quarters_detail,
+    }
+
+
+def get_earning_pulse(
+    ticker: str = "SPY",
+    target_date: Optional[str] = None,
+    include_last_4q_backtest: bool = True,
+) -> dict:
     """
     EARNING PULSE (Quarterly & Monthly High/Low Strategy):
     Evaluates price action against Previous Quarter High/Low (PQH / PQL) AND Previous Month High/Low (PMH / PML)
     on today's session or any historical `target_date`, returning a macro/earnings swing trade plan
-    plus a forward multi-week backtest (up to 60 trading days after `scan_date`).
+    plus a forward multi-week backtest (up to 60 trading days after `scan_date`) AND last 4 quarters earnings backtest.
     """
     import yfinance as yf
 
@@ -2152,6 +2777,13 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
 
     ep_as_of, ep_day_name, ep_weekend = _format_session_as_of(scan_date, req_date)
 
+    last_4q_backtest = None
+    if include_last_4q_backtest:
+        try:
+            last_4q_backtest = get_last_4_quarter_earnings_backtest(sym, as_of_date=scan_date)
+        except Exception as _e4q:
+            logger.debug(f"[Earning Pulse] 4Q backtest error for {sym}: {_e4q}")
+
     return {
         "strategy_name": "Earning Pulse (Quarterly & Monthly High/Low Engine)",
         "ticker": sym,
@@ -2211,6 +2843,7 @@ def get_earning_pulse(ticker: str = "SPY", target_date: Optional[str] = None) ->
             "prev_week_low": w_stats.get("prev_week_low"),
         },
         "backtest": backtest,
+        "earnings_backtest_last_4_quarters": last_4q_backtest,
         "as_of": ep_as_of,
     }
 
